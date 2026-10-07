@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 test-results/
+SKELETON_DONE
 playwright-report/
 
 # Editor directories and files
