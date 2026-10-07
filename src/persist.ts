@@ -91,6 +91,8 @@ export interface PersistPorts {
   askSnapshotDownload?: (fileName: string, bytes: Uint8Array) => Promise<boolean>
   expand?: ExpandClientOptions
   randomId?: () => string
+  pauseBeforeMove?: () => Promise<void>
+  pauseAfterMove?: () => Promise<void>
 }
 
 export interface PersistView {
@@ -139,6 +141,7 @@ export interface PersistController {
   rollbackTo(name: string): Promise<void>
   rollbackToBytes(bytes: Uint8Array): Promise<void>
   snapshot(): PersistSnapshot
+  readRecoveryLog(): Promise<Uint8Array | null>
   dispose(): void
 }
 
@@ -392,6 +395,16 @@ class Controller implements PersistController {
     return { state: this.state, view: this.view() }
   }
 
+  async readRecoveryLog(): Promise<Uint8Array | null> {
+    if (!this.log) return null
+    try {
+      const bytes = await this.log.read()
+      return bytes ? bytes.slice() : null
+    } catch {
+      return null
+    }
+  }
+
   dispose(): void {
     this.disposed = true
     this.unsub?.()
@@ -640,7 +653,40 @@ class Controller implements PersistController {
     })
   }
 
+  private noticeOtherWriter(fileId: string): Promise<Extract<ChannelMessage, { type: 'writing' }> | null> {
+    this.watchChannel()
+    return new Promise((resolve) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const finish = (message: Extract<ChannelMessage, { type: 'writing' }> | null) => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clearTimeout(timer)
+        stop()
+        resolve(message)
+      }
+      const stop = this.ports.channel.subscribe((message) => {
+        if (message.type === 'writing' && message.fileId === fileId) finish(message)
+      })
+      this.ports.channel.post({ type: 'hello', fileId })
+      if (!settled) timer = setTimeout(() => finish(null), 200)
+    })
+  }
+
   private async tryBecomeWriter(fileId: string, reason: OpenReason): Promise<boolean> {
+    if (reason === 'open-file') {
+      const other = await this.noticeOtherWriter(fileId)
+      if (other) {
+        this.fileId = fileId
+        this.readonlyOther = true
+        this.canEdit = false
+        this.showWritingMessage = true
+        this.otherStartedAt = other.startedAt
+        if (other.fileName) this.fileName = other.fileName
+        this.watchChannel()
+        return false
+      }
+    }
     const lockName = `snowflake-write:${fileId}`
     const refreshClaim = reason === 'refresh' && this.ports.claim.get() === fileId
     const explicit =
@@ -795,7 +841,9 @@ class Controller implements PersistController {
         return { ok: false }
       }
       verified = back
+      await this.ports.pauseBeforeMove?.()
       await this.directory.move(tempName, this.fileName)
+      await this.ports.pauseAfterMove?.()
     } catch {
       await this.removeQuiet(tempName)
       return { ok: false }
@@ -860,6 +908,7 @@ class Controller implements PersistController {
     this.lastBytes = parsed.bytes
     this.needChoice = false
     if (!acquired) {
+      if (!this.showWritingMessage) await this.deleteTempIfPresent()
       await this.refreshSnapshotNames()
       this.emit()
       return

@@ -18,6 +18,30 @@ import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
 import FoldPanel from './FoldPanel.tsx'
 
+function eventData(event: Event): string {
+  if (!('data' in event)) return ''
+  const data = (event as CompositionEvent).data
+  return typeof data === 'string' ? data : ''
+}
+
+function hasHan(text: string): boolean {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
+function confirmedField(doc: string, pinyin: string, confirmed: string): string | null {
+  if (!hasHan(confirmed)) return null
+  if (pinyin && confirmed.includes(pinyin)) return null
+  if (!pinyin) {
+    if (doc.length === 0 || /^[A-Za-z]*$/.test(doc)) return confirmed
+    return null
+  }
+  const at = doc.indexOf(pinyin)
+  if (at < 0) return null
+  const next = doc.slice(0, at) + confirmed + doc.slice(at + pinyin.length)
+  if (next.includes(pinyin) || !hasHan(next)) return null
+  return next
+}
+
 export default function SideEditor({
   cardId,
   card,
@@ -49,6 +73,9 @@ export default function SideEditor({
   const viewRef = useRef<EditorView | null>(null)
   const editableRef = useRef<Compartment | null>(null)
   const composingRef = useRef(false)
+  const pendingConfirmRef = useRef(false)
+  const pinyinRef = useRef('')
+  const lastCommitRef = useRef<string | null>(null)
   const applyingRef = useRef(false)
   const appliedRef = useRef<{ text: string; editable: boolean } | null>(null)
   const cardIdRef = useRef(cardId)
@@ -78,6 +105,28 @@ export default function SideEditor({
     if (!host) return
     const editable = new Compartment()
     editableRef.current = editable
+
+    const emitCommit = (text: string) => {
+      if (!canTypeRef.current || applyingRef.current) return
+      if (lastCommitRef.current === text) return
+      const currentId = cardIdRef.current
+      if (!currentId) return
+      lastCommitRef.current = text
+      pendingConfirmRef.current = false
+      pinyinRef.current = ''
+      onCommitRef.current(currentId, fieldKeyRef.current, text)
+    }
+
+    const noteDraft = (update: { state: EditorState; changes: { iterChanges: (f: (fromA: number, toA: number, fromB: number, toB: number, inserted: { toString(): string }) => void) => void } }) => {
+      let inserted = ''
+      update.changes.iterChanges((_fromA, _toA, _fromB, _toB, insertedText) => {
+        inserted += insertedText.toString()
+      })
+      if (/^[A-Za-z]+$/.test(inserted)) pinyinRef.current = inserted
+      const full = update.state.doc.toString()
+      if (!pinyinRef.current && /^[A-Za-z]+$/.test(full)) pinyinRef.current = full
+    }
+
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -92,24 +141,53 @@ export default function SideEditor({
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || applyingRef.current) return
             if (!canTypeRef.current) return
-            if (composingRef.current || update.view.composing) return
-            const currentId = cardIdRef.current
-            if (!currentId) return
-            onCommitRef.current(currentId, fieldKeyRef.current, update.state.doc.toString())
+            if (composingRef.current || update.view.composing) {
+              noteDraft(update)
+              return
+            }
+            if (pendingConfirmRef.current) {
+              const text = update.state.doc.toString()
+              const pinyin = pinyinRef.current
+              if (pinyin && text.includes(pinyin)) return
+              if (!hasHan(text)) return
+              emitCommit(text)
+              return
+            }
+            emitCommit(update.state.doc.toString())
           }),
           EditorView.domEventHandlers({
             compositionstart() {
               composingRef.current = true
+              pendingConfirmRef.current = false
+              pinyinRef.current = ''
               return false
             },
-            compositionend(_event, view) {
+            compositionupdate(event) {
+              composingRef.current = true
+              const data = eventData(event)
+              if (/^[A-Za-z]+$/.test(data)) pinyinRef.current = data
+              return false
+            },
+            compositionend(event, editor) {
               composingRef.current = false
-              queueMicrotask(() => {
-                if (!canTypeRef.current || composingRef.current || applyingRef.current) return
-                const currentId = cardIdRef.current
-                if (!currentId) return
-                onCommitRef.current(currentId, fieldKeyRef.current, view.state.doc.toString())
-              })
+              const data = eventData(event)
+              const doc = editor.state.doc.toString()
+              const next = confirmedField(doc, pinyinRef.current, data)
+              if (!next) {
+                pendingConfirmRef.current = true
+                return false
+              }
+              if (doc !== next) {
+                applyingRef.current = true
+                editor.dispatch({ changes: { from: 0, to: doc.length, insert: next } })
+                applyingRef.current = false
+              }
+              if (editor.composing || editor.state.doc.toString() !== next) {
+                pendingConfirmRef.current = true
+                return false
+              }
+              pendingConfirmRef.current = false
+              emitCommit(next)
               return false
             },
           }),
@@ -137,7 +215,7 @@ export default function SideEditor({
     const view = viewRef.current
     const compartment = editableRef.current
     if (!view || !compartment) return
-    if (composingRef.current || view.composing) return
+    if (composingRef.current || view.composing || pendingConfirmRef.current) return
     const applied = appliedRef.current
     const current = view.state.doc.toString()
     const textSame = current === text
@@ -157,6 +235,7 @@ export default function SideEditor({
     }
     applyingRef.current = false
     appliedRef.current = { text, editable }
+    lastCommitRef.current = text
   }, [text, editable])
 
   const later = card ? laterLayers(card.layer) : []

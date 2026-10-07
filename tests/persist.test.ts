@@ -543,6 +543,39 @@ describe('落盘链路', () => {
     expect(h.mem.files.size).toBe(0)
   })
 
+  it('另存模式第二个标签打开同一份正本时只读，即使本标签还能拿到锁', async () => {
+    const channel = createMemoryChannel()
+    const bytes = documentToBytes(
+      createCard(createDocument('same-file'), {
+        id: 'c1',
+        layer: 'situation',
+        x: 0,
+        y: 0,
+        body: '已有',
+      }),
+    )
+    const first = harness({
+      channel,
+      ports: { hasDirectoryPicker: false },
+    })
+    const second = harness({
+      channel,
+      ports: {
+        hasDirectoryPicker: false,
+        tryAcquireLock: async () => ({ release() {} }),
+      },
+    })
+    await first.ctl.openLocalFile(bytes, 'snowflake.json')
+    expect(first.ctl.snapshot().view.canEdit).toBe(true)
+    await second.ctl.openLocalFile(bytes, 'snowflake.json')
+    expect(second.ctl.snapshot().view.readonlyOther).toBe(true)
+    expect(second.ctl.snapshot().view.canEdit).toBe(false)
+    expect(second.ctl.snapshot().view.messages.join('\n')).toContain(MSG_OTHER_TAB)
+    await second.ctl.commitText('c1', null, '第二页不该写下')
+    expect(second.ctl.snapshot().state.snowflake.cards.c1?.body).toBe('已有')
+    expect(first.ctl.snapshot().view.canEdit).toBe(true)
+  })
+
   it('源码不得对正本调用 createWritable，也不把 localStorage 当恢复日志', () => {
     const source = readSources()
     const receivers = [...source.matchAll(/(\w+)\.createWritable\s*\(/g)].map((match) => match[1])

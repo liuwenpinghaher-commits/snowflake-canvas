@@ -58,8 +58,24 @@ export default function App() {
       setSnap,
     )
     ctlRef.current = ctl
+    const params = new URLSearchParams(window.location.search)
+    const hook = window as Window & { __snowflakeReadLog?: () => Promise<string> }
+    if (params.get('e2e-bind') === 'directory') {
+      hook.__snowflakeReadLog = async () => {
+        const bytes = await ctl.readRecoveryLog()
+        if (bytes && bytes.byteLength > 0) return new TextDecoder().decode(bytes)
+        const log = await openDefaultRecoveryLog()
+        try {
+          const fresh = await log.read()
+          return fresh && fresh.byteLength > 0 ? new TextDecoder().decode(fresh) : ''
+        } finally {
+          await log.close?.()
+        }
+      }
+    }
     void ctl.start()
     return () => {
+      if (hook.__snowflakeReadLog) delete hook.__snowflakeReadLog
       ctl.dispose()
       ctlRef.current = null
     }

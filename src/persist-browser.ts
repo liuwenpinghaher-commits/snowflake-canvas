@@ -218,6 +218,27 @@ export function triggerDownload(fileName: string, bytes: Uint8Array): void {
 }
 
 
+const E2E_DIR = 'snowflake-e2e'
+
+function e2eBind(): boolean {
+  return new URLSearchParams(window.location.search).get('e2e-bind') === 'directory'
+}
+
+async function e2eDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  if (!e2eBind()) return null
+  const root = await navigator.storage.getDirectory()
+  return root.getDirectoryHandle(E2E_DIR, { create: true })
+}
+
+function killAt(point: 'before-move' | 'after-move'): Promise<void> {
+  if (!e2eBind()) return Promise.resolve()
+  const hooked = (window as Window & { __snowflakeE2EKill?: string }).__snowflakeE2EKill
+  const fromUrl = new URLSearchParams(window.location.search).get('e2e-kill')
+  if ((hooked || fromUrl || '') !== point) return Promise.resolve()
+  ;(window as Window & { __snowflakeKillReady?: string }).__snowflakeKillReady = point
+  return new Promise(() => {})
+}
+
 const EXPAND_PROXY_PATH = '/__snowflake/expand'
 
 function browserExpandFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -268,10 +289,14 @@ export function createBrowserPorts(ui: {
     hasDirectoryPicker: directoryPicker(window) !== undefined,
     now: () => new Date(),
     loadDirectory: async () => {
+      const testDir = await e2eDirectory()
+      if (testDir) return accessFromHandle(testDir)
       const stored = await loadHandle()
       return stored ? accessFromHandle(stored) : null
     },
     pickDirectory: async () => {
+      const testDir = await e2eDirectory()
+      if (testDir) return accessFromHandle(testDir)
       const picker = directoryPicker(window)
       if (!picker) return 'abort'
       try {
@@ -285,12 +310,14 @@ export function createBrowserPorts(ui: {
       }
     },
     queryPermission: async () => {
+      if (await e2eDirectory()) return 'granted'
       const stored = await loadHandle()
       if (!stored) return 'denied'
       const result = await stored.queryPermission({ mode: 'readwrite' })
       return result === 'granted' || result === 'prompt' ? result : 'denied'
     },
     requestPermission: async () => {
+      if (await e2eDirectory()) return 'granted'
       const stored = await loadHandle()
       if (!stored) return 'denied'
       const result = await stored.requestPermission({ mode: 'readwrite' })
@@ -309,5 +336,7 @@ export function createBrowserPorts(ui: {
       fetch: browserExpandFetch,
     },
     randomId: () => crypto.randomUUID(),
+    pauseBeforeMove: () => killAt('before-move'),
+    pauseAfterMove: () => killAt('after-move'),
   }
 }
