@@ -18,12 +18,14 @@ export default function SideEditor({
   cardId,
   card,
   groupSelected,
+  canType,
   onCommit,
   onChangeLayer,
 }: {
   cardId: string | null
   card: Card | null
   groupSelected: boolean
+  canType: boolean
   onCommit: (cardId: string, fieldKey: string | null, text: string) => void
   onChangeLayer: (cardId: string, layer: Layer) => void
 }) {
@@ -36,6 +38,7 @@ export default function SideEditor({
   const cardIdRef = useRef(cardId)
   const fieldKeyRef = useRef<string | null>(null)
   const onCommitRef = useRef(onCommit)
+  const canTypeRef = useRef(canType)
   const [fieldOverride, setFieldOverride] = useState<{
     cardId: string
     layer: Layer
@@ -44,6 +47,7 @@ export default function SideEditor({
 
   cardIdRef.current = cardId
   onCommitRef.current = onCommit
+  canTypeRef.current = canType
 
   const fieldKey =
     card && cardId
@@ -71,6 +75,7 @@ export default function SideEditor({
           editable.of(EditorView.editable.of(false)),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || applyingRef.current) return
+            if (!canTypeRef.current) return
             if (composingRef.current || update.view.composing) return
             const currentId = cardIdRef.current
             if (!currentId) return
@@ -84,7 +89,7 @@ export default function SideEditor({
             compositionend(_event, view) {
               composingRef.current = false
               queueMicrotask(() => {
-                if (composingRef.current || applyingRef.current) return
+                if (!canTypeRef.current || composingRef.current || applyingRef.current) return
                 const currentId = cardIdRef.current
                 if (!currentId) return
                 onCommitRef.current(currentId, fieldKeyRef.current, view.state.doc.toString())
@@ -110,7 +115,7 @@ export default function SideEditor({
   }, [])
 
   const text = card ? editorText(card, fieldKey) : ''
-  const editable = Boolean(card)
+  const editable = Boolean(card) && canType
 
   useEffect(() => {
     const view = viewRef.current
@@ -171,7 +176,7 @@ export default function SideEditor({
                   key={layer}
                   type="button"
                   onClick={() => {
-                    if (!cardId || composingRef.current || viewRef.current?.composing) return
+                    if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
                     onChangeLayer(cardId, layer)
                   }}
                 >

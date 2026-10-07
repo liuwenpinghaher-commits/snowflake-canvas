@@ -25,3 +25,6 @@ playwright-report/
 *.njsproj
 *.sln
 *.sw?
+
+# 落盘完工哨兵，不进版本库
+PERSIST_DONE

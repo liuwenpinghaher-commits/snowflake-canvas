@@ -192,3 +192,57 @@ button.on {
 .cm-host .cm-content {
   padding: 12px 0;
 }
+
+.topbar {
+  flex-wrap: wrap;
+}
+
+.status-line {
+  flex-basis: 100%;
+  margin: 0;
+  color: #8c4a32;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.file-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.modal-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 25, 21, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.modal {
+  width: min(440px, calc(100% - 32px));
+  background: #fffdf8;
+  border: 1px solid #c8bfb0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.modal p {
+  margin: 0 0 14px;
+  color: #1c1915;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
