@@ -86,12 +86,19 @@ async function removeNamed(directory: FileSystemDirectoryHandle, name: string): 
   }
 }
 
+async function listNames(directory: FileSystemDirectoryHandle): Promise<string[]> {
+  const names: string[] = []
+  for await (const [name] of directory.entries()) names.push(name)
+  return names
+}
+
 function accessFromHandle(directory: FileSystemDirectoryHandle): DirectoryAccess {
   return {
     read: (name) => readNamed(directory, name),
     writeTemp: (name, bytes) => writeTempBytes(directory, name, bytes),
     move: (tempName, canonicalName) => moveTempOntoCanonical(directory, tempName, canonicalName),
     remove: (name) => removeNamed(directory, name),
+    listNames: () => listNames(directory),
   }
 }
 
@@ -214,6 +221,7 @@ export function createBrowserPorts(ui: {
   openLog: () => Promise<RecoveryLog>
   askSaveAs: (fileName: string, bytes: Uint8Array) => Promise<boolean>
   askFirstDownload: (fileName: string, bytes: Uint8Array) => Promise<boolean>
+  askSnapshotDownload: (fileName: string, bytes: Uint8Array) => Promise<boolean>
 }): PersistPorts {
   let handle: PermissionHandle | null = null
 
@@ -269,6 +277,7 @@ export function createBrowserPorts(ui: {
     claim: browserClaim(),
     askSaveAs: ui.askSaveAs,
     askFirstDownload: ui.askFirstDownload,
+    askSnapshotDownload: ui.askSnapshotDownload,
     randomId: () => crypto.randomUUID(),
   }
 }

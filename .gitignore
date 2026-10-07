@@ -31,3 +31,6 @@ PERSIST_DONE
 
 # 折进建议包完工哨兵，不进版本库
 SUGGEST_DONE
+
+# 扩写完工哨兵，不进版本库
+EXPAND_DONE

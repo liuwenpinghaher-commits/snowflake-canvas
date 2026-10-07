@@ -12,6 +12,9 @@ import {
   type CompositionEvent,
   type Layer,
 } from './document.ts'
+import { MSG_CANDIDATE_MISS, buildExpandRequest, requestExpandCandidates } from './expand.ts'
+import type { ExpandClientOptions, ShownCandidate } from './expand.ts'
+import { isSnapshotFileName, snapshotFileName } from './snapshot.ts'
 
 export const CANONICAL_NAME = 'snowflake.json'
 
@@ -22,6 +25,8 @@ export const MSG_OTHER_TAB = '另一个标签正在写这份正本，本页只�
 export const MSG_RESTORED = '正本不是完整 JSON，已用恢复日志换上上一份完整稿'
 export const MSG_SAVE_AS = '正本要另存'
 export const MSG_FILE_PROTOCOL = '请用本机的 http://127.0.0.1 打开。从文件地址打开时，目录句柄和恢复日志都不可用。'
+export const MSG_KEEP_SNAPSHOT = '留下这一版'
+export const SNAPSHOT_SAVE_HINT = '这是正本旁边的一份快照。打开应用时仍读正本，不读这份快照。'
 export const MSG_NEED_PERMISSION = '还没有读写授权。点一下才能继续自动保存。'
 export const SAVE_AS_WARNING = '下载开始后不要在浏览器里取消；若取消了，必须停止编辑，下次打开会看到上一份正本。'
 
@@ -45,6 +50,7 @@ export interface DirectoryAccess {
   writeTemp(name: string, bytes: Uint8Array): Promise<void>
   move(tempName: string, canonicalName: string): Promise<void>
   remove(name: string): Promise<void>
+  listNames?(): Promise<string[]>
 }
 
 export interface LockHandle {
@@ -82,6 +88,8 @@ export interface PersistPorts {
   claim: ClaimStore
   askSaveAs(fileName: string, bytes: Uint8Array): Promise<boolean>
   askFirstDownload(fileName: string, bytes: Uint8Array): Promise<boolean>
+  askSnapshotDownload?: (fileName: string, bytes: Uint8Array) => Promise<boolean>
+  expand?: ExpandClientOptions
   randomId?: () => string
 }
 
@@ -99,6 +107,9 @@ export interface PersistView {
   otherStartedAt: string | null
   logUnavailable: boolean
   restoredNotice: boolean
+  expandNotice: string | null
+  candidates: ShownCandidate[]
+  snapshotNames: string[]
 }
 
 export interface PersistSnapshot {
@@ -121,6 +132,12 @@ export interface PersistController {
     event: CompositionEvent,
     fieldKey: string | null,
   ): Promise<ComposeSession>
+  requestCandidates(cardId: string, fieldKey: string | null): Promise<void>
+  dismissCandidates(): void
+  confirmCandidate(candidateId: string): Promise<void>
+  keepVersion(): Promise<void>
+  rollbackTo(name: string): Promise<void>
+  rollbackToBytes(bytes: Uint8Array): Promise<void>
   snapshot(): PersistSnapshot
   dispose(): void
 }
@@ -189,6 +206,9 @@ export function idleSnapshot(): PersistSnapshot {
       otherStartedAt: null,
       logUnavailable: false,
       restoredNotice: false,
+      expandNotice: null,
+      candidates: [],
+      snapshotNames: [],
     },
   }
 }
@@ -353,6 +373,10 @@ class Controller implements PersistController {
   private failed = false
   private logUnavailable = false
   private restoredNotice = false
+  private expandNotice: string | null = null
+  private candidates: ShownCandidate[] = []
+  private snapshotNames: string[] = []
+  private readonly issuedSnapshotNames = new Set<string>()
   private disposed = false
   private started = false
   private readonly ports: PersistPorts
@@ -836,6 +860,7 @@ class Controller implements PersistController {
     this.lastBytes = parsed.bytes
     this.needChoice = false
     if (!acquired) {
+      await this.refreshSnapshotNames()
       this.emit()
       return
     }
@@ -846,6 +871,7 @@ class Controller implements PersistController {
     this.stopped = false
     this.failed = false
     this.readonlyOther = false
+    await this.refreshSnapshotNames()
     this.emit()
   }
 
@@ -1001,6 +1027,202 @@ class Controller implements PersistController {
     this.listener(this.snapshot())
   }
 
+
+  async requestCandidates(cardId: string, fieldKey: string | null): Promise<void> {
+    const request = buildExpandRequest(this.state, cardId, fieldKey)
+    if (!request) {
+      this.expandNotice = MSG_CANDIDATE_MISS
+      this.candidates = []
+      this.emit()
+      return
+    }
+    const extra = this.ports.expand
+    const result = await requestExpandCandidates(request, {
+      baseURL: extra?.baseURL,
+      apiKey: extra?.apiKey,
+      fetch: extra?.fetch,
+      connect: extra?.connect,
+      maxTokens: extra?.maxTokens,
+    })
+    if (this.disposed) return
+    if (!result.ok || !this.state.snowflake.cards[cardId]) {
+      this.expandNotice = MSG_CANDIDATE_MISS
+      this.candidates = []
+      this.emit()
+      return
+    }
+    this.expandNotice = null
+    this.candidates = result.candidates.map((item) => ({
+      id: item.id,
+      text: item.text,
+      cardId,
+      fieldKey,
+    }))
+    this.emit()
+  }
+
+  dismissCandidates(): void {
+    if (this.candidates.length === 0) return
+    this.candidates = []
+    this.expandNotice = null
+    this.emit()
+  }
+
+  async confirmCandidate(candidateId: string): Promise<void> {
+    const found = this.candidates.find((item) => item.id === candidateId)
+    if (!found) return
+    const { cardId, fieldKey, text } = found
+    this.candidates = []
+    this.expandNotice = null
+    this.emit()
+    await this.commitText(cardId, fieldKey, text)
+  }
+
+  async keepVersion(): Promise<void> {
+    if (!this.lock || !this.editingAllowed()) return
+    const bytes = await this.currentCanonicalBytes()
+    if (!bytes) return
+    const kept = await this.copySnapshot(bytes)
+    if (!kept) return
+    await this.refreshSnapshotNames()
+    this.emit()
+  }
+
+  async rollbackTo(name: string): Promise<void> {
+    if (!this.lock || !this.editingAllowed() || !this.directory) return
+    if (!isSnapshotFileName(name, this.fileName)) return
+    const selected = await this.directory.read(name)
+    if (!selected) return
+    await this.rollbackWithBytes(selected)
+  }
+
+  async rollbackToBytes(bytes: Uint8Array): Promise<void> {
+    if (!this.lock || !this.editingAllowed()) return
+    await this.rollbackWithBytes(bytes)
+  }
+
+  private async rollbackWithBytes(selected: Uint8Array): Promise<void> {
+    const parsed = parseCompleteDocument(selected)
+    if (!parsed) return
+    const current = await this.currentCanonicalBytes()
+    if (!current) return
+    this.writing = true
+    this.canEdit = false
+    this.emit()
+    const kept = await this.copySnapshot(current)
+    if (!kept) {
+      this.writing = false
+      this.canEdit = true
+      this.failed = false
+      this.stopped = false
+      this.emit()
+      return
+    }
+    await this.refreshSnapshotNames()
+    const result = await this.writeExact(parsed.bytes)
+    this.writing = false
+    if (this.disposed) return
+    if (!result.ok) {
+      this.failed = true
+      this.stopped = true
+      this.canEdit = false
+      this.emit()
+      return
+    }
+    const active = this.state.activeId
+    this.state = {
+      ...parsed.state,
+      activeId: active && parsed.state.snowflake.cards[active] ? active : null,
+    }
+    this.fileId = parsed.state.snowflake.fileId
+    this.candidates = []
+    this.expandNotice = null
+    this.failed = false
+    this.stopped = false
+    this.canEdit = true
+    this.readonlyOther = false
+    if (!result.logged) this.logUnavailable = true
+    await this.refreshSnapshotNames()
+    this.emit()
+  }
+
+  private async currentCanonicalBytes(): Promise<Uint8Array | null> {
+    if (this.directory) {
+      const raw = await this.directory.read(this.fileName)
+      if (raw && parseCompleteDocument(raw)) return raw
+    }
+    if (this.lastBytes && parseCompleteDocument(this.lastBytes)) return this.lastBytes.slice()
+    return null
+  }
+
+  private async allocateSnapshotName(date: Date): Promise<string> {
+    const existing = new Set<string>(this.issuedSnapshotNames)
+    if (this.directory?.listNames) {
+      try {
+        for (const name of await this.directory.listNames()) existing.add(name)
+      } catch {
+        // 目录列不出来时，下面仍用 read 确认目标名是空的。
+      }
+    }
+    for (let guard = 0; guard < 2005; guard += 1) {
+      const name = snapshotFileName(this.fileName, date, existing)
+      if (!this.directory) return name
+      const found = await this.directory.read(name)
+      if (!found) return name
+      existing.add(name)
+    }
+    throw new Error('快照文件名都已占用')
+  }
+
+  private async copySnapshot(bytes: Uint8Array): Promise<boolean> {
+    let name: string
+    try {
+      name = await this.allocateSnapshotName(this.ports.now())
+    } catch {
+      return false
+    }
+    if (this.directory) {
+      const occupied = await this.directory.read(name)
+      if (occupied) return false
+      const tempName = `.${name}.tmp`
+      try {
+        await this.directory.writeTemp(tempName, bytes)
+        const back = await this.directory.read(tempName)
+        if (!back || !parseCompleteDocument(back)) {
+          await this.removeQuiet(tempName)
+          return false
+        }
+        await this.directory.move(tempName, name)
+      } catch {
+        await this.removeQuiet(tempName)
+        return false
+      }
+      this.issuedSnapshotNames.add(name)
+      return true
+    }
+    const ask = this.ports.askSnapshotDownload
+    if (!ask) return false
+    const accepted = await ask(name, bytes)
+    if (!accepted) return false
+    this.issuedSnapshotNames.add(name)
+    return true
+  }
+
+  private async refreshSnapshotNames(): Promise<void> {
+    if (!this.directory?.listNames) {
+      this.snapshotNames = []
+      return
+    }
+    try {
+      const stem = this.fileName.endsWith('.json') ? this.fileName.slice(0, -'.json'.length) : this.fileName
+      const prefix = `${stem}.`
+      const names = await this.directory.listNames()
+      this.snapshotNames = names.filter((name) => name.startsWith(prefix) && name.endsWith('.snapshot.json')).sort()
+    } catch {
+      this.snapshotNames = []
+    }
+  }
+
   private view(): PersistView {
     const messages: string[] = []
     if (this.fileProtocol) messages.push(MSG_FILE_PROTOCOL)
@@ -1030,6 +1252,9 @@ class Controller implements PersistController {
       otherStartedAt: this.readonlyOther ? this.otherStartedAt : null,
       logUnavailable: this.logUnavailable,
       restoredNotice: this.restoredNotice,
+      expandNotice: this.expandNotice,
+      candidates: this.candidates,
+      snapshotNames: this.snapshotNames,
     }
   }
 }

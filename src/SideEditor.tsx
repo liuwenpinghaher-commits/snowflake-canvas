@@ -14,6 +14,8 @@ import {
   type Card,
   type Layer,
 } from './document.ts'
+import ExpandPanel from './ExpandPanel.tsx'
+import type { ShownCandidate } from './expand.ts'
 import FoldPanel from './FoldPanel.tsx'
 
 export default function SideEditor({
@@ -24,6 +26,11 @@ export default function SideEditor({
   canType,
   onCommit,
   onChangeLayer,
+  expandNotice,
+  candidates,
+  onExpand,
+  onConfirmCandidate,
+  onDismissCandidates,
 }: {
   cardId: string | null
   card: Card | null
@@ -32,6 +39,11 @@ export default function SideEditor({
   canType: boolean
   onCommit: (cardId: string, fieldKey: string | null, text: string) => void
   onChangeLayer: (cardId: string, layer: Layer) => void
+  expandNotice: string | null
+  candidates: ShownCandidate[]
+  onExpand: (cardId: string, fieldKey: string | null) => void
+  onConfirmCandidate: (id: string) => void
+  onDismissCandidates: () => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -212,6 +224,22 @@ export default function SideEditor({
           )}
           {cardId ? (
             <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} />
+          ) : null}
+          {cardId ? (
+            <ExpandPanel
+              canType={canType}
+              notice={expandNotice}
+              candidates={candidates.filter((item) => item.cardId === cardId)}
+              onExpand={() => {
+                if (!canType || composingRef.current || viewRef.current?.composing) return
+                onExpand(cardId, fieldKey)
+              }}
+              onConfirm={(id) => {
+                if (!canType || composingRef.current || viewRef.current?.composing) return
+                onConfirmCandidate(id)
+              }}
+              onDismiss={onDismissCandidates}
+            />
           ) : null}
         </>
       ) : (

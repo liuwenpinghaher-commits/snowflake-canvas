@@ -4,8 +4,10 @@ import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
 import {
+  MSG_KEEP_SNAPSHOT,
   MSG_SAVE_AS,
   SAVE_AS_WARNING,
+  SNAPSHOT_SAVE_HINT,
   createPersistController,
   idleSnapshot,
   openDefaultRecoveryLog,
@@ -33,6 +35,7 @@ type SaveDialog = {
 export default function App() {
   const [snap, setSnap] = useState<PersistSnapshot>(() => idleSnapshot())
   const [dialog, setDialog] = useState<SaveDialog | null>(null)
+  const [snapName, setSnapName] = useState('')
   const ctlRef = useRef<PersistController | null>(null)
 
   useEffect(() => {
@@ -46,6 +49,10 @@ export default function App() {
         askFirstDownload: (fileName, bytes) =>
           new Promise((resolve) => {
             setDialog({ title: '选择正本', fileName, bytes, resolve })
+          }),
+        askSnapshotDownload: (fileName, bytes) =>
+          new Promise((resolve) => {
+            setDialog({ title: MSG_KEEP_SNAPSHOT, fileName, bytes, resolve })
           }),
       }),
       setSnap,
@@ -143,6 +150,49 @@ export default function App() {
           >
             删除
           </button>
+          <button type="button" disabled={!canEdit} onClick={() => void ctlRef.current?.keepVersion()}>
+            {MSG_KEEP_SNAPSHOT}
+          </button>
+          {view.downloadMode && !view.fileProtocol ? (
+            <label className="file-pick">
+              选快照回退
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0]
+                  event.currentTarget.value = ''
+                  if (!file) return
+                  void file.arrayBuffer().then((buffer) => {
+                    void ctlRef.current?.rollbackToBytes(new Uint8Array(buffer))
+                  })
+                }}
+              />
+            </label>
+          ) : (
+            <>
+              <select
+                aria-label="已有快照"
+                className="snap-select"
+                value={snapName}
+                onChange={(event) => setSnapName(event.currentTarget.value)}
+              >
+                <option value="">选择一份快照</option>
+                {view.snapshotNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!canEdit || snapName.length === 0}
+                onClick={() => void ctlRef.current?.rollbackTo(snapName)}
+              >
+                回退到这一版
+              </button>
+            </>
+          )}
         </div>
         {view.messages.map((message) => (
           <p key={message} className="status-line" role="status">
@@ -188,13 +238,22 @@ export default function App() {
           onChangeLayer={(cardId, layer: Layer) => {
             void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer))
           }}
+          expandNotice={view.expandNotice}
+          candidates={view.candidates}
+          onExpand={(cardId, fieldKey) => {
+            void ctlRef.current?.requestCandidates(cardId, fieldKey)
+          }}
+          onConfirmCandidate={(id) => {
+            void ctlRef.current?.confirmCandidate(id)
+          }}
+          onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
         />
       </div>
       {dialog ? (
         <div className="modal-back" role="presentation">
           <div className="modal" role="dialog" aria-label={dialog.title}>
             <h2>{dialog.title}</h2>
-            <p>{SAVE_AS_WARNING}</p>
+            <p>{dialog.title === MSG_KEEP_SNAPSHOT ? SNAPSHOT_SAVE_HINT : SAVE_AS_WARNING}</p>
             <div className="modal-actions">
               <button type="button" onClick={() => closeDialog(false)}>
                 取消
