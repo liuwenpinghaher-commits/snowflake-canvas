@@ -1,0 +1,216 @@
+import { useEffect, useRef, useState } from 'react'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { Compartment, EditorState } from '@codemirror/state'
+import { drawSelection, EditorView, keymap, placeholder } from '@codemirror/view'
+import {
+  FIELD_LABEL,
+  defaultFieldKey,
+  editorText,
+  fieldKeys,
+  laterLayers,
+  layerLabel,
+  nextLayer,
+  type Card,
+  type Layer,
+} from './document.ts'
+
+export default function SideEditor({
+  cardId,
+  card,
+  groupSelected,
+  onCommit,
+  onChangeLayer,
+}: {
+  cardId: string | null
+  card: Card | null
+  groupSelected: boolean
+  onCommit: (cardId: string, fieldKey: string | null, text: string) => void
+  onChangeLayer: (cardId: string, layer: Layer) => void
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const editableRef = useRef<Compartment | null>(null)
+  const composingRef = useRef(false)
+  const applyingRef = useRef(false)
+  const appliedRef = useRef<{ text: string; editable: boolean } | null>(null)
+  const cardIdRef = useRef(cardId)
+  const fieldKeyRef = useRef<string | null>(null)
+  const onCommitRef = useRef(onCommit)
+  const [fieldOverride, setFieldOverride] = useState<{
+    cardId: string
+    layer: Layer
+    key: string | null
+  } | null>(null)
+
+  cardIdRef.current = cardId
+  onCommitRef.current = onCommit
+
+  const fieldKey =
+    card && cardId
+      ? fieldOverride && fieldOverride.cardId === cardId && fieldOverride.layer === card.layer
+        ? fieldOverride.key
+        : defaultFieldKey(card)
+      : null
+  fieldKeyRef.current = fieldKey
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const editable = new Compartment()
+    editableRef.current = editable
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: '',
+        extensions: [
+          history(),
+          drawSelection(),
+          EditorView.lineWrapping,
+          placeholder('在这里写'),
+          keymap.of([...historyKeymap, ...defaultKeymap]),
+          editable.of(EditorView.editable.of(false)),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged || applyingRef.current) return
+            if (composingRef.current || update.view.composing) return
+            const currentId = cardIdRef.current
+            if (!currentId) return
+            onCommitRef.current(currentId, fieldKeyRef.current, update.state.doc.toString())
+          }),
+          EditorView.domEventHandlers({
+            compositionstart() {
+              composingRef.current = true
+              return false
+            },
+            compositionend(_event, view) {
+              composingRef.current = false
+              queueMicrotask(() => {
+                if (composingRef.current || applyingRef.current) return
+                const currentId = cardIdRef.current
+                if (!currentId) return
+                onCommitRef.current(currentId, fieldKeyRef.current, view.state.doc.toString())
+              })
+              return false
+            },
+          }),
+          EditorView.theme({
+            '&': { height: '100%' },
+            '.cm-scroller': { overflow: 'auto', fontFamily: 'inherit' },
+            '.cm-content': { fontFamily: 'inherit' },
+          }),
+        ],
+      }),
+    })
+    viewRef.current = view
+    return () => {
+      view.destroy()
+      viewRef.current = null
+      editableRef.current = null
+      appliedRef.current = null
+    }
+  }, [])
+
+  const text = card ? editorText(card, fieldKey) : ''
+  const editable = Boolean(card)
+
+  useEffect(() => {
+    const view = viewRef.current
+    const compartment = editableRef.current
+    if (!view || !compartment) return
+    if (composingRef.current || view.composing) return
+    const applied = appliedRef.current
+    const current = view.state.doc.toString()
+    const textSame = current === text
+    const editableSame = applied?.editable === editable
+    if (textSame && editableSame) return
+    applyingRef.current = true
+    const effects = compartment.reconfigure(EditorView.editable.of(editable))
+    if (!textSame && !editableSame) {
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: text },
+        effects,
+      })
+    } else if (!textSame) {
+      view.dispatch({ changes: { from: 0, to: current.length, insert: text } })
+    } else {
+      view.dispatch({ effects })
+    }
+    applyingRef.current = false
+    appliedRef.current = { text, editable }
+  }, [text, editable])
+
+  const later = card ? laterLayers(card.layer) : []
+  const upcoming = card ? nextLayer(card.layer) : null
+
+  return (
+    <aside className="side">
+      <div className="side-head">
+        {card ? (
+          <>
+            <strong>{layerLabel(card.layer)}</strong>
+            <p className="hint">输入法选字结束前，这张卡片上的字不会变。</p>
+          </>
+        ) : groupSelected ? (
+          <strong>分组</strong>
+        ) : (
+          <strong>还没有打开卡片</strong>
+        )}
+      </div>
+
+      {card ? (
+        <>
+          <p className="hint">
+            {upcoming
+              ? `从这张卡片右边拖到空白处，默认长成${layerLabel(upcoming)}。`
+              : '已经是最后一层，不能再往外长出新卡片。'}
+          </p>
+          {later.length > 0 ? (
+            <div className="field-row">
+              <span>改成更后面的层</span>
+              {later.map((layer) => (
+                <button
+                  key={layer}
+                  type="button"
+                  onClick={() => {
+                    if (!cardId || composingRef.current || viewRef.current?.composing) return
+                    onChangeLayer(cardId, layer)
+                  }}
+                >
+                  {layerLabel(layer)}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {fieldKeys(card.layer).length > 0 ? (
+            <div className="field-row">
+              {fieldKeys(card.layer).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={key === fieldKey ? 'on' : ''}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    if (composingRef.current || viewRef.current?.composing) return
+                    if (!cardId) return
+                    setFieldOverride({ cardId, layer: card.layer, key })
+                  }}
+                >
+                  {FIELD_LABEL[key] ?? key}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="hint">全文</p>
+          )}
+        </>
+      ) : (
+        <p className="hint">
+          {groupSelected
+            ? '这是分组，没有雪花卡片。删分组不会带走圈里的卡片。'
+            : '点一张卡片，在这里改。空白处双击，或点「新建念头」，放一张念头。'}
+        </p>
+      )}
+
+      <div className="cm-host" ref={hostRef} aria-label="卡片编辑器" />
+    </aside>
+  )
+}
