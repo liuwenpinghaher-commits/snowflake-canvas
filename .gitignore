@@ -34,3 +34,6 @@ SUGGEST_DONE
 
 # 扩写完工哨兵，不进版本库
 EXPAND_DONE
+
+# 扩写复工完工哨兵，不进版本库
+EXPAND_DONE_REWORK

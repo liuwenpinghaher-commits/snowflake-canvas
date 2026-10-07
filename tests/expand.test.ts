@@ -244,9 +244,14 @@ describe('AI 扩写候选和本地快照回退', () => {
     expect(h.log.writes.length).toBe(writes)
     expect(h.mem.events.length).toBe(events)
     expect(textOf(beforeFile)).not.toContain('尚未写回的候选甲')
-    const body = JSON.parse(seen) as { model: string; messages: { role: string; content: string }[] }
+    const body = JSON.parse(seen) as {
+      model: string
+      thinking?: { type?: string }
+      messages: { role: string; content: string }[]
+    }
     expect(body.model).toBe(EXPAND_MODEL)
     expect(body.model).toBe('deepseek-flash')
+    expect(body.thinking).toEqual({ type: 'disabled' })
     const user = JSON.parse(body.messages.find((item) => item.role === 'user')!.content) as ExpandRequest
     expect(Object.keys(user).sort()).toEqual(
       ['cardId', 'layer', 'neighborSummaries', 'parentSummary', 'text'].sort(),
@@ -538,19 +543,23 @@ describe('AI 扩写候选和本地快照回退', () => {
     console.log('密钥来自环境变量，未落盘')
   })
 
-  it('对 127.0.0.1:18100 的真实扩写在有密钥时发出很小的请求', async () => {
+  it('对 127.0.0.1:18100 的真实扩写', async () => {
     const key = readCpaApiKey()
-    if (!key) {
-      console.log('SKIP_LIVE')
-      return
-    }
+    if (!key) throw new Error('缺少 CPA_API_KEY')
     let status = 0
     const h = harness({
       expand: {
         maxTokens: 32,
         fetch: async (input, init) => {
-          const payload = JSON.parse(String(init?.body ?? '{}')) as { model?: string; max_tokens?: number }
+          const target = new URL(String(input))
+          if (target.hostname !== '127.0.0.1' || target.port !== '18100') throw new Error('live target')
+          const payload = JSON.parse(String(init?.body ?? '{}')) as {
+            model?: string
+            max_tokens?: number
+            thinking?: { type?: string }
+          }
           if (payload.model !== 'deepseek-flash') throw new Error('model')
+          if (payload.thinking?.type !== 'disabled') throw new Error('thinking')
           if (payload.max_tokens !== 32) throw new Error('max_tokens')
           const headers = new Headers(init?.headers)
           const authorization = headers.get('Authorization')
@@ -568,6 +577,10 @@ describe('AI 扩写候选和本地快照回退', () => {
     const beforeFile = h.mem.files.get(CANONICAL_NAME)!.slice()
     await h.ctl.requestCandidates('c1', null)
     const view = h.ctl.snapshot().view
+    const panel = readFileSync(join(process.cwd(), 'src/ExpandPanel.tsx'), 'utf8')
+    const side = readFileSync(join(process.cwd(), 'src/SideEditor.tsx'), 'utf8')
+    expect(side).toContain('<ExpandPanel')
+    expect(panel).toContain('candidates.map')
     if (view.candidates.length === 0) throw new Error(`live expand empty status ${status}`)
     expect(cardText(h.ctl)).toBe(beforeCard)
     expect(bytesEqual(h.mem.files.get(CANONICAL_NAME)!, beforeFile)).toBe(true)

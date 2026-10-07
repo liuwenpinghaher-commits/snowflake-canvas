@@ -114,6 +114,7 @@ export function expandChatBody(input: ExpandRequest, maxTokens: number): {
   model: typeof EXPAND_MODEL
   messages: { role: 'system' | 'user'; content: string }[]
   max_tokens: number
+  thinking: { type: 'disabled' }
 } {
   return {
     model: EXPAND_MODEL,
@@ -122,6 +123,7 @@ export function expandChatBody(input: ExpandRequest, maxTokens: number): {
       { role: 'user', content: expandUserContent(input) },
     ],
     max_tokens: maxTokens,
+    thinking: { type: 'disabled' },
   }
 }
 
