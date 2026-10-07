@@ -546,7 +546,10 @@ describe('落盘链路', () => {
   it('源码不得对正本调用 createWritable，也不把 localStorage 当恢复日志', () => {
     const source = readSources()
     const receivers = [...source.matchAll(/(\w+)\.createWritable\s*\(/g)].map((match) => match[1])
-    expect(receivers).toEqual(['tempHandle'])
+    // 正本仍只经 tempHandle 写入。suggestionFile 是作者另存的建议包，不是画布正本。
+    expect(receivers.filter((name) => name === 'tempHandle')).toEqual(['tempHandle'])
+    expect(receivers.filter((name) => name === 'suggestionFile')).toEqual(['suggestionFile'])
+    expect(receivers).toHaveLength(2)
     expect(source).not.toContain('fileHandle.createWritable')
     expect(source).not.toMatch(/localStorage/)
     expect(source).not.toMatch(/\bpauseVfs\b/)

@@ -10,13 +10,16 @@ import {
   laterLayers,
   layerLabel,
   nextLayer,
+  type AppState,
   type Card,
   type Layer,
 } from './document.ts'
+import FoldPanel from './FoldPanel.tsx'
 
 export default function SideEditor({
   cardId,
   card,
+  documentState,
   groupSelected,
   canType,
   onCommit,
@@ -24,6 +27,7 @@ export default function SideEditor({
 }: {
   cardId: string | null
   card: Card | null
+  documentState: AppState
   groupSelected: boolean
   canType: boolean
   onCommit: (cardId: string, fieldKey: string | null, text: string) => void
@@ -206,6 +210,9 @@ export default function SideEditor({
           ) : (
             <p className="hint">全文</p>
           )}
+          {cardId ? (
+            <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} />
+          ) : null}
         </>
       ) : (
         <p className="hint">

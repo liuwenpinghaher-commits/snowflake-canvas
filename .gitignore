@@ -28,3 +28,6 @@ playwright-report/
 
 # 落盘完工哨兵，不进版本库
 PERSIST_DONE
+
+# 折进建议包完工哨兵，不进版本库
+SUGGEST_DONE

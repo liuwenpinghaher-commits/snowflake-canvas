@@ -179,6 +179,7 @@ export default function App() {
         <SideEditor
           cardId={activeCard ? state.activeId : null}
           card={activeCard}
+          documentState={state}
           groupSelected={activeNode?.type === 'group'}
           canType={canEdit}
           onCommit={(cardId, fieldKey, text) => {
