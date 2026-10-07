@@ -217,6 +217,32 @@ export function triggerDownload(fileName: string, bytes: Uint8Array): void {
   URL.revokeObjectURL(url)
 }
 
+
+const EXPAND_PROXY_PATH = '/__snowflake/expand'
+
+function browserExpandFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (window.location.hostname !== '127.0.0.1') {
+    return Promise.reject(new TypeError('扩写只允许本机'))
+  }
+  let target: URL
+  try {
+    target = new URL(String(input), window.location.origin)
+  } catch {
+    return Promise.reject(new TypeError('扩写只允许本机'))
+  }
+  if (target.hostname !== '127.0.0.1' || target.port !== '18100') {
+    return Promise.reject(new TypeError('扩写只允许本机'))
+  }
+  const headers = new Headers(init?.headers)
+  headers.delete('Authorization')
+  return fetch(new URL(EXPAND_PROXY_PATH, window.location.origin), {
+    method: init?.method ?? 'POST',
+    headers,
+    body: init?.body ?? null,
+    redirect: 'manual',
+  })
+}
+
 export function createBrowserPorts(ui: {
   openLog: () => Promise<RecoveryLog>
   askSaveAs: (fileName: string, bytes: Uint8Array) => Promise<boolean>
@@ -278,6 +304,10 @@ export function createBrowserPorts(ui: {
     askSaveAs: ui.askSaveAs,
     askFirstDownload: ui.askFirstDownload,
     askSnapshotDownload: ui.askSnapshotDownload,
+    expand: {
+      apiKey: () => undefined,
+      fetch: browserExpandFetch,
+    },
     randomId: () => crypto.randomUUID(),
   }
 }
