@@ -297,6 +297,8 @@ export default function SideEditor({
     const textSame = current === text
     const editableSame = applied?.editable === editable
     if (textSame && editableSame) return
+    // 这一轮按键已经交给保存时，正文先不动。整篇替换会拆掉正在输入的节点，焦点掉到页面上。
+    if (!textSame && lastCommitRef.current !== null && lastCommitRef.current !== text) return
     applyingRef.current = true
     const effects = compartment.reconfigure(EditorView.editable.of(editable))
     if (!textSame && !editableSame) {

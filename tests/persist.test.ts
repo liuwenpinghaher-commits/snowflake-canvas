@@ -197,7 +197,7 @@ describe('落盘链路', () => {
 
     const pending = h.ctl.editorComposition(session, { type: 'compositionend', text: '门口那个人其实是弟弟。' }, null)
     expect(h.ctl.snapshot().view.writing).toBe(true)
-    expect(h.ctl.snapshot().view.canEdit).toBe(false)
+    expect(h.ctl.snapshot().view.canEdit).toBe(true)
     expect(h.ctl.snapshot().view.messages).toContain(MSG_WRITING)
     await pending
 

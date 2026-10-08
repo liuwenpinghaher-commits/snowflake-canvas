@@ -401,6 +401,7 @@ class Controller implements PersistController {
   private showWritingMessage = false
   private writing = false
   private canEdit = false
+  private queuedText: { cardId: string; fieldKey: string | null; text: string } | null = null
   private stopped = false
   private failed = false
   private logUnavailable = false
@@ -608,10 +609,19 @@ class Controller implements PersistController {
   }
 
   async commitText(cardId: string, fieldKey: string | null, text: string): Promise<void> {
+    if (this.writing) {
+      if (!this.canEdit || this.stopped || this.failed || this.fileProtocol || this.readonlyOther || this.needPermission) {
+        return
+      }
+      this.queuedText = { cardId, fieldKey, text }
+      return
+    }
     if (!this.editingAllowed()) return
+    this.queuedText = null
     const next = commitCardText(this.state, cardId, text, fieldKey, false)
     if (next === this.state) return
     await this.persistState(next)
+    await this.flushQueuedText()
   }
 
   async mutate(recipe: (state: AppState) => AppState): Promise<void> {
@@ -642,13 +652,23 @@ class Controller implements PersistController {
   private editingAllowed(): boolean {
     return (
       this.canEdit &&
-      !this.writing &&
       !this.stopped &&
       !this.failed &&
       !this.fileProtocol &&
       !this.readonlyOther &&
       !this.needPermission
     )
+  }
+
+  private async flushQueuedText(): Promise<void> {
+    const queued = this.queuedText
+    if (!queued || this.writing || this.disposed) return
+    this.queuedText = null
+    if (!this.editingAllowed()) return
+    const next = commitCardText(this.state, queued.cardId, queued.text, queued.fieldKey, false)
+    if (next === this.state) return
+    await this.persistState(next)
+    await this.flushQueuedText()
   }
 
   private enterFileProtocol(): void {
@@ -943,7 +963,6 @@ class Controller implements PersistController {
     this.actionNotice = null
     this.state = next
     this.writing = true
-    this.canEdit = false
     this.emit()
     const bytes = documentToBytes(next)
     const result = await this.writeExact(bytes)
