@@ -430,6 +430,18 @@ function messageText(content) {
     .join('')
 }
 
+function messageAt(item) {
+  const raw = item.timestamp ?? item.createdAt ?? item.at
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const ms = raw > 1e12 ? raw : raw * 1000
+    const date = new Date(ms)
+    if (Number.isNaN(date.getTime())) return ''
+    return date.toISOString()
+  }
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  return ''
+}
+
 function discussFailure(reply, error, fallback) {
   reply.code(error && error.statusCode ? error.statusCode : 502)
   return reply.send({ error: error instanceof Error ? error.message : fallback })
@@ -754,12 +766,18 @@ function registerApi(app, prefix) {
         reply.code(502)
         return reply.send({ error: '讨论记录没有取到' })
       }
+      const list = Array.isArray(payload.messages)
+        ? payload.messages
+        : Array.isArray(payload.data)
+          ? payload.data
+          : []
       const messages = []
-      for (const item of Array.isArray(payload.messages) ? payload.messages : []) {
+      for (const item of list) {
         if (!item || (item.role !== 'user' && item.role !== 'assistant')) continue
         const content = messageText(item.content).trim()
         if (!content) continue
-        messages.push({ role: item.role, content })
+        const at = messageAt(item)
+        messages.push(at ? { role: item.role, content, at } : { role: item.role, content })
       }
       reply.header('Cache-Control', 'no-store')
       return reply.send({ cardId, sessionId, messages })

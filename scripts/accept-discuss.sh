@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 雪花画布：卡片旁讨论浮窗验收。打正在听的 8093。
+# 雪花画布：卡片下方讨论验收。打正在听的 8093。
 # 成功时最后一行是 ACCEPT_DISCUSS_OK。
 #
 # 页面检查：读 8093 上 /xuehua/ 以及它引用的脚本，确认浮窗挂载点和文案。
@@ -7,7 +7,7 @@
 # 接口等价（对应双击建会话、继续讨论、采纳、错 If-Match、三标签、kill -9）：
 #   GET /api/discuss/session?cardId=  等价于双击一张还没有会话的卡，服务端为它建会话。
 #   POST /api/discuss/stream          等价于在该会话里继续发消息。
-#   PUT /api/canvas + If-Match        等价于点「采纳进本念头正文」后只改这张卡的 body。
+#   PUT /api/canvas + If-Match        等价于点「采纳进本念头」后只改这张卡的 body。
 # 空白处双击仍走 onPaneClick → onCreateAt，这里只核对源码还是这条路径，不改成打开讨论。
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -174,18 +174,36 @@ def page_check():
         if code != 200:
             fail(f"页面脚本 {path} 返回 {code}")
         blob += script.decode("utf-8", "replace")
-    for needle in ("data-discuss-popover", "历史讨论", "采纳进本念头正文", "讨论忙，网关同时最多 10 路"):
+    for needle in (
+        "data-discuss-popover",
+        "历史讨论",
+        "采纳进本念头",
+        "有新消息",
+        "讨论忙，网关同时最多 10 路",
+        "版本已更新，请再试",
+    ):
         if needle not in blob:
             fail(f"页面脚本里没有「{needle}」")
+    if "采纳进本念头正文" in blob or "念头正文" in blob:
+        fail("页面还留着旧的念头正文框或旧采纳文案")
     if "aria-label=\"画布讨论\"" in blob or ">画布讨论<" in blob:
         fail("页面上还有固定的画布讨论")
+    discuss = (ROOT / "src" / "CardDiscuss.tsx").read_text(encoding="utf-8")
+    if "scheduleBody" in discuss or "position:fixed" in discuss or "position: fixed" in discuss:
+        fail("讨论窗还在防抖写正文，或用固定定位贴在屏幕上")
+    css = (ROOT / "src" / "index.css").read_text(encoding="utf-8")
+    popover = css.split(".discuss-popover {", 1)[-1].split("}", 1)[0]
+    if "fixed" in popover:
+        fail("讨论窗还是贴在屏幕上的固定层")
     flow = (ROOT / "src" / "FlowCanvas.tsx").read_text(encoding="utf-8")
+    if "discuss-dock" not in flow:
+        fail("讨论没有挂在卡片节点下方")
     pane = flow.split("onPaneClick", 1)[-1].split("onNodeClick", 1)[0]
     if "onCreateAt" not in pane:
         fail("空白处双击不再调用 onCreateAt")
     if "onOpenDiscuss" not in flow:
-        fail("双击卡片没有打开浮窗")
-    print("页面：浮窗挂载点和文案在 /xuehua/ 的脚本里；空白处双击仍是新建卡片")
+        fail("双击卡片没有打开讨论")
+    print("页面：讨论挂在卡片节点上；空白处双击仍是新建卡片")
 
 def read_stream(card_id, session_id, message, deadline_s):
     # 接口等价：在已打开的会话里继续发一条，不经过页面双击。

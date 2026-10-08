@@ -11,18 +11,44 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import { laterLayers, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
+import CardDiscuss from './CardDiscuss.tsx'
+import { laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
 
-type CardData = { text: string; layerLabel: string; color: string; canGrow: boolean }
+type DiscussBind = {
+  cardBody: string
+  onClose: () => void
+  onCommitBody: (cardId: string, body: string) => Promise<void>
+}
+
+type CardData = {
+  text: string
+  layerLabel: string
+  color: string
+  canGrow: boolean
+  flash: boolean
+  discuss: DiscussBind | null
+}
 type GroupData = { text: string }
 
-function SnowCard({ data }: NodeProps<Node<CardData, 'snowCard'>>) {
+function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
   return (
-    <div className="snow-card" data-color={data.color}>
-      <div className="snow-layer">{data.layerLabel}</div>
-      <div className="snow-text">{data.text || '（空）'}</div>
-      <Handle type="target" position={Position.Left} />
-      {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
+    <div className="snow-node">
+      <div className={data.flash ? 'snow-card adopt-flash' : 'snow-card'} data-color={data.color}>
+        <div className="snow-layer">{data.layerLabel}</div>
+        <div className="snow-text">{data.text || '（空）'}</div>
+        <Handle type="target" position={Position.Left} />
+        {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
+      </div>
+      {data.discuss ? (
+        <div className="discuss-dock nodrag nopan nowheel" data-discuss-dock="">
+          <CardDiscuss
+            cardId={id}
+            cardBody={data.discuss.cardBody}
+            onClose={data.discuss.onClose}
+            onCommitBody={data.discuss.onCommitBody}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -33,7 +59,13 @@ function SnowGroup({ data }: NodeProps<Node<GroupData, 'snowGroup'>>) {
 
 const nodeTypes = { snowCard: SnowCard, snowGroup: SnowGroup }
 
-function toFlowNode(node: CanvasNode, card: Card | undefined, activeId: string | null): Node {
+function toFlowNode(
+  node: CanvasNode,
+  card: Card | undefined,
+  activeId: string | null,
+  discuss: { cardId: string; bind: DiscussBind } | null,
+  flashId: string | null,
+): Node {
   if (node.type === 'group') {
     return {
       id: node.id,
@@ -54,12 +86,14 @@ function toFlowNode(node: CanvasNode, card: Card | undefined, activeId: string |
     width: node.width,
     height: node.height,
     selected: node.id === activeId,
-    zIndex: 1,
+    zIndex: discuss?.cardId === node.id ? 20 : 1,
     data: {
       text: node.text ?? '',
-      layerLabel: card ? (card.layer === 'situation' ? '念头' : card.layer) : '',
+      layerLabel: card ? layerLabel(card.layer) : '',
       color: node.color ?? '1',
       canGrow: card ? laterLayers(card.layer).length > 0 : false,
+      flash: flashId === node.id,
+      discuss: discuss?.cardId === node.id ? discuss.bind : null,
     },
     style: { width: node.width, height: node.height },
   }
@@ -76,6 +110,10 @@ export default function FlowCanvas({
   onLink,
   onCreateAt,
   onOpenDiscuss,
+  discussCardId,
+  flashCardId,
+  onCloseDiscuss,
+  onCommitBody,
 }: {
   nodes: CanvasNode[]
   edges: CanvasEdge[]
@@ -86,12 +124,23 @@ export default function FlowCanvas({
   onSpawn: (fromId: string, x: number, y: number) => void
   onLink: (fromId: string, toId: string) => void
   onCreateAt: (x: number, y: number) => void
-  onOpenDiscuss: (cardId: string, anchor: { left: number; top: number; right: number }) => void
+  onOpenDiscuss: (cardId: string) => void
+  discussCardId: string | null
+  flashCardId: string | null
+  onCloseDiscuss: () => void
+  onCommitBody: (cardId: string, body: string) => Promise<void>
 }) {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const lastPaneClick = useRef(0)
 
-  const flowNodes = nodes.map((node) => toFlowNode(node, cards[node.id], activeId))
+  const discuss =
+    discussCardId && cards[discussCardId]
+      ? {
+          cardId: discussCardId,
+          bind: { cardBody: cards[discussCardId].body, onClose: onCloseDiscuss, onCommitBody },
+        }
+      : null
+  const flowNodes = nodes.map((node) => toFlowNode(node, cards[node.id], activeId, discuss, flashCardId))
   const flowEdges = edges.map((edge) => ({
     id: edge.id,
     source: edge.fromNode,
@@ -139,17 +188,10 @@ export default function FlowCanvas({
         onNodeClick={(_, node) => onSelect(node.id)}
         onNodeDoubleClick={(event, node) => {
           if (node.type !== 'snowCard') return
+          const target = 'target' in event && event.target instanceof Element ? event.target : null
+          if (target?.closest('[data-discuss-popover]')) return
           event.preventDefault()
-          const point = 'clientX' in event ? event : null
-          const host = point?.target instanceof Element ? point.target.closest('.react-flow__node') : null
-          const rect = host?.getBoundingClientRect()
-          const clientX = point && 'clientX' in point ? point.clientX : 0
-          const clientY = point && 'clientY' in point ? point.clientY : 0
-          onOpenDiscuss(node.id, {
-            left: rect ? rect.left : clientX,
-            right: rect ? rect.right : clientX,
-            top: rect ? rect.top : clientY,
-          })
+          onOpenDiscuss(node.id)
         }}
         onConnect={(connection) => {
           if (!connection.source || !connection.target) return

@@ -19,6 +19,7 @@ import { isSnapshotFileName, snapshotFileName } from './snapshot.ts'
 export const CANONICAL_NAME = 'snowflake.json'
 
 export const MSG_WRITE_FAILED = '文件没写上'
+export const MSG_VERSION_MOVED = '版本已更新，请再试'
 export const MSG_WRITING = '正在写入正本'
 export const MSG_LOG_DOWN = '恢复日志不可用'
 export const MSG_OTHER_TAB = '另一个标签正在写这份正本，本页只读'
@@ -122,6 +123,7 @@ export interface PersistView {
   expandNotice: string | null
   candidates: ShownCandidate[]
   snapshotNames: string[]
+  remoteVersion: string
 }
 
 export interface PersistSnapshot {
@@ -222,8 +224,16 @@ export function idleSnapshot(): PersistSnapshot {
       expandNotice: null,
       candidates: [],
       snapshotNames: [],
+      remoteVersion: '',
     },
   }
+}
+
+function versionFromEtag(etag: string): string {
+  let text = etag.trim()
+  if (text.startsWith('W/')) text = text.slice(2).trim()
+  if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) text = text.slice(1, -1)
+  return text
 }
 
 export function openDefaultRecoveryLog(): Promise<RecoveryLog> {
@@ -865,14 +875,18 @@ class Controller implements PersistController {
 
   private async writeRemote(
     bytes: Uint8Array,
-  ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false }> {
+  ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false; conflict?: boolean }> {
     const remote = this.ports.remote
     if (!remote) return { ok: false }
     try {
       let saved = await remote.save(bytes, this.remoteEtag)
-      if (!saved.ok && saved.conflict) {
+      if (!saved.ok && saved.conflict && saved.etag) {
         this.remoteEtag = saved.etag
-        saved = await remote.save(bytes, saved.etag)
+        saved = await remote.save(bytes, this.remoteEtag)
+      }
+      if (!saved.ok && saved.conflict && saved.etag) {
+        this.remoteEtag = saved.etag
+        return { ok: false, conflict: true }
       }
       if (!saved.ok) return { ok: false }
       this.remoteEtag = saved.etag
@@ -927,6 +941,14 @@ class Controller implements PersistController {
     this.writing = false
     if (this.disposed) return
     if (!result.ok) {
+      if ('conflict' in result && result.conflict) {
+        this.actionNotice = MSG_VERSION_MOVED
+        this.failed = false
+        this.stopped = false
+        this.canEdit = true
+        this.emit()
+        return
+      }
       this.failed = true
       this.stopped = true
       this.canEdit = false
@@ -1364,7 +1386,11 @@ class Controller implements PersistController {
     }
     if (this.restoredNotice) messages.push(MSG_RESTORED)
     if (this.needPermission) messages.push(MSG_NEED_PERMISSION)
-    if (this.remoteMode) messages.push('正本在服务器')
+    if (this.remoteMode) {
+      messages.push('正本在服务器')
+      const version = versionFromEtag(this.remoteEtag)
+      if (version) messages.push(`版本 ${version}`)
+    }
     if (this.actionNotice) messages.push(this.actionNotice)
     return {
       canEdit: this.editingAllowed(),
@@ -1383,6 +1409,7 @@ class Controller implements PersistController {
       expandNotice: this.expandNotice,
       candidates: this.candidates,
       snapshotNames: this.snapshotNames,
+      remoteVersion: this.remoteMode ? versionFromEtag(this.remoteEtag) : '',
     }
   }
 }

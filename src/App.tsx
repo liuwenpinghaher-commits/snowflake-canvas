@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import CardDiscuss from './CardDiscuss.tsx'
 import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
 import {
   MSG_KEEP_SNAPSHOT,
   MSG_SAVE_AS,
+  MSG_VERSION_MOVED,
+  MSG_WRITE_FAILED,
   SAVE_AS_WARNING,
   SNAPSHOT_SAVE_HINT,
   createPersistController,
@@ -39,7 +40,9 @@ export default function App() {
   const [dialog, setDialog] = useState<SaveDialog | null>(null)
   const [snapName, setSnapName] = useState('')
   const ctlRef = useRef<PersistController | null>(null)
-  const [discuss, setDiscuss] = useState<{ cardId: string; left: number; top: number; right: number } | null>(null)
+  const flashTimer = useRef<number | null>(null)
+  const [discussCardId, setDiscussCardId] = useState<string | null>(null)
+  const [flashCardId, setFlashCardId] = useState<string | null>(null)
 
   useEffect(() => {
     const ctl = createPersistController(
@@ -100,7 +103,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <h1>雪花画布</h1>
-        <p>空白处双击放一张念头。双击卡片，在旁边讨论。从卡片右边拖出去，长出后面的层。</p>
+        <p>空白处双击放一张念头。双击卡片，讨论挂在这张卡片正下方。从卡片右边拖出去，长出后面的层。</p>
         <div className="top-actions">
           {view.needChoice && !view.fileProtocol ? (
             <button type="button" onClick={() => void ctlRef.current?.selectDirectory()}>
@@ -243,7 +246,25 @@ export default function App() {
               if (!canEdit) return
               void ctlRef.current?.mutate((current) => createCard(current, { layer: 'situation', x, y, body: '' }))
             }}
-            onOpenDiscuss={(cardId, anchor) => setDiscuss({ cardId, ...anchor })}
+            onOpenDiscuss={(cardId) => setDiscussCardId(cardId)}
+            discussCardId={discussCardId && state.snowflake.cards[discussCardId] ? discussCardId : null}
+            flashCardId={flashCardId}
+            onCloseDiscuss={() => setDiscussCardId(null)}
+            onCommitBody={async (cardId, text) => {
+              await ctlRef.current?.mutate((current) => {
+                const next = setCardBody(current, cardId, text)
+                return next === current ? { ...current } : next
+              })
+              const messages = ctlRef.current?.snapshot().view.messages ?? []
+              if (messages.includes(MSG_VERSION_MOVED)) throw new Error(MSG_VERSION_MOVED)
+              if (messages.includes(MSG_WRITE_FAILED)) throw new Error(MSG_WRITE_FAILED)
+              setFlashCardId(cardId)
+              if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+              flashTimer.current = window.setTimeout(() => {
+                flashTimer.current = null
+                setFlashCardId((current) => (current === cardId ? null : current))
+              }, 1600)
+            }}
           />
         </ReactFlowProvider>
         <SideEditor
@@ -269,17 +290,6 @@ export default function App() {
           onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
         />
       </div>
-      {discuss && state.snowflake.cards[discuss.cardId] ? (
-        <CardDiscuss
-          cardId={discuss.cardId}
-          cardBody={state.snowflake.cards[discuss.cardId].body}
-          anchor={discuss}
-          onClose={() => setDiscuss(null)}
-          onCommitBody={(cardId, text) =>
-            ctlRef.current?.mutate((current) => setCardBody(current, cardId, text)) ?? Promise.resolve()
-          }
-        />
-      ) : null}
       {dialog ? (
         <div className="modal-back" role="presentation">
           <div className="modal" role="dialog" aria-label={dialog.title}>

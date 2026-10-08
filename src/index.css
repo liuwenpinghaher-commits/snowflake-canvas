@@ -41,6 +41,7 @@ button.on {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 8px 14px;
@@ -93,6 +94,17 @@ button.on {
   border: none;
   background: transparent;
   border-radius: 0;
+  overflow: visible;
+}
+
+.snow-node {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.snow-card.adopt-flash {
+  box-shadow: 0 0 0 3px #e7c3a8;
 }
 
 .snow-card,
@@ -340,11 +352,36 @@ button.on {
   max-width: 240px;
 }
 
+.discuss-dock {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 380px;
+  z-index: 6;
+  user-select: text;
+  pointer-events: auto;
+}
+
+.discuss-dock::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 22px;
+  width: 12px;
+  height: 6px;
+  background: #8c4a32;
+  border-radius: 2px 2px 0 0;
+}
+
 .discuss-popover {
-  position: fixed;
-  z-index: 12;
-  overflow: auto;
-  padding: 12px;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 460px;
+  overflow: hidden;
+  padding: 10px;
   border: 1px solid #d9d0c3;
   border-radius: 10px;
   background: #fffdf8;
@@ -352,7 +389,7 @@ button.on {
 }
 
 .discuss-popover textarea,
-.discuss-popover input {
+.discuss-popover select {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -363,44 +400,185 @@ button.on {
   background: #fffdf8;
 }
 
-.discuss-history h3 {
-  margin: 10px 0 6px;
-  font-size: 15px;
-}
-
-.discuss-history ul {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
+.discuss-history {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
-.discuss-history button[aria-current='true'] {
-  border-color: #8c4a32;
-  background: #f3e2d6;
+.discuss-history label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  color: #5e574e;
+}
+
+.discuss-history select {
+  min-width: 0;
+  flex: 1;
 }
 
 .discuss-chat {
-  margin: 10px 0;
+  position: relative;
+  flex: 1;
+  min-height: 140px;
+  overflow: auto;
 }
 
-.discuss-role {
-  margin: 8px 0 2px;
-  color: #5e574e;
-  font-size: 12px;
-}
-
-.discuss-actions {
+.bubble-row {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
   margin: 8px 0;
 }
 
-.discuss-log {
-  min-height: 24px;
-  margin: 0 0 6px;
+.bubble-row.user {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  background: #efe8dc;
+  color: #3f3830;
+}
+
+.bubble {
+  max-width: calc(100% - 40px);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #eadfce;
+}
+
+.bubble-row.user .bubble {
+  background: #f3e2d6;
+}
+
+.bubble-row.error .bubble {
+  background: #f8ecec;
+  border-color: #e2c2c2;
+}
+
+.bubble-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+  color: #6b645b;
+  font-size: 12px;
+}
+
+.bubble-row.user .bubble-meta {
+  flex-direction: row-reverse;
+}
+
+.stamp {
+  opacity: 0.55;
+  font-size: 11px;
+}
+
+.stamp-full {
+  display: none;
+}
+
+.bubble:hover .stamp {
+  opacity: 1;
+}
+
+.bubble:hover .stamp-short {
+  display: none;
+}
+
+.bubble:hover .stamp-full {
+  display: inline;
+}
+
+.plain,
+.md p,
+.md li {
+  margin: 0;
   white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.md h3,
+.md h4,
+.md h5 {
+  margin: 8px 0 4px;
+  font-size: 14px;
+}
+
+.md ul,
+.md ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.md-code {
+  margin: 6px 0;
+  padding: 6px 8px;
+  overflow: auto;
+  background: #f7f4ee;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.pending {
+  margin: 0;
+  color: #8a8175;
+}
+
+.bubble-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  opacity: 0;
+}
+
+.bubble-row:hover .bubble-actions,
+.bubble-row:focus-within .bubble-actions,
+.bubble-actions.shown {
+  opacity: 1;
+}
+
+.adopted-mark {
+  margin: 6px 0 0;
+  color: #2f6f4e;
+  font-size: 12px;
+}
+
+.jump-latest {
+  position: sticky;
+  bottom: 4px;
+  display: block;
+  margin: 4px auto 0;
+}
+
+.discuss-compose-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #d9d0c3;
+  border-top-color: #8c4a32;
+  border-radius: 50%;
+  animation: discuss-spin 0.7s linear infinite;
+}
+
+@keyframes discuss-spin {
+  to { transform: rotate(360deg); }
 }

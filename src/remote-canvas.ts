@@ -56,11 +56,16 @@ export async function saveRemote(bytes: Uint8Array, etag: string): Promise<Remot
     return { ok: false, conflict: false }
   }
   if (response.status === 412) {
+    const rejected = response.headers.get('etag') || ''
     try {
       const again = await fetch(api('/api/canvas'), { cache: 'no-store' })
-      return { ok: false, conflict: true, etag: again.headers.get('etag') || '' }
+      const fresh = again.ok ? again.headers.get('etag') || '' : ''
+      const etag = fresh || rejected
+      if (!etag) return { ok: false, conflict: false }
+      return { ok: false, conflict: true, etag }
     } catch {
-      return { ok: false, conflict: false }
+      if (!rejected) return { ok: false, conflict: false }
+      return { ok: false, conflict: true, etag: rejected }
     }
   }
   if (!response.ok) return { ok: false, conflict: false }
