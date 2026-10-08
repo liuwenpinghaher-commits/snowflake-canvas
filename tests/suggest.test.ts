@@ -42,13 +42,12 @@ function sceneState(fields: Record<string, string>, id = 'n-scene-1'): AppState 
 }
 
 describe('折进此场', () => {
-  it('场景表折出 kind/source 正确，一条 intent，where 是本场任务，summarySentence 优先于 title', () => {
+  it('场景表折出 kind/source 正确，一条 intent，where 是本场任务，这一场发生什么优先于标题', () => {
     const state = sceneState({
       title: '雪夜开门',
       pov: '林晚',
-      summarySentence: '她发现门口的人是弟弟',
-      summaryFull: '更长的一场',
-      notes: '夜里',
+      what: '她发现门口的人是弟弟',
+      legacySummary: '更长的一场',
     })
     const before = JSON.stringify(serializeDocument(state))
     const result = foldIntoScene(state, { cardId: 'n-scene-1', action: 'existing-scene', beatId: '' })
@@ -78,7 +77,7 @@ describe('折进此场', () => {
     expect(pack.items[0]?.text).not.toBe('雪夜开门')
 
     const titled = foldIntoScene(
-      sceneState({ title: '只有标题', summarySentence: '   ', pov: '', summaryFull: '', notes: '' }, 'n-scene-2'),
+      sceneState({ title: '只有标题', what: '   ', pov: '' }, 'n-scene-2'),
       { cardId: 'n-scene-2', action: 'new-draft-scene', beatId: 'beat-should-drop' },
     )
     const titledPack = packOf(titled)
@@ -93,7 +92,7 @@ describe('折进此场', () => {
     })
 
     const empty = foldIntoScene(
-      sceneState({ title: '  ', summarySentence: '', pov: '林晚', summaryFull: '不进本场任务', notes: '备注' }),
+      sceneState({ title: '  ', what: '', pov: '林晚', legacySummary: '不进本场任务' }),
       { cardId: 'n-scene-1', action: 'existing-scene' },
     )
     expect(empty).toEqual({ ok: false, reason: REASON_SCENE_TASK })
@@ -135,7 +134,7 @@ describe('折进此场', () => {
     expect(pack.items.some((item) => item.slot === 'do_text')).toBe(true)
   })
 
-  it('正文草稿选 new-draft-scene 且相连场景表有摘要：包里同时有 do_text 和 intent', () => {
+  it('正文草稿选 new-draft-scene 且相连场景表写了这一场发生什么：包里同时有 do_text 和 intent', () => {
     let state = createDocument('file-link')
     state = createCard(state, {
       id: 'n-scene-1',
@@ -144,10 +143,8 @@ describe('折进此场', () => {
       y: 0,
       fields: {
         title: '雪夜开门',
-        summarySentence: '她必须在弟弟离开前问出他为什么装死。',
+        what: '她必须在弟弟离开前问出他为什么装死。',
         pov: '林晚',
-        summaryFull: '',
-        notes: '',
       },
     })
     state = createCard(state, {
@@ -159,7 +156,7 @@ describe('折进此场', () => {
     })
     state = createCard(state, {
       id: 'n-person-1',
-      layer: '人物',
+      layer: 'renwubiao',
       x: 0,
       y: 80,
       fields: { name: '不该当成任务' },
@@ -198,7 +195,7 @@ describe('折进此场', () => {
       layer: '场景表',
       x: 0,
       y: 0,
-      fields: { title: '标题当本场任务', summarySentence: '  ', pov: '', summaryFull: '', notes: '' },
+      fields: { title: '标题当本场任务', what: '  ', pov: '' },
     })
     titled = createCard(titled, { id: 'n-prose-9', layer: '正文草稿', x: 30, y: 0, body: '动作一句。' })
     titled = linkCards(titled, 'n-prose-9', 'n-scene-9')
@@ -217,7 +214,7 @@ describe('折进此场', () => {
       layer: '场景表',
       x: 0,
       y: 40,
-      fields: { title: ' ', summarySentence: '', pov: '', summaryFull: '更长也不算', notes: '' },
+      fields: { title: ' ', what: '', pov: '', legacySummary: '更长也不算' },
     })
     state = linkCards(state, 'n-scene-empty', 'n-prose-1')
 
@@ -266,10 +263,8 @@ describe('折进此场', () => {
   it('slot 之外的键进不了包', () => {
     const state = sceneState({
       title: '雪夜开门',
-      summarySentence: '她发现门口的人是弟弟',
+      what: '她发现门口的人是弟弟',
       pov: '',
-      summaryFull: '',
-      notes: '',
     })
     const result = foldIntoScene(state, {
       cardId: 'n-scene-1',
@@ -294,8 +289,13 @@ describe('折进此场', () => {
     }
   })
 
-  it('人物、一句话、一段调用折进得到 ok:false，不造 items', () => {
-    const layers: Layer[] = ['人物', '一句话', '一段', 'situation']
+  it('人物表、一页大纲、人物故事、人物档案、一句话、一段和念头不能折出建议', () => {
+    const layers: Layer[] = ['renwubiao', 'yiyedagang', 'renwugushi', 'renwudangan', '一句话', '一段', 'situation']
+    expect(REASON_LAYER).toContain('场景表')
+    expect(REASON_LAYER).toContain('场次')
+    expect(REASON_LAYER).toContain('正文草稿')
+    expect(REASON_LAYER).not.toContain('changci')
+    expect(REASON_LAYER).not.toContain('renwubiao')
     for (const layer of layers) {
       let state = createDocument(`file-${layer}`)
       state = createCard(state, {
@@ -305,17 +305,96 @@ describe('折进此场', () => {
         y: 0,
         body: layer === '一句话' || layer === 'situation' ? '不能直接进场' : '',
         fields:
-          layer === '人物'
-            ? { name: '林晚' }
-            : layer === '一段'
+          layer === 'renwubiao'
+            ? { name: '林晚', sentence: '门口的弟弟' }
+            : layer === '一段' || layer === 'yiyedagang'
               ? { background: '她在雪夜开门。' }
-              : undefined,
+              : layer === 'renwugushi'
+                ? { who: '林晚' }
+                : layer === 'renwudangan'
+                  ? { bodyName: '林晚' }
+                  : undefined,
       })
       const result = foldIntoScene(state, { cardId: 'n-nope', action: 'existing-scene', beatId: 'beat-1' })
       expect(result).toEqual({ ok: false, reason: REASON_LAYER })
       expect(result).not.toHaveProperty('items')
       expect(result).not.toHaveProperty('json')
     }
+  })
+
+  it('场次可以折出建议，本场任务优先用 task', () => {
+    let state = createDocument('file-beat')
+    state = createCard(state, {
+      id: 'n-scene-1',
+      layer: '场景表',
+      x: 0,
+      y: 0,
+      fields: { what: '场景里的一句', title: '雪夜' },
+    })
+    state = createCard(state, {
+      id: 'n-beat-1',
+      layer: 'changci',
+      x: 20,
+      y: 0,
+      fields: { task: '场次上的本场任务', alpha: '弟弟站在门口' },
+    })
+    state = linkCards(state, 'n-scene-1', 'n-beat-1')
+    const fromBeat = packOf(foldIntoScene(state, { cardId: 'n-beat-1', action: 'existing-scene' }))
+    expect(fromBeat.items).toEqual([
+      {
+        cardId: 'n-beat-1',
+        action: 'existing-scene',
+        beatId: null,
+        slot: 'intent',
+        text: '场次上的本场任务',
+        where: '本场任务',
+      },
+    ])
+
+    state = createCard(state, {
+      id: 'n-prose-1',
+      layer: '正文草稿',
+      x: 40,
+      y: 0,
+      body: '她问了一句。',
+    })
+    state = linkCards(state, 'n-scene-1', 'n-prose-1')
+    state = linkCards(state, 'n-beat-1', 'n-prose-1')
+    const fromProse = packOf(foldIntoScene(state, { cardId: 'n-prose-1', action: 'new-draft-scene' }))
+    expect(fromProse.items.find((item) => item.slot === 'intent')).toMatchObject({
+      cardId: 'n-beat-1',
+      text: '场次上的本场任务',
+    })
+
+    let viaScene = createDocument('file-beat-empty')
+    viaScene = createCard(viaScene, {
+      id: 'n-scene-2',
+      layer: '场景表',
+      x: 0,
+      y: 0,
+      fields: { what: '上游场景的这一场', title: '' },
+    })
+    viaScene = createCard(viaScene, {
+      id: 'n-beat-2',
+      layer: 'changci',
+      x: 20,
+      y: 0,
+      fields: { task: '   ', alpha: '门口' },
+    })
+    viaScene = createCard(viaScene, {
+      id: 'n-prose-2',
+      layer: '正文草稿',
+      x: 40,
+      y: 0,
+      body: '她没有让他进门。',
+    })
+    viaScene = linkCards(viaScene, 'n-scene-2', 'n-beat-2')
+    viaScene = linkCards(viaScene, 'n-beat-2', 'n-prose-2')
+    const upstream = packOf(foldIntoScene(viaScene, { cardId: 'n-prose-2', action: 'new-draft-scene' }))
+    expect(upstream.items.find((item) => item.slot === 'intent')).toMatchObject({
+      cardId: 'n-scene-2',
+      text: '上游场景的这一场',
+    })
   })
 
   it('产品源码 src 不含设定图写入路径', () => {

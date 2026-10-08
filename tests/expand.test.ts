@@ -225,10 +225,10 @@ describe('AI 扩写候选和本地快照回退', () => {
       })
       next = createCard(next, {
         id: 'far',
-        layer: '人物',
+        layer: 'renwubiao',
         x: 480,
         y: 0,
-        fields: { notes: '全书不该出现MARKER' },
+        fields: { sentence: '全书不该出现MARKER' },
       })
       return linkCards(next, 'parent', 'c1')
     })

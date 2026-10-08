@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AppState, Card } from './document.ts'
 import {
+  REASON_BEAT_TASK,
   REASON_DRAFT_TASK,
   REASON_SCENE_TASK,
   SUGGEST_NOTE,
@@ -27,9 +28,13 @@ export default function FoldPanel({
   const [savedNote, setSavedNote] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (card.layer !== '场景表' && card.layer !== '正文草稿') return null
+  if (card.layer !== '场景表' && card.layer !== 'changci' && card.layer !== '正文草稿') return null
 
   const sceneMissing = card.layer === '场景表' && sceneCardTask(card) === ''
+  const beatMissing =
+    card.layer === 'changci' &&
+    (card.fields.task ?? '').trim() === '' &&
+    connectedSceneTask(documentState, cardId) === null
   const needSupplement =
     card.layer === '正文草稿' && action === 'new-draft-scene' && connectedSceneTask(documentState, cardId) === null
 
@@ -122,9 +127,10 @@ export default function FoldPanel({
         </>
       ) : null}
       {card.layer === '正文草稿' && action === 'new-draft-scene' && !needSupplement ? (
-        <p className="hint">本场任务用相连场景表的摘要；摘要空着就用标题。</p>
+        <p className="hint">本场任务优先用相连场次的本场任务；没有就用场景表的「这一场发生什么」，空着再用标题。</p>
       ) : null}
       {sceneMissing ? <p className="hint">{REASON_SCENE_TASK}</p> : null}
+      {beatMissing ? <p className="hint">{REASON_BEAT_TASK}</p> : null}
       <div className="fold-actions">
         <button type="button" onClick={fold} disabled={busy}>
           {busy ? '正在保存' : '折进此场'}

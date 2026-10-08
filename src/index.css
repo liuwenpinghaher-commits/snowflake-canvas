@@ -130,6 +130,10 @@ button.on {
 .snow-card[data-color="4"] { border-top-color: #7a4e8c; }
 .snow-card[data-color="5"] { border-top-color: #8c6a2f; }
 .snow-card[data-color="6"] { border-top-color: #4d5d73; }
+.snow-card[data-color="7"] { border-top-color: #8c3d55; }
+.snow-card[data-color="8"] { border-top-color: #2f6f6a; }
+.snow-card[data-color="9"] { border-top-color: #5c6b2f; }
+.snow-card[data-color="10"] { border-top-color: #6b3f55; }
 
 .snow-layer {
   font-size: 12px;
@@ -159,6 +163,7 @@ button.on {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: auto;
 }
 
 .side-head, .hint, .field-row {
@@ -299,7 +304,8 @@ button.on {
   font-size: 13px;
 }
 
-.fold-field input {
+.fold-field input,
+.fold-field select {
   font: inherit;
   color: inherit;
   border: 1px solid #c8bfb0;

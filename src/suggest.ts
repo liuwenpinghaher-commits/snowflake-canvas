@@ -19,10 +19,11 @@ export const SLOT_WHERE: Record<SuggestSlot, string> = {
   do_text: '动作',
 }
 
-export const REASON_SCENE_TASK = '先写一句本场任务。场景表的摘要和标题都是空的。'
+export const REASON_SCENE_TASK = '先写一句本场任务。场景表的「这一场发生什么」和标题都是空的。'
 export const REASON_DRAFT_TASK =
-  '新草稿场还缺本场任务。先在相连的场景表写一句摘要或标题，或在这里补一句。'
-export const REASON_LAYER = '这一层不能折进此场。只有场景表和正文草稿可以折出建议。'
+  '新草稿场还缺本场任务。先在相连的场次写本场任务，或在相连的场景表写这一场发生什么或标题，或在这里补一句。'
+export const REASON_BEAT_TASK = '先写一句本场任务。这张场次上的本场任务是空的，相连的场景表也没有能用的一句。'
+export const REASON_LAYER = '这一层不能折进此场。只有场景表、场次和正文草稿可以折出建议。'
 
 export interface SuggestItem {
   cardId: string
@@ -64,16 +65,38 @@ function blank(value: string | null | undefined): string {
 }
 
 export function sceneCardTask(card: Card): string {
-  return blank(card.fields.summarySentence) || blank(card.fields.title)
+  return blank(card.fields.what) || blank(card.fields.title)
 }
 
-export function connectedSceneTask(state: AppState, proseId: string): { cardId: string; text: string } | null {
+function parentCards(state: AppState, cardId: string): { id: string; card: Card }[] {
+  const parents: { id: string; card: Card }[] = []
   for (const edge of state.canvas.edges) {
-    if (edge.toNode !== proseId) continue
-    const from = state.snowflake.cards[edge.fromNode]
-    if (!from || from.layer !== '场景表') continue
-    const text = sceneCardTask(from)
-    if (text) return { cardId: edge.fromNode, text }
+    if (edge.toNode !== cardId) continue
+    const card = state.snowflake.cards[edge.fromNode]
+    if (!card) continue
+    parents.push({ id: edge.fromNode, card })
+  }
+  return parents
+}
+
+export function connectedSceneTask(state: AppState, cardId: string): { cardId: string; text: string } | null {
+  const parents = parentCards(state, cardId)
+  for (const parent of parents) {
+    if (parent.card.layer !== 'changci') continue
+    const task = blank(parent.card.fields.task)
+    if (task) return { cardId: parent.id, text: task }
+  }
+  for (const parent of parents) {
+    if (parent.card.layer !== '场景表') continue
+    const text = sceneCardTask(parent.card)
+    if (text) return { cardId: parent.id, text }
+  }
+  for (const parent of parents) {
+    if (parent.card.layer !== 'changci') continue
+    const upstream = parentCards(state, parent.id).find(
+      (item) => item.card.layer === '场景表' && sceneCardTask(item.card),
+    )
+    if (upstream) return { cardId: upstream.id, text: sceneCardTask(upstream.card) }
   }
   return null
 }
@@ -119,7 +142,7 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
 
   const card = state.snowflake.cards[input.cardId]
   if (!card) return { ok: false, reason: '这张卡片不在画布上。' }
-  if (card.layer !== '场景表' && card.layer !== '正文草稿') {
+  if (card.layer !== '场景表' && card.layer !== 'changci' && card.layer !== '正文草稿') {
     return { ok: false, reason: REASON_LAYER }
   }
 
@@ -131,6 +154,17 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
     if (!text) return { ok: false, reason: REASON_SCENE_TASK }
     const intent = makeItem(input.cardId, action, beatId, 'intent', text)
     if (intent) items.push(intent)
+  } else if (card.layer === 'changci') {
+    const own = blank(card.fields.task)
+    if (own) {
+      const intent = makeItem(input.cardId, action, beatId, 'intent', own)
+      if (intent) items.push(intent)
+    } else {
+      const linked = connectedSceneTask(state, input.cardId)
+      if (!linked) return { ok: false, reason: REASON_BEAT_TASK }
+      const intent = makeItem(linked.cardId, action, beatId, 'intent', linked.text)
+      if (intent) items.push(intent)
+    }
   } else {
     const motion = makeItem(input.cardId, action, beatId, 'do_text', card.body)
     if (motion) items.push(motion)

@@ -3,6 +3,7 @@ import {
   commitCardText,
   createDocument,
   LAYERS,
+  loadCards,
   serializeDocument,
   type AppState,
   type CanvasEdge,
@@ -10,7 +11,7 @@ import {
   type Card,
   type ComposeSession,
   type CompositionEvent,
-  type Layer,
+  type LooseCard,
 } from './document.ts'
 import { MSG_CANDIDATE_MISS, buildExpandRequest, requestExpandCandidates } from './expand.ts'
 import type { ExpandClientOptions, ShownCandidate } from './expand.ts'
@@ -251,8 +252,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isLayer(value: string): value is Layer {
-  return (LAYERS as readonly string[]).includes(value)
+function isStoredLayer(value: string): boolean {
+  return (LAYERS as readonly string[]).includes(value) || value === '人物'
 }
 
 function toAppState(value: unknown): AppState | null {
@@ -275,15 +276,15 @@ function toAppState(value: unknown): AppState | null {
     if (!parsed) return null
     edges.push(parsed)
   }
-  const cards: Record<string, Card> = {}
+  const loose: Record<string, LooseCard> = {}
   for (const [id, card] of Object.entries(snowflake.cards)) {
     const parsed = parseCard(card)
     if (!parsed) return null
-    cards[id] = parsed
+    loose[id] = parsed
   }
   return {
     canvas: { nodes, edges },
-    snowflake: { fileId: snowflake.fileId, cards },
+    snowflake: { fileId: snowflake.fileId, cards: loadCards(loose, edges) },
     activeId: null,
   }
 }
@@ -350,15 +351,24 @@ function isEnd(value: unknown): value is CanvasEdge['fromEnd'] {
   return value === 'none' || value === 'arrow'
 }
 
-function parseCard(value: unknown): Card | null {
-  if (!isRecord(value) || typeof value.layer !== 'string' || !isLayer(value.layer)) return null
-  if (typeof value.body !== 'string' || !isRecord(value.fields)) return null
+function parseCard(value: unknown): LooseCard | null {
+  if (!isRecord(value) || typeof value.layer !== 'string') return null
+  const known = isStoredLayer(value.layer)
+  if (known && (typeof value.body !== 'string' || !isRecord(value.fields))) return null
+  const body = typeof value.body === 'string' ? value.body : ''
   const fields: Record<string, string> = {}
-  for (const [key, field] of Object.entries(value.fields)) {
-    if (typeof field !== 'string') return null
-    fields[key] = field
+  if (isRecord(value.fields)) {
+    for (const [key, field] of Object.entries(value.fields)) {
+      if (typeof field !== 'string') {
+        if (known) return null
+        continue
+      }
+      fields[key] = field
+    }
+  } else if (value.fields !== undefined && known) {
+    return null
   }
-  return { layer: value.layer, body: value.body, fields }
+  return { layer: value.layer, body, fields }
 }
 
 function peekFileId(bytes: Uint8Array | null): string | null {
