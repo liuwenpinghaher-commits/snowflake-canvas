@@ -293,10 +293,22 @@ def main():
     legacy_id = before_store.get("sessionId") if legacy else ""
 
     _, payload = load_canvas()
-    root = situation_target(payload["document"])
-    if not root:
-        fail("文档里没有念头卡，原讨论不能迁走，本项验收停在这里")
     user_bodies = {card_id: body for card_id, body in bodies(payload["document"]).items() if card_id not in TEST_IDS}
+    root = situation_target(payload["document"])
+    # 正本可以没有念头卡。会话已经按卡分组时，旧讨论迁不走，也不改用户现有的卡。
+    # 先放验收自己的念头卡，后面的双击、继续讨论、采纳、错误 If-Match 都打这张卡，收尾再删。
+    grouped = (not legacy) and isinstance(before_store.get("cards"), dict)
+    if not root and grouped:
+        global CARDS_ADDED
+        mutate_document(add_test_cards)
+        CARDS_ADDED = True
+        _, payload = load_canvas()
+        root = situation_target(payload["document"])
+        if root not in TEST_IDS:
+            fail("验收用的念头卡没有写上")
+        print("正本没有念头卡，已加上验收用的念头卡")
+    elif not root:
+        fail("文档里没有念头卡，原讨论不能迁走，本项验收停在这里")
 
     opened = open_session(root)
     print(f"双击等价：念头根卡 {root} 的会话是 {opened['sessionId']}")
@@ -319,7 +331,6 @@ def main():
         print("迁移：会话文件已经是按卡分组，原有会话号还在")
 
     kept_ids = set(session_ids(disk_store()))
-    global CARDS_ADDED
     mutate_document(add_test_cards)
     CARDS_ADDED = True
     card_a, card_b, card_c = TEST_IDS
