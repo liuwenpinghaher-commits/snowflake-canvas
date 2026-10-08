@@ -11,7 +11,7 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import { laterLayers, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
+import { laterLayers, layerLabel as labelOfLayer, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
 
 type CardData = { text: string; layerLabel: string; color: string; canGrow: boolean }
 type GroupData = { text: string }
@@ -57,7 +57,7 @@ function toFlowNode(node: CanvasNode, card: Card | undefined, activeId: string |
     zIndex: 1,
     data: {
       text: node.text ?? '',
-      layerLabel: card ? (card.layer === 'situation' ? '念头' : card.layer) : '',
+      layerLabel: card ? labelOfLayer(card.layer) : '',
       color: node.color ?? '1',
       canGrow: card ? laterLayers(card.layer).length > 0 : false,
     },

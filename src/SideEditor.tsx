@@ -3,10 +3,14 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder } from '@codemirror/view'
 import {
-  FIELD_LABEL,
+  choiceFields,
   defaultFieldKey,
   editorText,
+  extraFieldKeys,
+  fieldControlLabel,
+  fieldGroups,
   fieldKeys,
+  isChoiceField,
   laterLayers,
   layerLabel,
   nextLayer,
@@ -17,6 +21,55 @@ import {
 import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
 import FoldPanel from './FoldPanel.tsx'
+
+function FieldButtons({
+  card,
+  cardId,
+  fieldKey,
+  onPick,
+}: {
+  card: Card
+  cardId: string | null
+  fieldKey: string | null
+  onPick: (key: string) => void
+}) {
+  const groups = fieldGroups(card.layer)
+  const extras = extraFieldKeys(card)
+  const button = (key: string) => (
+    <button
+      key={key}
+      type="button"
+      className={key === fieldKey ? 'on' : ''}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => {
+        if (!cardId) return
+        onPick(key)
+      }}
+    >
+      {fieldControlLabel(card.layer, key)}
+    </button>
+  )
+  const textKeys = fieldKeys(card.layer).filter((key) => !isChoiceField(key))
+  if (!groups) {
+    return (
+      <div className="field-row">
+        {textKeys.map(button)}
+        {extras.map(button)}
+      </div>
+    )
+  }
+  return (
+    <>
+      {groups.map((group) => (
+        <div key={group.title} className="field-row">
+          <span>{group.title}</span>
+          {group.keys.map(button)}
+        </div>
+      ))}
+      {extras.length > 0 ? <div className="field-row">{extras.map(button)}</div> : null}
+    </>
+  )
+}
 
 function eventData(event: Event): string {
   if (!('data' in event)) return ''
@@ -280,24 +333,45 @@ export default function SideEditor({
               ))}
             </div>
           ) : null}
-          {fieldKeys(card.layer).length > 0 ? (
-            <div className="field-row">
-              {fieldKeys(card.layer).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={key === fieldKey ? 'on' : ''}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    if (composingRef.current || viewRef.current?.composing) return
-                    if (!cardId) return
-                    setFieldOverride({ cardId, layer: card.layer, key })
+          {choiceFields(card.layer).map((choice) => {
+            const current = card.fields[choice.key] ?? ''
+            const options = choice.options.some((option) => option.value === current)
+              ? choice.options
+              : [{ value: current, label: current }, ...choice.options]
+            return (
+              <label key={choice.key} className="fold-field field-row">
+                {choice.label}
+                <select
+                  aria-label={choice.label}
+                  value={current}
+                  onChange={(event) => {
+                    if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
+                    onCommit(cardId, choice.key, event.target.value)
                   }}
                 >
-                  {FIELD_LABEL[key] ?? key}
-                </button>
-              ))}
-            </div>
+                  {options.map((option) => (
+                    <option key={option.value || 'empty'} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          })}
+          {card.layer === 'changci' ? (
+            <p className="hint">主动时写目标、冲突、挫折；反应时写反应、两难、决定。这些都可以空着。</p>
+          ) : null}
+          {fieldKeys(card.layer).some((key) => !isChoiceField(key)) || extraFieldKeys(card).length > 0 ? (
+            <FieldButtons
+              card={card}
+              cardId={cardId}
+              fieldKey={fieldKey}
+              onPick={(key) => {
+                if (composingRef.current || viewRef.current?.composing) return
+                if (!cardId) return
+                setFieldOverride({ cardId, layer: card.layer, key })
+              }}
+            />
           ) : (
             <p className="hint">全文</p>
           )}

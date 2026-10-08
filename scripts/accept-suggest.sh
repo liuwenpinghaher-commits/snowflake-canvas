@@ -40,13 +40,13 @@ PY
 {
   echo
   echo "断言摘要"
-  echo "场景表折出 kind/source 正确，一条 intent，where 是「本场任务」，summarySentence 优先于 title：通过"
+  echo "场景表折出 kind/source 正确，一条 intent，where 是「本场任务」，这一场发生什么优先于标题：通过"
   echo "正文草稿默认 do_text，where 是「动作」：通过"
-  echo "正文草稿选 new-draft-scene 且相连场景表有摘要：包里同时有 do_text 和 intent：通过"
+  echo "正文草稿选 new-draft-scene 且相连场景表写了这一场发生什么：包里同时有 do_text 和 intent：通过"
   echo "正文草稿选 new-draft-scene 但没有相连场景表、也没补本场任务：不生成文件（纯函数 ok:false），reason 里有「本场任务」：通过"
   echo "补上本场任务之后才 ok:true，且 intent 条目的 text 就是补的那句：通过"
   echo "slot 之外的键进不了包：通过"
-  echo "人物、一句话、一段调用折进得到 ok:false，不造 items：通过"
+  echo "人物表、一页大纲、人物故事、人物档案、一句话、一段和念头不能折出建议：通过"
   echo "产品源码（src，不含 tests）里找不到 /api/commit、/api/paste、/api/suggest、/api/drafts/patch：通过"
 } >> test-results/suggest-report.txt
 

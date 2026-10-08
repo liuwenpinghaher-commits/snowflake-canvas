@@ -1,4 +1,15 @@
-export const LAYERS = ['situation', '一句话', '一段', '人物', '场景表', '正文草稿'] as const
+export const LAYERS = [
+  'situation',
+  '一句话',
+  '一段',
+  'renwubiao',
+  'yiyedagang',
+  'renwugushi',
+  'renwudangan',
+  '场景表',
+  'changci',
+  '正文草稿',
+] as const
 
 export type Layer = (typeof LAYERS)[number]
 
@@ -6,17 +17,73 @@ export const PARAGRAPH_KEYS = ['background', 'disaster1', 'disaster2', 'disaster
 
 export const PERSON_KEYS = [
   'name',
+  'role',
+  'sentence',
   'motivation',
   'goal',
   'conflict',
   'epiphany',
-  'phraseSummary',
-  'paragraphSummary',
-  'fullSummary',
-  'notes',
+  'paragraph',
+  'grade',
 ] as const
 
-export const SCENE_KEYS = ['title', 'pov', 'summarySentence', 'summaryFull', 'notes'] as const
+export const YIYEDAGANG_KEYS = [...PARAGRAPH_KEYS, 'fourPages'] as const
+
+export const RENWUGUSHI_KEYS = ['who', 'length', 'story'] as const
+
+export const ARCHIVE_GROUPS = [
+  {
+    title: '身体',
+    keys: ['bodyName', 'age', 'birthday', 'height', 'weight', 'ethnicity', 'hairEyes', 'looks', 'clothes'],
+  },
+  {
+    title: '性格',
+    keys: ['humor', 'personality', 'religion', 'politics', 'hobbies', 'taste', 'favColor', 'bag'],
+  },
+  {
+    title: '环境',
+    keys: ['home', 'education', 'job', 'family', 'bestFriend', 'maleFriends', 'femaleFriends', 'enemies'],
+  },
+  {
+    title: '心理',
+    keys: [
+      'bestMemory',
+      'worstMemory',
+      'traitLine',
+      'strongest',
+      'weakest',
+      'paradox',
+      'hope',
+      'fear',
+      'philosophy',
+      'selfView',
+      'othersView',
+    ],
+  },
+  { title: '结局', keys: ['endingChange'] },
+] as const
+
+export const RENWUDANGAN_KEYS = ARCHIVE_GROUPS.flatMap((group) => group.keys)
+
+export const SCENE_KEYS = ['pov', 'what', 'words', 'chapter', 'title', 'conflict'] as const
+
+export const CHANGCI_KEYS = [
+  'alpha',
+  'subplot',
+  'happened',
+  'why',
+  'result',
+  'insight',
+  'therefore',
+  'structureKind',
+  'goal',
+  'conflict',
+  'setback',
+  'reaction',
+  'dilemma',
+  'decision',
+  'task',
+] as const
 
 export const SENTENCE_KEYS = ['sentence'] as const
 
@@ -27,28 +94,113 @@ export const FIELD_LABEL: Record<string, string> = {
   disaster2: '灾难二',
   disaster3: '灾难三',
   ending: '结局',
-  name: '人名',
+  fourPages: '四页大纲',
+  name: '名字',
+  role: '角色',
   motivation: '动机',
   goal: '目标',
   conflict: '冲突',
   epiphany: '顿悟',
-  phraseSummary: '一句摘要',
-  paragraphSummary: '一段摘要',
-  fullSummary: '全文摘要',
-  notes: '备注',
-  title: '标题',
+  paragraph: '一段',
+  grade: '类别',
+  who: '哪个人',
+  length: '篇幅',
+  story: '从他眼里看的故事',
+  bodyName: '名字',
+  age: '年龄',
+  birthday: '生日',
+  height: '身高',
+  weight: '体重',
+  ethnicity: '族裔',
+  hairEyes: '发色瞳色',
+  looks: '外貌',
+  clothes: '穿着',
+  humor: '幽默感',
+  personality: '人格类型',
+  religion: '宗教',
+  politics: '党派',
+  hobbies: '爱好',
+  taste: '喜欢的音乐书电影',
+  favColor: '喜欢的颜色',
+  bag: '钱包或包里有什么',
+  home: '家',
+  education: '教育',
+  job: '工作',
+  family: '家人',
+  bestFriend: '最好的朋友',
+  maleFriends: '男性朋友',
+  femaleFriends: '女性朋友',
+  enemies: '敌人',
+  bestMemory: '最好的童年记忆',
+  worstMemory: '最坏的童年记忆',
+  traitLine: '一句性格概括',
+  strongest: '最强特质',
+  weakest: '最弱特质',
+  paradox: '这个人的悖论',
+  hope: '最大的希望',
+  fear: '最大的恐惧',
+  philosophy: '人生哲学',
+  selfView: '他怎么看自己',
+  othersView: '别人怎么看他',
+  endingChange: '结局时他怎么变',
   pov: '视角',
-  summarySentence: '一句话摘要',
-  summaryFull: '更长的摘要',
+  what: '这一场发生什么',
+  words: '预计字数',
+  chapter: '章号',
+  title: '标题',
+  alpha: '阿尔法点',
+  subplot: '次要情节',
+  happened: '场内发生了什么',
+  why: '为什么对他重要',
+  result: '场内后果',
+  insight: '领悟',
+  therefore: '因此',
+  structureKind: '冲突结构',
+  setback: '挫折',
+  reaction: '反应',
+  dilemma: '两难',
+  decision: '决定',
+  task: '本场任务',
+  legacyFullSummary: '旧全文摘要',
+  legacyNotes: '旧备注',
+  legacySummary: '旧的更长摘要',
+}
+
+const LAYER_LABEL: Record<Layer, string> = {
+  situation: '念头',
+  一句话: '一句话',
+  一段: '一段',
+  renwubiao: '人物表',
+  yiyedagang: '一页大纲',
+  renwugushi: '人物故事',
+  renwudangan: '人物档案',
+  场景表: '场景表',
+  changci: '场次',
+  正文草稿: '正文草稿',
 }
 
 const LAYER_COLOR: Record<Layer, string> = {
   situation: '1',
   一句话: '2',
   一段: '3',
-  人物: '4',
+  renwubiao: '4',
+  yiyedagang: '7',
+  renwugushi: '8',
+  renwudangan: '9',
   场景表: '5',
+  changci: '10',
   正文草稿: '6',
+}
+
+export interface ChoiceOption {
+  value: string
+  label: string
+}
+
+export interface ChoiceField {
+  key: string
+  label: string
+  options: ChoiceOption[]
 }
 
 export type SideName = 'top' | 'right' | 'bottom' | 'left'
@@ -82,6 +234,12 @@ export interface Card {
   fields: Record<string, string>
 }
 
+export interface LooseCard {
+  layer: string
+  body: string
+  fields: Record<string, string>
+}
+
 export interface AppState {
   canvas: {
     nodes: CanvasNode[]
@@ -109,23 +267,101 @@ const TEXT_WIDTH = 280
 const TEXT_HEIGHT = 120
 
 export function layerLabel(layer: Layer): string {
-  if (layer === 'situation') return '念头'
-  return layer
+  return LAYER_LABEL[layer]
 }
 
 export function fieldKeys(layer: Layer): readonly string[] {
   switch (layer) {
     case '一段':
       return PARAGRAPH_KEYS
-    case '人物':
+    case 'renwubiao':
       return PERSON_KEYS
+    case 'yiyedagang':
+      return YIYEDAGANG_KEYS
+    case 'renwugushi':
+      return RENWUGUSHI_KEYS
+    case 'renwudangan':
+      return RENWUDANGAN_KEYS
     case '场景表':
       return SCENE_KEYS
+    case 'changci':
+      return CHANGCI_KEYS
     case '一句话':
       return SENTENCE_KEYS
     default:
       return []
   }
+}
+
+export function isChoiceField(key: string): boolean {
+  return key === 'grade' || key === 'length' || key === 'structureKind'
+}
+
+export function choiceFields(layer: Layer): ChoiceField[] {
+  if (layer === 'renwubiao') {
+    return [
+      {
+        key: 'grade',
+        label: '类别',
+        options: [
+          { value: '', label: '不填' },
+          { value: '主要', label: '主要' },
+          { value: '次要', label: '次要' },
+          { value: 'NPC', label: 'NPC' },
+          { value: '路人', label: '路人' },
+        ],
+      },
+    ]
+  }
+  if (layer === 'renwugushi') {
+    return [
+      {
+        key: 'length',
+        label: '篇幅',
+        options: [
+          { value: '', label: '不填' },
+          { value: '一页', label: '一页' },
+          { value: '半页', label: '半页' },
+        ],
+      },
+    ]
+  }
+  if (layer === 'changci') {
+    return [
+      {
+        key: 'structureKind',
+        label: '冲突结构',
+        options: [
+          { value: '', label: '不填' },
+          { value: 'active', label: '主动（目标、冲突、挫折）' },
+          { value: 'reactive', label: '反应（反应、两难、决定）' },
+        ],
+      },
+    ]
+  }
+  return []
+}
+
+export function fieldControlLabel(layer: Layer, key: string): string {
+  if (layer === '场景表' && key === 'title') return '标题（画布附加，不是雪花法原列）'
+  if (layer === 'renwubiao' && key === 'sentence') return '一句'
+  if (layer === 'renwubiao' && key === 'paragraph') return '一段'
+  return FIELD_LABEL[key] ?? key
+}
+
+export function extraFieldKeys(card: Card): string[] {
+  const keys: string[] = []
+  if (card.layer === 'renwubiao') {
+    if ((card.fields.legacyFullSummary ?? '').trim()) keys.push('legacyFullSummary')
+    if ((card.fields.legacyNotes ?? '').trim()) keys.push('legacyNotes')
+  }
+  if (card.layer === '场景表' && (card.fields.legacySummary ?? '').trim()) keys.push('legacySummary')
+  return keys
+}
+
+export function fieldGroups(layer: Layer): { title: string; keys: readonly string[] }[] | null {
+  if (layer !== 'renwudangan') return null
+  return ARCHIVE_GROUPS.map((group) => ({ title: group.title, keys: group.keys }))
 }
 
 export function laterLayers(layer: Layer): Layer[] {
@@ -138,7 +374,7 @@ export function nextLayer(layer: Layer): Layer | null {
 }
 
 export function defaultFieldKey(card: Card): string | null {
-  const keys = fieldKeys(card.layer)
+  const keys = fieldKeys(card.layer).filter((key) => !isChoiceField(key))
   return keys[0] ?? null
 }
 
@@ -148,7 +384,7 @@ export function editorText(card: Card, fieldKey: string | null): string {
   if (fieldKey && Object.prototype.hasOwnProperty.call(card.fields, fieldKey)) {
     return card.fields[fieldKey] ?? ''
   }
-  const first = fieldKeys(card.layer)[0]
+  const first = defaultFieldKey(card)
   return first ? (card.fields[first] ?? '') : ''
 }
 
@@ -169,28 +405,54 @@ function firstSentence(text: string): string {
   return (match?.[0] ?? line).trim()
 }
 
+function paragraphFront(card: Card): string {
+  const head = firstSentence(card.fields.background ?? '')
+  const marks = ['disaster1', 'disaster2', 'disaster3']
+    .filter((key) => (card.fields[key] ?? '').trim())
+    .map(() => '「灾」')
+    .join('')
+  return `${head}${marks}`
+}
+
 export function frontText(card: Card): string {
-  if (card.layer === 'situation') return [...card.body].slice(0, 40).join('')
-  if (card.layer === '一句话') return card.body
-  if (card.layer === '正文草稿') return firstLine(card.body)
-  if (card.layer === '一段') {
-    const head = firstSentence(card.fields.background ?? '')
-    const marks = ['disaster1', 'disaster2', 'disaster3']
-      .filter((key) => (card.fields[key] ?? '').trim())
-      .map(() => '「灾」')
-      .join('')
-    return `${head}${marks}`
+  switch (card.layer) {
+    case 'situation':
+      return [...card.body].slice(0, 40).join('')
+    case '一句话':
+      return card.body
+    case '正文草稿':
+      return firstLine(card.body)
+    case '一段':
+      return paragraphFront(card)
+    case 'renwubiao': {
+      const name = (card.fields.name ?? '').trim()
+      const sentence = firstLine(card.fields.sentence ?? '')
+      if (name && sentence) return `${name}，${sentence}`
+      return name || sentence
+    }
+    case 'yiyedagang':
+      return firstSentence(card.fields.background ?? '')
+    case 'renwugushi':
+      return firstLine(card.fields.who ?? '')
+    case 'renwudangan':
+      return firstLine(card.fields.bodyName ?? '') || firstLine(card.fields.endingChange ?? '')
+    case '场景表': {
+      const title = (card.fields.title ?? '').trim()
+      const pov = (card.fields.pov ?? '').trim()
+      const what = (card.fields.what ?? '').trim()
+      return [title, pov, what].filter((part) => part.length > 0).join(' ')
+    }
+    case 'changci':
+      return firstLine(card.fields.alpha ?? '') || firstLine(card.fields.task ?? '')
+    default:
+      return firstLine(card.body)
   }
-  if (card.layer === '人物') {
-    const name = (card.fields.name ?? '').trim()
-    const motive = firstLine(card.fields.motivation ?? '')
-    if (name && motive) return `${name}，${motive}`
-    return name || motive
-  }
-  const title = (card.fields.title ?? '').trim()
-  const pov = (card.fields.pov ?? '').trim()
-  const summary = (card.fields.summarySentence ?? '').trim()
-  return [title, pov, summary].filter((part) => part.length > 0).join(' ')
+}
+
+function legacyKeyFor(layer: Layer, key: string): boolean {
+  if (layer === 'renwubiao') return key === 'legacyFullSummary' || key === 'legacyNotes'
+  if (layer === '场景表') return key === 'legacySummary'
+  return false
 }
 
 function fieldsFor(layer: Layer, partial: Record<string, string> | undefined): Record<string, string> {
@@ -198,21 +460,52 @@ function fieldsFor(layer: Layer, partial: Record<string, string> | undefined): R
   for (const key of fieldKeys(layer)) {
     out[key] = partial?.[key] ?? ''
   }
+  if (!partial) return out
+  for (const [key, value] of Object.entries(partial)) {
+    if (!legacyKeyFor(layer, key) || !value.trim()) continue
+    out[key] = value
+  }
   return out
+}
+
+function shownFieldValue(key: string, value: string): string {
+  if (key !== 'structureKind') return value
+  if (value === 'active') return '主动'
+  if (value === 'reactive') return '反应'
+  return value
 }
 
 function bodyFor(layer: Layer, fields: Record<string, string>, freeText: string): string {
   if (layer === 'situation' || layer === '正文草稿') return freeText
   if (layer === '一句话') return fields.sentence ?? ''
-  return fieldKeys(layer)
-    .map((key) => `${FIELD_LABEL[key] ?? key}：${fields[key] ?? ''}`)
-    .join('\n')
+  const lines = fieldKeys(layer).map(
+    (key) => `${fieldControlLabel(layer, key)}：${shownFieldValue(key, fields[key] ?? '')}`,
+  )
+  for (const key of extraFieldKeys({ layer, body: '', fields })) {
+    lines.push(`${fieldControlLabel(layer, key)}：${fields[key] ?? ''}`)
+  }
+  return lines.join('\n')
 }
 
 function blankCard(layer: Layer, partial?: Record<string, string>, freeText = ''): Card {
   const fields = fieldsFor(layer, layer === '一句话' ? { sentence: partial?.sentence ?? freeText } : partial)
   const body = bodyFor(layer, fields, layer === '一句话' ? (fields.sentence ?? '') : freeText)
   return { layer, body, fields }
+}
+
+function paintCard(state: AppState, cardId: string, card: Card): AppState {
+  const front = frontText(card)
+  return {
+    ...state,
+    canvas: {
+      ...state.canvas,
+      nodes: state.canvas.nodes.map((node) => (node.id === cardId ? { ...node, text: front } : node)),
+    },
+    snowflake: {
+      ...state.snowflake,
+      cards: { ...state.snowflake.cards, [cardId]: card },
+    },
+  }
 }
 
 export function createDocument(fileId: string): AppState {
@@ -390,6 +683,13 @@ export function deleteSelection(state: AppState, id: string): AppState {
   }
 }
 
+function allowedFieldKey(card: Card, fieldKey: string | null): string | undefined {
+  const official = fieldKeys(card.layer)
+  const extras = extraFieldKeys(card)
+  if (fieldKey && (official.includes(fieldKey) || extras.includes(fieldKey))) return fieldKey
+  return official.find((key) => !isChoiceField(key)) ?? official[0]
+}
+
 export function commitCardText(
   state: AppState,
   cardId: string,
@@ -407,23 +707,12 @@ export function commitCardText(
     card = { layer: '一句话', body: text, fields: { sentence: text } }
   } else {
     const fields = fieldsFor(current.layer, current.fields)
-    const keys = fieldKeys(current.layer)
-    const key = fieldKey && keys.includes(fieldKey) ? fieldKey : keys[0]
+    const key = allowedFieldKey(current, fieldKey)
     if (key) fields[key] = text
+    if (legacyKeyFor(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
     card = { layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
-  const front = frontText(card)
-  return {
-    ...state,
-    canvas: {
-      ...state.canvas,
-      nodes: state.canvas.nodes.map((node) => (node.id === cardId ? { ...node, text: front } : node)),
-    },
-    snowflake: {
-      ...state.snowflake,
-      cards: { ...state.snowflake.cards, [cardId]: card },
-    },
-  }
+  return paintCard(state, cardId, card)
 }
 
 export function setCardBody(state: AppState, cardId: string, body: string): AppState {
@@ -433,18 +722,7 @@ export function setCardBody(state: AppState, cardId: string, body: string): AppS
     current.layer === '一句话'
       ? { layer: '一句话', body, fields: { ...current.fields, sentence: body } }
       : { ...current, body }
-  const front = frontText(card)
-  return {
-    ...state,
-    canvas: {
-      ...state.canvas,
-      nodes: state.canvas.nodes.map((node) => (node.id === cardId ? { ...node, text: front } : node)),
-    },
-    snowflake: {
-      ...state.snowflake,
-      cards: { ...state.snowflake.cards, [cardId]: card },
-    },
-  }
+  return paintCard(state, cardId, card)
 }
 
 export function applyComposition(
@@ -517,4 +795,131 @@ export function serializeDocument(state: AppState): {
       cards,
     },
   }
+}
+
+interface DraftCard {
+  layer: string
+  body: string
+  fields: Record<string, string>
+  rebuild: boolean
+}
+
+function mergeText(base: string, extra: string): string {
+  if (!extra.trim()) return base
+  if (!base.trim()) return extra
+  if (base.includes(extra)) return base
+  return `${base}\n\n${extra}`
+}
+
+function joinGap(left: string, right: string): string {
+  if (left && right) return `${left}\n\n${right}`
+  return left || right
+}
+
+function isLayerName(value: string): value is Layer {
+  return (LAYERS as readonly string[]).includes(value)
+}
+
+function unknownToSituation(card: DraftCard): Card {
+  const head = `原层：${card.layer}`
+  const parts: string[] = [head]
+  if (card.body.trim()) parts.push(card.body)
+  const fieldLines = Object.entries(card.fields)
+    .filter(([, value]) => value.trim())
+    .map(([key, value]) => `${key}：${value}`)
+  if (fieldLines.length > 0) parts.push(fieldLines.join('\n'))
+  return { layer: 'situation', body: parts.join('\n'), fields: {} }
+}
+
+function materialize(card: DraftCard): Card {
+  if (!isLayerName(card.layer)) return unknownToSituation(card)
+  const fields = fieldsFor(card.layer, card.fields)
+  if (card.layer === 'situation' || card.layer === '正文草稿') {
+    return { layer: card.layer, body: card.body, fields }
+  }
+  if (card.layer === '一句话') {
+    const sentence = fields.sentence || card.body
+    return { layer: '一句话', body: sentence, fields: { sentence } }
+  }
+  const body = card.rebuild ? bodyFor(card.layer, fields, '') : card.body || bodyFor(card.layer, fields, '')
+  return { layer: card.layer, body, fields }
+}
+
+export function loadCards(
+  loose: Record<string, LooseCard>,
+  edges: ReadonlyArray<{ fromNode: string; toNode: string }>,
+): Record<string, Card> {
+  const drafts = new Map<string, DraftCard>()
+  for (const [id, card] of Object.entries(loose)) {
+    drafts.set(id, {
+      layer: card.layer,
+      body: card.body,
+      fields: { ...card.fields },
+      rebuild: false,
+    })
+  }
+
+  const storyChild = (id: string): DraftCard | null => {
+    for (const edge of edges) {
+      if (edge.fromNode !== id) continue
+      const child = drafts.get(edge.toNode)
+      if (child?.layer === 'renwugushi') return child
+    }
+    return null
+  }
+
+  for (const [id, card] of drafts) {
+    const oldPerson =
+      card.layer === '人物' ||
+      'phraseSummary' in card.fields ||
+      'paragraphSummary' in card.fields ||
+      'fullSummary' in card.fields
+    if (!oldPerson) continue
+    const full = card.fields.fullSummary ?? ''
+    const notes = card.layer === '人物' || 'notes' in card.fields ? (card.fields.notes ?? '') : ''
+    const child = storyChild(id)
+    if (!child) {
+      card.fields.legacyFullSummary = mergeText(card.fields.legacyFullSummary ?? '', full)
+      card.fields.legacyNotes = mergeText(card.fields.legacyNotes ?? '', notes)
+    } else {
+      const before = child.fields.story ?? ''
+      const story = mergeText(mergeText(before, full), notes)
+      if (story !== before) {
+        child.fields.story = story
+        child.rebuild = true
+      }
+    }
+    if (!card.fields.sentence) card.fields.sentence = card.fields.phraseSummary ?? ''
+    if (!card.fields.paragraph) card.fields.paragraph = card.fields.paragraphSummary ?? ''
+    delete card.fields.phraseSummary
+    delete card.fields.paragraphSummary
+    delete card.fields.fullSummary
+    delete card.fields.notes
+    card.layer = 'renwubiao'
+    card.rebuild = true
+  }
+
+  for (const card of drafts.values()) {
+    if (card.layer !== '场景表') continue
+    const hasOld = 'summarySentence' in card.fields || 'summaryFull' in card.fields || 'notes' in card.fields
+    if (!hasOld) continue
+    const summaryFull = card.fields.summaryFull ?? ''
+    const notes = card.fields.notes ?? ''
+    let legacy = card.fields.legacySummary ?? ''
+    if (!card.fields.legacySummary) legacy = joinGap(summaryFull, notes)
+    else {
+      legacy = mergeText(legacy, summaryFull)
+      legacy = mergeText(legacy, notes)
+    }
+    if (legacy.trim()) card.fields.legacySummary = legacy
+    if (!card.fields.what) card.fields.what = card.fields.summarySentence ?? ''
+    delete card.fields.summarySentence
+    delete card.fields.summaryFull
+    delete card.fields.notes
+    card.rebuild = true
+  }
+
+  const cards: Record<string, Card> = {}
+  for (const [id, card] of drafts) cards[id] = materialize(card)
+  return cards
 }

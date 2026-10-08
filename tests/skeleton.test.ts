@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CHANGCI_KEYS,
   LAYERS,
   PARAGRAPH_KEYS,
   PERSON_KEYS,
+  RENWUDANGAN_KEYS,
+  RENWUGUSHI_KEYS,
   SCENE_KEYS,
+  YIYEDAGANG_KEYS,
   addGroup,
   applyComposition,
   changeToLaterLayer,
@@ -30,7 +34,7 @@ function cardOf(state: AppState, id: string) {
 }
 
 describe('雪花画布骨架', () => {
-  it('六种 layer 都能创建，两张卡之间有边，拖动只改坐标', () => {
+  it('十种 layer 都能创建，两张卡之间有边，拖动只改坐标', () => {
     let state = createDocument('file-1')
     state = createCard(state, {
       id: 'n-situation-1',
@@ -61,20 +65,41 @@ describe('雪花画布骨架', () => {
     })
     state = createCard(state, {
       id: 'n-person-1',
-      layer: '人物',
+      layer: 'renwubiao',
       x: 50,
       y: 50,
       fields: {
         name: '林晚',
-        motivation: '要确认那是弟弟\n第二行不进正面',
+        role: '姐姐',
+        sentence: '门口的弟弟\n第二行不进正面',
+        motivation: '要确认那是弟弟',
         goal: '带他回家',
         conflict: '他不承认',
         epiphany: '认错人也是一种救',
-        phraseSummary: '门口的弟弟',
-        paragraphSummary: '她开门，发现弟弟。',
-        fullSummary: '长摘要',
-        notes: '先别写死年龄',
+        paragraph: '她开门，发现弟弟。',
+        grade: '',
       },
+    })
+    state = createCard(state, {
+      id: 'n-page-1',
+      layer: 'yiyedagang',
+      x: 60,
+      y: 60,
+      fields: { background: '雪停之前她不能开门。后面还有。' },
+    })
+    state = createCard(state, {
+      id: 'n-story-1',
+      layer: 'renwugushi',
+      x: 70,
+      y: 70,
+      fields: { who: '林晚', length: '一页', story: '她看见门口站着弟弟。' },
+    })
+    state = createCard(state, {
+      id: 'n-dossier-1',
+      layer: 'renwudangan',
+      x: 75,
+      y: 75,
+      fields: { bodyName: '林晚', endingChange: '她不再追问' },
     })
     state = createCard(state, {
       id: 'n-scene-1',
@@ -84,10 +109,18 @@ describe('雪花画布骨架', () => {
       fields: {
         title: '雪夜开门',
         pov: '林晚',
-        summarySentence: '她发现门口的人是弟弟',
-        summaryFull: '更长的一场摘要',
-        notes: '夜里',
+        what: '她发现门口的人是弟弟',
+        words: '800',
+        chapter: '3',
+        conflict: '认还是不认',
       },
+    })
+    state = createCard(state, {
+      id: 'n-beat-1',
+      layer: 'changci',
+      x: 90,
+      y: 100,
+      fields: { alpha: '弟弟站在门口', task: '问出他为什么装死' },
     })
     state = createCard(state, {
       id: 'n-prose-1',
@@ -118,7 +151,7 @@ describe('雪花画布骨架', () => {
     expect(doc.canvas.nodes.length).toBeGreaterThan(0)
     expect(doc.canvas.edges.length).toBeGreaterThan(0)
     expect(doc.snowflake.fileId).toBe('file-1')
-    expect(Object.keys(doc.snowflake.cards)).toHaveLength(6)
+    expect(Object.keys(doc.snowflake.cards)).toHaveLength(10)
     expect(doc.canvas.nodes[0]?.id).toBe('n-situation-1')
     expect(doc.canvas.nodes[0]?.x).toBe(999)
     expect(doc.canvas.nodes[1]?.x).toBe(10)
@@ -140,14 +173,23 @@ describe('雪花画布骨架', () => {
     expect(Object.keys(byLayer['一句话'].fields)).toEqual(['sentence'])
     expect(byLayer['一句话'].body).toBe(byLayer['一句话'].fields.sentence)
     expect(Object.keys(byLayer['一段'].fields)).toEqual([...PARAGRAPH_KEYS])
-    expect(Object.keys(byLayer['人物'].fields)).toEqual([...PERSON_KEYS])
+    expect(Object.keys(byLayer.renwubiao.fields)).toEqual([...PERSON_KEYS])
+    expect(Object.keys(byLayer.yiyedagang.fields)).toEqual([...YIYEDAGANG_KEYS])
+    expect(Object.keys(byLayer.renwugushi.fields)).toEqual([...RENWUGUSHI_KEYS])
+    expect(Object.keys(byLayer.renwudangan.fields)).toEqual([...RENWUDANGAN_KEYS])
     expect(Object.keys(byLayer['场景表'].fields)).toEqual([...SCENE_KEYS])
+    expect(Object.keys(byLayer.changci.fields)).toEqual([...CHANGCI_KEYS])
     expect(Object.keys(byLayer['正文草稿'].fields)).toEqual([])
+    expect(JSON.stringify(doc)).not.toContain('"layer":"人物"')
 
     const paragraph = cardOf(state, 'n-paragraph-1')
     expect(frontText(paragraph)).toBe('她在雪夜开门。「灾」「灾」')
-    expect(frontText(cardOf(state, 'n-person-1'))).toBe('林晚，要确认那是弟弟')
+    expect(frontText(cardOf(state, 'n-person-1'))).toBe('林晚，门口的弟弟')
+    expect(frontText(cardOf(state, 'n-page-1'))).toBe('雪停之前她不能开门。')
+    expect(frontText(cardOf(state, 'n-story-1'))).toBe('林晚')
+    expect(frontText(cardOf(state, 'n-dossier-1'))).toBe('林晚')
     expect(frontText(cardOf(state, 'n-scene-1'))).toBe('雪夜开门 林晚 她发现门口的人是弟弟')
+    expect(frontText(cardOf(state, 'n-beat-1'))).toBe('弟弟站在门口')
     expect(state.canvas.nodes.find((node) => node.id === 'n-prose-1')?.text).toBe('门开了一条缝。')
     expect(doc.canvas.nodes.find((node) => node.id === 'g1')?.type).toBe('group')
   })
@@ -159,8 +201,8 @@ describe('雪花画布骨架', () => {
     expect(cardOf(state, 'b').layer).toBe('一句话')
     expect(state.canvas.edges.some((edge) => edge.fromNode === 'a' && edge.toNode === 'b')).toBe(true)
 
-    const skipped = spawnChild(state, 'a', '人物', 300, 160, 'c')
-    expect(cardOf(skipped, 'c').layer).toBe('人物')
+    const skipped = spawnChild(state, 'a', 'renwubiao', 300, 160, 'c')
+    expect(cardOf(skipped, 'c').layer).toBe('renwubiao')
     expect(skipped.canvas.edges.some((edge) => edge.fromNode === 'a' && edge.toNode === 'c')).toBe(true)
 
     const blocked = spawnChild(state, 'b', 'situation', 10, 10, 'nope')
