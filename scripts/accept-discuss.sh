@@ -2,7 +2,7 @@
 # 雪花画布：卡片下方讨论验收。打正在听的 8093。
 # 成功时最后一行是 ACCEPT_DISCUSS_OK。
 #
-# 页面检查：读 8093 上 /xuehua/ 以及它引用的脚本，确认浮窗挂载点和文案。
+# 页面检查：读 8093 上 /xuehua/ 以及它引用的脚本，确认讨论挂在卡片正下方。
 #   不启动无头浏览器，也不模拟双击。
 # 接口等价（对应双击建会话、继续讨论、采纳、错 If-Match、三标签、kill -9）：
 #   GET /api/discuss/session?cardId=  等价于双击一张还没有会话的卡，服务端为它建会话。
@@ -159,7 +159,7 @@ def bodies(document):
     return {card_id: card.get("body") for card_id, card in document["snowflake"]["cards"].items()}
 
 def page_check():
-    # 页面检查：不点双击。确认正在对外的 /xuehua/ 脚本里有浮窗挂载点和文案。
+    # 页面检查：不点双击。确认正在对外的 /xuehua/ 脚本里，讨论挂在卡片正下方，历史气泡左 AI、右用户。
     status, _, raw = request("GET", "/xuehua/")
     if status != 200:
         fail(f"/xuehua/ 返回 {status}")
@@ -175,7 +175,8 @@ def page_check():
             fail(f"页面脚本 {path} 返回 {code}")
         blob += script.decode("utf-8", "replace")
     for needle in (
-        "data-discuss-popover",
+        "data-discuss-dock",
+        "bubble-row",
         "历史讨论",
         "采纳进本念头",
         "有新消息",
@@ -195,6 +196,19 @@ def page_check():
     popover = css.split(".discuss-popover {", 1)[-1].split("}", 1)[0]
     if "fixed" in popover:
         fail("讨论窗还是贴在屏幕上的固定层")
+    if ".discuss-dock {" not in css:
+        fail("样式里没有卡片下方的讨论挂载")
+    dock = css.split(".discuss-dock {", 1)[-1].split("}", 1)[0]
+    if "absolute" not in dock or "fixed" in dock:
+        fail("讨论没有挂在卡片正下方")
+    if ".bubble-row {" not in css or ".bubble-row.user {" not in css:
+        fail("样式里没有左右气泡")
+    row = css.split(".bubble-row {", 1)[-1].split("}", 1)[0]
+    user = css.split(".bubble-row.user {", 1)[-1].split("}", 1)[0]
+    if "row-reverse" in row:
+        fail("AI 气泡不在左侧")
+    if "row-reverse" not in user:
+        fail("用户气泡不在右侧")
     flow = (ROOT / "src" / "FlowCanvas.tsx").read_text(encoding="utf-8")
     if "discuss-dock" not in flow:
         fail("讨论没有挂在卡片节点下方")
