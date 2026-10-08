@@ -699,7 +699,9 @@ if [ "$page_code" != "200" ] || ! grep -q "/xuehua/" /tmp/accept-mem-page.html; 
   echo "/xuehua/ 没有打开，HTTP ${page_code}"
   exit 1
 fi
-# 右侧固定「画布讨论」不再作为通过条件。429 提示语仍要在构建产物里，新浮窗文案也要在。
+# 右侧固定「画布讨论」不再作为通过条件。429 提示语和「历史讨论」仍要在构建产物里。
+# 新形态：要有「采纳进本念头」和 data-discuss-dock，不能有旧文案「采纳进本念头正文」。
+# 不再把 data-discuss-popover 当通过条件。
 if ! grep -q "讨论忙，网关同时最多 10 路" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
   echo "FAIL H"
   echo "构建产物里没有 429 退避提示"
@@ -710,14 +712,19 @@ if ! grep -q "历史讨论" /home/chris/projects/snowflake-canvas/dist/xuehua/as
   echo "构建产物里没有历史讨论"
   exit 1
 fi
-if ! grep -q "采纳进本念头正文" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if grep -q "采纳进本念头正文" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
   echo "FAIL H"
-  echo "构建产物里没有采纳进本念头正文"
+  echo "构建产物里还有旧文案「采纳进本念头正文」"
   exit 1
 fi
-if ! grep -q "data-discuss-popover" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if ! grep -q "采纳进本念头" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
   echo "FAIL H"
-  echo "构建产物里没有浮窗挂载点"
+  echo "构建产物里没有「采纳进本念头」"
+  exit 1
+fi
+if ! grep -q "data-discuss-dock" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+  echo "FAIL H"
+  echo "构建产物里没有卡片下方的讨论挂载"
   exit 1
 fi
 loop_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8093/__snowflake/expand -H 'Content-Type: application/json' --data '{}')"
