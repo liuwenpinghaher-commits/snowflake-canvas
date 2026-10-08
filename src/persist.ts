@@ -8,7 +8,6 @@ import {
   type AppState,
   type CanvasEdge,
   type CanvasNode,
-  type Card,
   type ComposeSession,
   type CompositionEvent,
   type LooseCard,
