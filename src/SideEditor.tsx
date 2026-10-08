@@ -108,6 +108,7 @@ export default function SideEditor({
   groupSelected,
   canType,
   onCommit,
+  onAdoptField,
   onChangeLayer,
   expandNotice,
   candidates,
@@ -121,6 +122,7 @@ export default function SideEditor({
   groupSelected: boolean
   canType: boolean
   onCommit: (cardId: string, fieldKey: string | null, text: string) => void
+  onAdoptField: (fieldKey: string | null) => void
   onChangeLayer: (cardId: string, layer: Layer) => void
   expandNotice: string | null
   candidates: ShownCandidate[]
@@ -158,6 +160,10 @@ export default function SideEditor({
         : defaultFieldKey(card)
       : null
   fieldKeyRef.current = fieldKey
+
+  useEffect(() => {
+    onAdoptField(fieldKey)
+  }, [fieldKey, onAdoptField])
 
   useEffect(() => {
     const host = hostRef.current

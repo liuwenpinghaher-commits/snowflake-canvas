@@ -23,7 +23,7 @@ import {
   deleteSelection,
   linkCards,
   moveNode,
-  setCardBody,
+  adoptIntoCard,
   spawnChild,
   type Layer,
 } from './document.ts'
@@ -43,6 +43,7 @@ export default function App() {
   const flashTimer = useRef<number | null>(null)
   const [discussCardId, setDiscussCardId] = useState<string | null>(null)
   const [flashCardId, setFlashCardId] = useState<string | null>(null)
+  const adoptFieldRef = useRef<string | null>(null)
 
   useEffect(() => {
     const ctl = createPersistController(
@@ -253,7 +254,7 @@ export default function App() {
             onCloseDiscuss={() => setDiscussCardId(null)}
             onCommitBody={async (cardId, text) => {
               await ctlRef.current?.mutate((current) => {
-                const next = setCardBody(current, cardId, text)
+                const next = adoptIntoCard(current, cardId, text, adoptFieldRef.current)
                 return next === current ? { ...current } : next
               })
               const messages = ctlRef.current?.snapshot().view.messages ?? []
@@ -276,6 +277,9 @@ export default function App() {
           canType={canEdit}
           onCommit={(cardId, fieldKey, text) => {
             void ctlRef.current?.commitText(cardId, fieldKey, text)
+          }}
+          onAdoptField={(key) => {
+            adoptFieldRef.current = key
           }}
           onChangeLayer={(cardId, layer: Layer) => {
             void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer))

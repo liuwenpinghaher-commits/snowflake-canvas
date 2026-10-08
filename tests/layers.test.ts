@@ -10,6 +10,7 @@ import {
   nextLayer,
   serializeDocument,
   setCardBody,
+  adoptIntoCard,
   spawnChild,
   type Layer,
 } from '../src/document.ts'
@@ -335,5 +336,26 @@ describe('十层雪花', () => {
     expect(frontText(state.snowflake.cards.dossier!)).toBe('她放下了门闩')
     expect(frontText(state.snowflake.cards.beat!)).toBe('问出原因')
     expect(state.snowflake.cards.page?.fields.fourPages).toBe('')
+  })
+
+  it('场景表采纳写进当前字段，再改视角不会把这段冲掉', () => {
+    let state = createDocument('adopt')
+    state = createCard(state, {
+      id: 'scene',
+      layer: '场景表',
+      x: 0,
+      y: 0,
+      fields: { pov: '', what: '雪还没停', title: '门口' },
+    })
+    const before = state.snowflake.cards.scene!
+    const nextBody = `${before.body}\n门外那个人是弟弟`
+    state = adoptIntoCard(state, 'scene', nextBody, 'pov')
+    expect(state.snowflake.cards.scene?.fields.adopted).toBe('门外那个人是弟弟')
+    expect(state.snowflake.cards.scene?.body).toContain('门外那个人是弟弟')
+    state = commitCardText(state, 'scene', '我', 'pov', false)
+    expect(state.snowflake.cards.scene?.fields.pov).toBe('我')
+    expect(state.snowflake.cards.scene?.fields.adopted).toBe('门外那个人是弟弟')
+    expect(state.snowflake.cards.scene?.body).toContain('门外那个人是弟弟')
+    expect(state.snowflake.cards.scene?.fields.what).toBe('雪还没停')
   })
 })

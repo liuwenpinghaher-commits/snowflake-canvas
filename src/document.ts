@@ -164,6 +164,7 @@ export const FIELD_LABEL: Record<string, string> = {
   legacyFullSummary: '旧全文摘要',
   legacyNotes: '旧备注',
   legacySummary: '旧的更长摘要',
+  adopted: '采纳',
 }
 
 const LAYER_LABEL: Record<Layer, string> = {
@@ -356,6 +357,7 @@ export function extraFieldKeys(card: Card): string[] {
     if ((card.fields.legacyNotes ?? '').trim()) keys.push('legacyNotes')
   }
   if (card.layer === '场景表' && (card.fields.legacySummary ?? '').trim()) keys.push('legacySummary')
+  if (fieldKeys(card.layer).length > 0 && (card.fields.adopted ?? '').trim()) keys.push('adopted')
   return keys
 }
 
@@ -449,7 +451,8 @@ export function frontText(card: Card): string {
   }
 }
 
-function legacyKeyFor(layer: Layer, key: string): boolean {
+function keptExtraKey(layer: Layer, key: string): boolean {
+  if (key === 'adopted' && fieldKeys(layer).length > 0) return true
   if (layer === 'renwubiao') return key === 'legacyFullSummary' || key === 'legacyNotes'
   if (layer === '场景表') return key === 'legacySummary'
   return false
@@ -462,7 +465,7 @@ function fieldsFor(layer: Layer, partial: Record<string, string> | undefined): R
   }
   if (!partial) return out
   for (const [key, value] of Object.entries(partial)) {
-    if (!legacyKeyFor(layer, key) || !value.trim()) continue
+    if (!keptExtraKey(layer, key) || !value.trim()) continue
     out[key] = value
   }
   return out
@@ -834,9 +837,42 @@ export function commitCardText(
     const fields = fieldsFor(current.layer, current.fields)
     const key = allowedFieldKey(current, fieldKey)
     if (key) fields[key] = text
-    if (legacyKeyFor(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
+    if (keptExtraKey(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
     card = { layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
+  return paintCard(state, cardId, card)
+}
+
+function additionBeyond(base: string, next: string): string {
+  const trimmed = next.replace(/\s+$/u, '')
+  const previous = base.replace(/\s+$/u, '')
+  if (!trimmed || trimmed === previous) return ''
+  if (previous && trimmed.startsWith(`${previous}\n`)) return trimmed.slice(previous.length + 1).trim()
+  return trimmed
+}
+
+export function adoptFieldKey(card: Card, selectedKey: string | null): string | null {
+  if (fieldKeys(card.layer).length === 0) return null
+  if (selectedKey && extraFieldKeys(card).includes(selectedKey) && selectedKey !== 'adopted') return selectedKey
+  return 'adopted'
+}
+
+export function adoptIntoCard(state: AppState, cardId: string, nextBody: string, selectedKey: string | null): AppState {
+  const current = state.snowflake.cards[cardId]
+  if (!current) return state
+  const addition = additionBeyond(current.body, nextBody)
+  if (!addition) return setCardBody(state, cardId, nextBody)
+  if (current.layer === '一句话') {
+    const sentence = current.fields.sentence?.trim() ? `${current.fields.sentence.replace(/\s+$/u, '')}\n${addition}` : addition
+    return setCardBody(state, cardId, sentence)
+  }
+  if (fieldKeys(current.layer).length === 0) return setCardBody(state, cardId, nextBody)
+  const target = adoptFieldKey(current, selectedKey) ?? 'adopted'
+  const existing = (current.fields[target] ?? '').replace(/\s+$/u, '')
+  const written = existing && existing !== addition && !existing.endsWith(`\n${addition}`) ? `${existing}\n${addition}` : addition || existing
+  const fields = fieldsFor(current.layer, { ...current.fields, [target]: written })
+  const card: Card = { layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
+  if (card.body === current.body && fields[target] === (current.fields[target] ?? '')) return state
   return paintCard(state, cardId, card)
 }
 
