@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MarkdownText } from './markdown-lite.tsx'
 
 function api(path: string): string {
@@ -7,7 +7,7 @@ function api(path: string): string {
   return `${prefix}${path}`
 }
 
-const BUSY = '讨论忙，网关同时最多 10 路，正在等空位再试。'
+const BUSY = '讨论的人有点多，正在排队，稍后自动重试。'
 
 type DiscussSession = {
   sessionId: string
@@ -116,6 +116,7 @@ export default function CardDiscuss({
   const [copiedAt, setCopiedAt] = useState<number | null>(null)
   const [pendingNew, setPendingNew] = useState(false)
   const chatRef = useRef<HTMLDivElement>(null)
+  const draftRef = useRef<HTMLTextAreaElement>(null)
   const stickRef = useRef(true)
   const abortRef = useRef<AbortController | null>(null)
   const genRef = useRef(0)
@@ -134,6 +135,22 @@ export default function CardDiscuss({
     busyRef.current = false
   }
 
+  function focusCard() {
+    const node = document.querySelector<HTMLElement>(`.react-flow__node-snowCard[data-id="${CSS.escape(cardId)}"]`)
+    window.requestAnimationFrame(() => {
+      node?.focus()
+    })
+  }
+
+  function requestClose() {
+    onCloseRef.current()
+    focusCard()
+  }
+
+  useLayoutEffect(() => {
+    draftRef.current?.focus()
+  }, [])
+
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
       const target = event.target
@@ -144,7 +161,7 @@ export default function CardDiscuss({
       onCloseRef.current()
     }
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Escape') requestClose()
     }
     document.addEventListener('pointerdown', onPointer, true)
     document.addEventListener('keydown', onKey)
@@ -420,6 +437,7 @@ export default function CardDiscuss({
       if (genRef.current === gen) {
         busyRef.current = false
         setBusy(false)
+        draftRef.current?.focus()
       }
     }
   }
@@ -510,7 +528,7 @@ export default function CardDiscuss({
         <button type="button" disabled={busy} onClick={() => void createSession()}>
           新建讨论
         </button>
-        <button type="button" onClick={() => onClose()}>
+        <button type="button" onClick={() => requestClose()}>
           关闭
         </button>
       </div>
@@ -581,9 +599,10 @@ export default function CardDiscuss({
       <div className="discuss-compose">
         <p className="compose-hint">Enter 发送，Shift+Enter 换行</p>
         <textarea
+          ref={draftRef}
           aria-label="讨论内容"
           value={draft}
-          disabled={busy}
+          readOnly={busy}
           rows={3}
           placeholder="接着这张念头写一句"
           onChange={(event) => setDraft(event.target.value)}

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   Background,
   Controls,
@@ -32,6 +32,117 @@ type CardData = {
 }
 type GroupData = { text: string }
 
+function DiscussDock({ cardId, bind }: { cardId: string; bind: DiscussBind }) {
+  const dockRef = useRef<HTMLDivElement>(null)
+  const { getViewport, setViewport } = useReactFlow()
+  const flowRef = useRef({ getViewport, setViewport })
+  flowRef.current = { getViewport, setViewport }
+  const [dir, setDir] = useState<'down' | 'up' | 'clamp'>('down')
+  const [maxH, setMaxH] = useState<number | null>(null)
+  const [clampTop, setClampTop] = useState<number | null>(null)
+  const panned = useRef(false)
+
+  useLayoutEffect(() => {
+    panned.current = false
+    const dock = dockRef.current
+    if (!dock) return
+    let dead = false
+    const place = () => {
+      if (dead) return
+      const node = dock.closest('.react-flow__node')
+      if (!(node instanceof HTMLElement)) return
+      const vh = window.innerHeight
+      const margin = 8
+      const gap = 8
+      const desired = 460
+      const card = node.getBoundingClientRect()
+      if (card.width < 1 || card.height < 1) return
+      const spaceBelow = vh - card.bottom - gap
+      const spaceAbove = card.top - gap
+      const zoom = flowRef.current.getViewport().zoom || 1
+      let nextDir: 'down' | 'up' | 'clamp' = 'down'
+      let nextMax: number | null = null
+      let nextTop: number | null = null
+      if (spaceBelow >= desired) {
+        nextDir = 'down'
+      } else if (spaceAbove >= desired) {
+        nextDir = 'up'
+      } else if (spaceBelow >= spaceAbove && spaceBelow >= 220) {
+        nextDir = 'down'
+        nextMax = Math.floor(spaceBelow)
+      } else if (spaceAbove >= 220) {
+        nextDir = 'up'
+        nextMax = Math.floor(spaceAbove)
+      } else {
+        const height = Math.min(desired, Math.max(180, vh - margin * 2))
+        let screenTop = card.bottom + gap
+        if (screenTop + height > vh - margin) screenTop = vh - margin - height
+        if (screenTop < margin) screenTop = margin
+        nextDir = 'clamp'
+        nextMax = Math.floor(height)
+        nextTop = (screenTop - card.top) / zoom
+      }
+      setDir((prev) => (prev === nextDir ? prev : nextDir))
+      setMaxH((prev) => (prev === nextMax ? prev : nextMax))
+      setClampTop((prev) => (prev === nextTop ? prev : nextTop))
+    }
+    // 父级把卡片平移写进页面之后再量，避免用摆正前的位置决定展开方向。
+    queueMicrotask(place)
+    const frame = window.requestAnimationFrame(() => place())
+    window.addEventListener('resize', place)
+    return () => {
+      dead = true
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', place)
+    }
+  }, [cardId])
+
+  useLayoutEffect(() => {
+    if (panned.current) return
+    if (dir !== 'clamp' && maxH == null) return
+    const dock = dockRef.current
+    if (!dock) return
+    const button = dock.querySelector<HTMLElement>('.discuss-compose-bar button')
+    if (!button) return
+    const rect = button.getBoundingClientRect()
+    const vh = window.innerHeight
+    const margin = 8
+    const tooLow = rect.bottom > vh - margin + 1
+    const tooHigh = rect.top < margin - 1
+    if (!tooLow && !tooHigh) return
+    const { getViewport: readViewport, setViewport: moveViewport } = flowRef.current
+    const zoom = readViewport().zoom || 1
+    const vp = readViewport()
+    let shift = 0
+    if (tooLow) shift -= rect.bottom - (vh - margin)
+    if (rect.top + shift < margin) shift += margin - (rect.top + shift)
+    if (Math.abs(shift) < 1) return
+    panned.current = true
+    void moveViewport({ x: vp.x, y: vp.y + shift / zoom, zoom: vp.zoom })
+  }, [dir, maxH, clampTop])
+
+  const style: CSSProperties & Record<string, string | number> = {}
+  if (dir === 'clamp' && clampTop != null) {
+    style.top = clampTop
+    style.bottom = 'auto'
+  }
+  if (maxH != null) style['--discuss-max'] = `${maxH}px`
+  const className = [
+    'discuss-dock nodrag nopan nowheel',
+    dir === 'up' ? 'discuss-up' : '',
+    dir === 'clamp' ? 'discuss-clamp' : '',
+    maxH != null ? 'discuss-fit' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <div ref={dockRef} className={className} style={style} data-discuss-dock="">
+      <CardDiscuss cardId={cardId} cardBody={bind.cardBody} onClose={bind.onClose} onCommitBody={bind.onCommitBody} />
+    </div>
+  )
+}
+
 function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
   const title = data.title.trim()
   const body = data.body.trim()
@@ -49,16 +160,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         <Handle type="target" position={Position.Left} />
         {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
       </div>
-      {data.discuss ? (
-        <div className="discuss-dock nodrag nopan nowheel" data-discuss-dock="">
-          <CardDiscuss
-            cardId={id}
-            cardBody={data.discuss.cardBody}
-            onClose={data.discuss.onClose}
-            onCommitBody={data.discuss.onCommitBody}
-          />
-        </div>
-      ) : null}
+      {data.discuss ? <DiscussDock cardId={id} bind={data.discuss} /> : null}
     </div>
   )
 }
@@ -147,6 +249,23 @@ export default function FlowCanvas({
 }) {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const lastPaneClick = useRef(0)
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.isComposing) return
+      const active = document.activeElement
+      if (!(active instanceof Element)) return
+      if (active.closest('.discuss-dock, [data-discuss-popover]')) return
+      if (!active.classList.contains('react-flow__node-snowCard')) return
+      const id = active.getAttribute('data-id')
+      if (!id) return
+      event.preventDefault()
+      onOpenDiscuss(id)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onOpenDiscuss])
 
   const discuss =
     discussCardId && cards[discussCardId]

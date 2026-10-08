@@ -118,6 +118,11 @@ button.on {
   overflow: visible;
 }
 
+.react-flow__node-snowCard:focus-visible .snow-card {
+  outline: 2px solid #8c4a32;
+  outline-offset: 2px;
+}
+
 .snow-node {
   position: relative;
   width: 100%;
@@ -219,7 +224,7 @@ button.on {
 }
 
 .side {
-  width: 380px;
+  width: min(380px, 100%);
   flex: none;
   border-left: 1px solid #ddd4c6;
   background: #fffdf8;
@@ -227,6 +232,27 @@ button.on {
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    flex-direction: column;
+  }
+
+  .canvas-wrap {
+    flex: none;
+    width: 100%;
+    height: 160px;
+    min-height: 160px;
+  }
+
+  .side {
+    width: 100%;
+    max-width: 100%;
+    flex: 1 1 auto;
+    border-left: none;
+    border-top: 1px solid #ddd4c6;
+  }
 }
 
 .side-head, .hint, .field-row {
@@ -276,14 +302,18 @@ button.on {
 .status-line {
   flex-basis: 100%;
   margin: 0;
-  color: #8c4a32;
+  color: #5e574e;
   font-size: 13px;
   line-height: 1.5;
 }
 
 .topbar .status-line {
   grid-column: 1 / -1;
-  color: #8c4a32;
+  color: #5e574e;
+}
+
+.status-line.is-error {
+  color: #9b2c2c;
 }
 
 .file-pick {
@@ -426,10 +456,19 @@ button.on {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  width: 380px;
+  width: min(380px, calc(100vw - 16px));
   z-index: 6;
   user-select: text;
   pointer-events: auto;
+}
+
+.discuss-dock.discuss-up {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+.discuss-dock.discuss-clamp {
+  bottom: auto;
 }
 
 .discuss-dock::before {
@@ -443,13 +482,19 @@ button.on {
   border-radius: 2px 2px 0 0;
 }
 
+.discuss-dock.discuss-up::before {
+  top: auto;
+  bottom: -6px;
+  border-radius: 0 0 2px 2px;
+}
+
 .discuss-popover {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-height: 460px;
+  max-height: min(460px, var(--discuss-max, 460px));
   overflow: hidden;
   padding: 10px;
   border: 1px solid #d9d0c3;
@@ -496,7 +541,12 @@ button.on {
   position: relative;
   flex: 1;
   min-height: 140px;
+  min-width: 0;
   overflow: auto;
+}
+
+.discuss-dock.discuss-fit .discuss-chat {
+  min-height: 0;
 }
 
 .bubble-row {
@@ -504,6 +554,8 @@ button.on {
   align-items: flex-start;
   gap: 8px;
   margin: 8px 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .bubble-row.user {
@@ -524,10 +576,12 @@ button.on {
 
 .bubble {
   max-width: calc(100% - 40px);
+  min-width: 0;
   padding: 8px 10px;
   border-radius: 10px;
   background: #fff;
   border: 1px solid #eadfce;
+  overflow-wrap: anywhere;
 }
 
 .bubble-row.user .bubble {
@@ -576,6 +630,7 @@ button.on {
   margin: 0;
   white-space: pre-wrap;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .md h3 {
@@ -616,7 +671,7 @@ button.on {
 
 .pending {
   margin: 0;
-  color: #8a8175;
+  color: #5e574e;
 }
 
 .bubble-actions {
@@ -636,6 +691,10 @@ button.on {
   bottom: 4px;
   display: block;
   margin: 4px auto 0;
+}
+
+.discuss-compose {
+  flex-shrink: 0;
 }
 
 .discuss-compose-bar {
@@ -658,8 +717,19 @@ button.on {
   to { transform: rotate(360deg); }
 }
 
-.side-face {
+.side-face-wrap {
   margin: 0 14px 10px;
+}
+
+.side-face-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.side-face {
+  max-height: 160px;
+  overflow: auto;
   padding: 10px 12px;
   border: 1px solid #d9d0c3;
   border-radius: 8px;
@@ -667,6 +737,10 @@ button.on {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.side-face.is-open {
+  max-height: none;
 }
 
 .side-face-title {

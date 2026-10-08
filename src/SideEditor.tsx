@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder } from '@codemirror/view'
@@ -148,6 +148,31 @@ export default function SideEditor({
     layer: Layer
     key: string | null
   } | null>(null)
+  const [faceOpen, setFaceOpen] = useState(false)
+
+  useEffect(() => {
+    setFaceOpen(false)
+  }, [cardId])
+
+  useLayoutEffect(() => {
+    const errors = new Set(['文件没写上', '版本已更新，请再试'])
+    const paint = () => {
+      for (const node of document.querySelectorAll<HTMLElement>('.status-line')) {
+        const text = node.textContent ?? ''
+        const raw = text.startsWith('出错：') ? text.slice('出错：'.length) : text
+        if (errors.has(raw)) {
+          if (text !== `出错：${raw}`) node.textContent = `出错：${raw}`
+          node.classList.add('is-error')
+        } else if (node.classList.contains('is-error')) {
+          node.classList.remove('is-error')
+        }
+      }
+    }
+    paint()
+    const observer = new MutationObserver(() => paint())
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true })
+    return () => observer.disconnect()
+  }, [])
 
   cardIdRef.current = cardId
   onCommitRef.current = onCommit
@@ -353,13 +378,20 @@ export default function SideEditor({
       </div>
 
       {card && face ? (
-        <div className="side-face">
-          <p className="side-face-title">{face.title || '还没有写下内容'}</p>
-          {showFaceBody ? <p className="side-face-body">{face.body}</p> : null}
-          {face.meta ? <p className="side-face-meta">{face.meta}</p> : null}
-          {warnOrphan ? (
-            <p className="side-face-note">这段写在卡片正文里，不在当前字段。改字段会按字段重写正文，这段会被盖掉。</p>
-          ) : null}
+        <div className="side-face-wrap">
+          <div className="side-face-bar">
+            <button type="button" onClick={() => setFaceOpen((open) => !open)}>
+              {faceOpen ? '收起卡面' : '展开卡面'}
+            </button>
+          </div>
+          <div className={faceOpen ? 'side-face is-open' : 'side-face'}>
+            <p className="side-face-title">{face.title || '还没有写下内容'}</p>
+            {showFaceBody ? <p className="side-face-body">{face.body}</p> : null}
+            {face.meta ? <p className="side-face-meta">{face.meta}</p> : null}
+            {warnOrphan ? (
+              <p className="side-face-note">这段写在卡片正文里，不在当前字段。改字段会按字段重写正文，这段会被盖掉。</p>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

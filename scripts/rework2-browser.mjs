@@ -42,7 +42,11 @@ async function pageDigest(page) {
     const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('新建念头'))
     return {
       enabled: Boolean(button && !button.disabled),
-      card: document.querySelector('.snow-text')?.textContent ?? '',
+      card: [...document.querySelectorAll('.react-flow__node-snowCard')].map((node) => {
+        const title = node.querySelector('.snow-title')?.textContent ?? ''
+        const body = node.querySelector('.snow-body')?.textContent ?? ''
+        return `${title}${body}`
+      }).join('\n'),
       editor: document.querySelector('.cm-content')?.textContent ?? '',
       dialog: document.querySelector('[role="dialog"]')?.getAttribute('aria-label') ?? '',
       status: [...document.querySelectorAll('.status-line')].map((item) => item.textContent ?? ''),
@@ -260,7 +264,7 @@ async function prepareCanonical(page, session, text) {
   let last = null
   while (Date.now() < deadline) {
     last = await pageDigest(page)
-    if (String(last.card).includes(text) && last.enabled) return last
+    if (String(last.card).includes(text) && last.enabled && !last.status?.some((line) => line.includes('正在写入正本'))) return last
     await page.waitForTimeout(100)
   }
   throw new Error(`上一份没有落盘\n${JSON.stringify(last)}`)
