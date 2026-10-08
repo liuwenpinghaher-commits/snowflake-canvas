@@ -85,12 +85,17 @@ function hasHan(text: string): boolean {
 function confirmedField(doc: string, pinyin: string, confirmed: string): string | null {
   if (!hasHan(confirmed)) return null
   if (pinyin && confirmed.includes(pinyin)) return null
+  // Chrome 先把选好的字写进编辑器，再发组合结束。这时全文里已经没有拼音。
   if (!pinyin) {
+    if (hasHan(doc) && !/^[A-Za-z]*$/.test(doc)) return doc
     if (doc.length === 0 || /^[A-Za-z]*$/.test(doc)) return confirmed
     return null
   }
   const at = doc.indexOf(pinyin)
-  if (at < 0) return null
+  if (at < 0) {
+    if (hasHan(doc)) return doc
+    return null
+  }
   const next = doc.slice(0, at) + confirmed + doc.slice(at + pinyin.length)
   if (next.includes(pinyin) || !hasHan(next)) return null
   return next
@@ -131,7 +136,7 @@ export default function SideEditor({
   const pinyinRef = useRef('')
   const lastCommitRef = useRef<string | null>(null)
   const applyingRef = useRef(false)
-  const appliedRef = useRef<{ text: string; editable: boolean } | null>(null)
+  const appliedRef = useRef<{ text: string; editable: boolean; cardId: string | null } | null>(null)
   const cardIdRef = useRef(cardId)
   const fieldKeyRef = useRef<string | null>(null)
   const onCommitRef = useRef(onCommit)
@@ -291,14 +296,21 @@ export default function SideEditor({
     const view = viewRef.current
     const compartment = editableRef.current
     if (!view || !compartment) return
-    if (composingRef.current || view.composing || pendingConfirmRef.current) return
     const applied = appliedRef.current
+    const cardSame = applied?.cardId === cardId
+    if (!cardSame) {
+      pendingConfirmRef.current = false
+      composingRef.current = false
+      pinyinRef.current = ''
+      lastCommitRef.current = null
+    }
+    // 挂起只挡住同一张卡的回写。切卡后挂起已清，必须把编辑器换成这张卡的正文。
+    if (cardSame && (composingRef.current || view.composing || pendingConfirmRef.current)) return
     const current = view.state.doc.toString()
     const textSame = current === text
     const editableSame = applied?.editable === editable
-    if (textSame && editableSame) return
-    // 这一轮按键已经交给保存时，正文先不动。整篇替换会拆掉正在输入的节点，焦点掉到页面上。
-    if (!textSame && lastCommitRef.current !== null && lastCommitRef.current !== text) return
+    if (textSame && editableSame && cardSame) return
+    if (!textSame && cardSame && lastCommitRef.current !== null && lastCommitRef.current !== text) return
     applyingRef.current = true
     const effects = compartment.reconfigure(EditorView.editable.of(editable))
     if (!textSame && !editableSame) {
@@ -312,9 +324,9 @@ export default function SideEditor({
       view.dispatch({ effects })
     }
     applyingRef.current = false
-    appliedRef.current = { text, editable }
+    appliedRef.current = { text, editable, cardId }
     lastCommitRef.current = text
-  }, [text, editable])
+  }, [text, editable, cardId])
 
   const later = card ? laterLayers(card.layer) : []
   const upcoming = card ? nextLayer(card.layer) : null
