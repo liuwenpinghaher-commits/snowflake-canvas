@@ -79,7 +79,11 @@ export interface RemoteCanonical {
   save(
     bytes: Uint8Array,
     etag: string,
-  ): Promise<{ ok: true; etag: string } | { ok: false; conflict: true; etag: string } | { ok: false; conflict: false }>
+  ): Promise<
+    | { ok: true; etag: string }
+    | { ok: false; conflict: true; etag: string; bytes?: Uint8Array }
+    | { ok: false; conflict: false }
+  >
   keep(etag: string): Promise<{ ok: true; etag: string; snapshotCount: number } | { ok: false; message: string }>
 }
 
@@ -187,6 +191,144 @@ export function parseCompleteDocument(bytes: Uint8Array): { bytes: Uint8Array; s
   const state = toAppState(value)
   if (!state) return null
   return { bytes: new Uint8Array(bytes), state }
+}
+
+function cardJson(card: AppState['snowflake']['cards'][string]): string {
+  const fields: Record<string, string> = {}
+  for (const key of Object.keys(card.fields).sort()) fields[key] = card.fields[key] ?? ''
+  return JSON.stringify({ layer: card.layer, body: card.body, fields })
+}
+
+function nodeJson(node: CanvasNode): string {
+  return JSON.stringify({
+    id: node.id,
+    type: node.type,
+    x: node.x,
+    y: node.y,
+    width: node.width,
+    height: node.height,
+    text: node.text ?? '',
+    color: node.color ?? '',
+  })
+}
+
+function edgeJson(edge: CanvasEdge): string {
+  return JSON.stringify({
+    id: edge.id,
+    fromNode: edge.fromNode,
+    toNode: edge.toNode,
+    fromSide: edge.fromSide ?? '',
+    toSide: edge.toSide ?? '',
+    fromEnd: edge.fromEnd ?? '',
+    toEnd: edge.toEnd ?? '',
+    label: edge.label ?? '',
+  })
+}
+
+function mergeScalar(base: string, remote: string, local: string): string | null {
+  if (remote === base) return local
+  if (local === base) return remote
+  if (remote === local) return local
+  return null
+}
+
+function mergeList<T>(
+  base: readonly T[],
+  remote: readonly T[],
+  local: readonly T[],
+  idOf: (item: T) => string,
+  jsonOf: (item: T) => string,
+): T[] | null {
+  const baseMap = new Map(base.map((item) => [idOf(item), item]))
+  const remoteMap = new Map(remote.map((item) => [idOf(item), item]))
+  const localMap = new Map(local.map((item) => [idOf(item), item]))
+  const ids = new Set([...baseMap.keys(), ...remoteMap.keys(), ...localMap.keys()])
+  const kept = new Map<string, T>()
+  for (const id of ids) {
+    const previous = baseMap.get(id)
+    const incoming = remoteMap.get(id)
+    const mine = localMap.get(id)
+    const previousKey = previous ? jsonOf(previous) : null
+    const incomingKey = incoming ? jsonOf(incoming) : null
+    const mineKey = mine ? jsonOf(mine) : null
+    const remoteChanged = incomingKey !== previousKey
+    const localChanged = mineKey !== previousKey
+    if (!remoteChanged && !localChanged) {
+      if (previous) kept.set(id, previous)
+      continue
+    }
+    if (!localChanged) {
+      if (incoming) kept.set(id, incoming)
+      continue
+    }
+    if (!remoteChanged) {
+      if (mine) kept.set(id, mine)
+      continue
+    }
+    if (incomingKey === mineKey) {
+      if (mine) kept.set(id, mine)
+      else if (incoming) kept.set(id, incoming)
+      continue
+    }
+    return null
+  }
+  const seen = new Set<string>()
+  const ordered: T[] = []
+  const push = (id: string) => {
+    if (seen.has(id)) return
+    const item = kept.get(id)
+    if (!item) return
+    seen.add(id)
+    ordered.push(item)
+  }
+  for (const item of base) push(idOf(item))
+  for (const item of remote) push(idOf(item))
+  for (const item of local) push(idOf(item))
+  return ordered
+}
+
+function mergeRemoteDocuments(baseBytes: Uint8Array, remoteBytes: Uint8Array, localBytes: Uint8Array): Uint8Array | null {
+  const base = parseCompleteDocument(baseBytes)
+  const remote = parseCompleteDocument(remoteBytes)
+  const local = parseCompleteDocument(localBytes)
+  if (!base || !remote || !local) return null
+  const fileId = mergeScalar(
+    base.state.snowflake.fileId,
+    remote.state.snowflake.fileId,
+    local.state.snowflake.fileId,
+  )
+  if (fileId === null) return null
+  const cards = mergeList(
+    Object.entries(base.state.snowflake.cards).map(([id, card]) => ({ id, card })),
+    Object.entries(remote.state.snowflake.cards).map(([id, card]) => ({ id, card })),
+    Object.entries(local.state.snowflake.cards).map(([id, card]) => ({ id, card })),
+    (item) => item.id,
+    (item) => cardJson(item.card),
+  )
+  if (!cards) return null
+  const nodes = mergeList(
+    base.state.canvas.nodes,
+    remote.state.canvas.nodes,
+    local.state.canvas.nodes,
+    (node) => node.id,
+    nodeJson,
+  )
+  if (!nodes) return null
+  const edges = mergeList(
+    base.state.canvas.edges,
+    remote.state.canvas.edges,
+    local.state.canvas.edges,
+    (edge) => edge.id,
+    edgeJson,
+  )
+  if (!edges) return null
+  const mergedCards: AppState['snowflake']['cards'] = {}
+  for (const item of cards) mergedCards[item.id] = item.card
+  return documentToBytes({
+    canvas: { nodes, edges },
+    snowflake: { fileId, cards: mergedCards },
+    activeId: local.state.activeId,
+  })
 }
 
 export function createMemoryChannel(): ChannelBus {
@@ -908,19 +1050,35 @@ class Controller implements PersistController {
     const remote = this.ports.remote
     if (!remote) return { ok: false }
     try {
-      let saved = await remote.save(bytes, this.remoteEtag)
-      if (!saved.ok && saved.conflict && saved.etag) {
+      const saved = await remote.save(bytes, this.remoteEtag)
+      if (saved.ok) {
         this.remoteEtag = saved.etag
-        saved = await remote.save(bytes, this.remoteEtag)
+        this.lastBytes = bytes.slice()
+        return { ok: true, logged: true, bytes }
       }
-      if (!saved.ok && saved.conflict && saved.etag) {
+      if (saved.conflict && saved.etag) {
+        const merged =
+          saved.bytes && this.lastBytes ? mergeRemoteDocuments(this.lastBytes, saved.bytes, bytes) : null
+        // 412 之后只允许再发合并结果。合并不了、或合并后再 412，都不得把冲突前的旧正文原样重发。
+        if (merged) {
+          const retried = await remote.save(merged, saved.etag)
+          if (retried.ok) {
+            this.remoteEtag = retried.etag
+            this.lastBytes = merged.slice()
+            const parsed = parseCompleteDocument(merged)
+            if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
+            return { ok: true, logged: true, bytes: merged }
+          }
+          if (retried.conflict && retried.etag) {
+            this.remoteEtag = retried.etag
+            return { ok: false, conflict: true }
+          }
+          return { ok: false }
+        }
         this.remoteEtag = saved.etag
         return { ok: false, conflict: true }
       }
-      if (!saved.ok) return { ok: false }
-      this.remoteEtag = saved.etag
-      this.lastBytes = bytes.slice()
-      return { ok: true, logged: true, bytes }
+      return { ok: false }
     } catch {
       return { ok: false }
     }

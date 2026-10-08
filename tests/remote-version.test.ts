@@ -88,3 +88,64 @@ describe('连续 412 后版本号', () => {
     expect(ctl.snapshot().state.snowflake.cards.c1?.body).toBe('新正文')
   })
 })
+
+describe('一次冲突按卡片合并', () => {
+  it('两边各改一张卡时，后写的人不得盖掉先写的人', async () => {
+    let version = 1
+    let document = serializeDocument(
+      createCard(
+        createCard(createDocument('merge-file'), {
+          id: 'c1',
+          layer: 'situation',
+          x: 10,
+          y: 10,
+          body: '甲',
+        }),
+        { id: 'c2', layer: 'situation', x: 80, y: 10, body: '乙' },
+      ),
+    )
+    const puts: string[] = []
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (method === 'PUT') {
+        const match = new Headers(init?.headers).get('If-Match') || ''
+        puts.push(match)
+        if (match !== `"${version}"`) {
+          return new Response(JSON.stringify({ error: 'conflict' }), {
+            status: 412,
+            headers: { ETag: `"${version}"`, 'Content-Type': 'application/json' },
+          })
+        }
+        const raw = init?.body
+        const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : String(raw ?? '{}')
+        document = JSON.parse(text) as typeof document
+        version += 1
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { ETag: `"${version}"`, 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ document }), {
+        status: 200,
+        headers: { ETag: `"${version}"`, 'Content-Type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    const ctl = createPersistController(ports(), () => {})
+    await ctl.start()
+    document = structuredClone(document)
+    document.snowflake.cards.c2.body = '乙乙'
+    const remoteNode = document.canvas.nodes.find((node) => node.id === 'c2')
+    if (remoteNode) remoteNode.text = '乙乙'
+    version = 2
+
+    await ctl.mutate((state) => setCardBody(state, 'c1', '甲甲'))
+    expect(puts).toEqual(['"1"', '"2"'])
+    expect(document.snowflake.cards.c1?.body).toContain('甲甲')
+    expect(document.snowflake.cards.c2?.body).toContain('乙乙')
+    expect(ctl.snapshot().view.messages).not.toContain(MSG_VERSION_MOVED)
+    expect(ctl.snapshot().view.canEdit).toBe(true)
+    expect(ctl.snapshot().state.snowflake.cards.c1?.body).toContain('甲甲')
+    expect(ctl.snapshot().state.snowflake.cards.c2?.body).toContain('乙乙')
+  })
+})
