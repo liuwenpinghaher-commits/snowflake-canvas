@@ -1,4 +1,6 @@
+import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Connect } from 'vite'
 
@@ -108,8 +110,29 @@ function snowflakeExpandProxy() {
   }
 }
 
+
+// base 只改页面里的地址。静态服务把 dist 当根，不会剥掉 /xuehua/，
+// 所以再复制一份到 dist/xuehua，反代才能按浏览器原始路径把文件转过去。
+function publishUnderBase() {
+  return {
+    name: 'publish-under-base',
+    apply: 'build' as const,
+    closeBundle(): void {
+      const dist = join(process.cwd(), 'dist')
+      const nested = join(dist, 'xuehua')
+      rmSync(nested, { recursive: true, force: true })
+      mkdirSync(nested, { recursive: true })
+      for (const name of readdirSync(dist)) {
+        if (name === 'xuehua') continue
+        cpSync(join(dist, name), join(nested, name), { recursive: true })
+      }
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), snowflakeExpandProxy()],
+  base: '/xuehua/',
+  plugins: [react(), snowflakeExpandProxy(), publishUnderBase()],
   server: {
     host: '127.0.0.1',
   },
