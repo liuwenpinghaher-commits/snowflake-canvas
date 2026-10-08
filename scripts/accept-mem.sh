@@ -527,16 +527,121 @@ def clause_g(short_body):
     print("G KEY_ABSENT")
     print("KEY_ABSENT")
 
+
+TEST_CARD_ID = "n-mem-accept-situation"
+CARD_ADDED = False
+USER_BODIES = {}
+USER_FILE_ID = ""
+
+def load_canvas():
+    status, headers, raw = request("GET", "/api/canvas")
+    if status != 200:
+        fail(CURRENT, f"GET 画布返回 {status}")
+    return headers.get("etag", ""), json_body(raw)
+
+def put_document(document, etag):
+    return request("PUT", "/api/canvas", document, {"If-Match": etag})
+
+def mutate_document(recipe):
+    last = None
+    for _ in range(8):
+        etag, payload = load_canvas()
+        document = payload["document"]
+        recipe(document)
+        status, headers, raw = put_document(document, etag)
+        last = (status, raw)
+        if status == 200:
+            return headers.get("etag", ""), json_body(raw)["document"]
+        if status != 412:
+            fail(CURRENT, f"写画布返回 {status} {raw[:180]!r}")
+    fail(CURRENT, f"写画布多次 412 仍没写上 {last[1][:180]!r}")
+
+def card_bodies(document):
+    cards = document.get("snowflake", {}).get("cards", {})
+    return {
+        card_id: card.get("body")
+        for card_id, card in cards.items()
+        if isinstance(card, dict)
+    }
+
+def strip_accept_card(document):
+    card_id = TEST_CARD_ID
+    document["canvas"]["nodes"] = [
+        node for node in document["canvas"]["nodes"] if node.get("id") != card_id
+    ]
+    document["canvas"]["edges"] = [
+        edge
+        for edge in document["canvas"]["edges"]
+        if edge.get("fromNode") != card_id and edge.get("toNode") != card_id
+    ]
+    document["snowflake"]["cards"].pop(card_id, None)
+
+def add_accept_card(document):
+    strip_accept_card(document)
+    body = "验收念头"
+    document["canvas"]["nodes"].append(
+        {
+            "id": TEST_CARD_ID,
+            "type": "text",
+            "x": 80,
+            "y": 520,
+            "width": 280,
+            "height": 120,
+            "text": body,
+            "color": "1",
+        }
+    )
+    document["snowflake"]["cards"][TEST_CARD_ID] = {
+        "layer": "situation",
+        "body": body,
+        "fields": {},
+    }
+
+def cleanup_cards():
+    global CARD_ADDED
+    if not CARD_ADDED:
+        return
+    _, restored = mutate_document(strip_accept_card)
+    cards = restored.get("snowflake", {}).get("cards", {})
+    if TEST_CARD_ID in cards:
+        raise RuntimeError("验收卡没有从画布上拿走")
+    if restored.get("snowflake", {}).get("fileId") != USER_FILE_ID:
+        raise RuntimeError("收尾改了画布文件号")
+    restored_bodies = card_bodies(restored)
+    if set(restored_bodies) != set(USER_BODIES):
+        raise RuntimeError("收尾改了原来的卡片名单")
+    for card_id, body in USER_BODIES.items():
+        if restored_bodies.get(card_id) != body:
+            raise RuntimeError(f"收尾改了原来的卡 {card_id}")
+    CARD_ADDED = False
+    print("收尾：验收卡已从画布拿走，原来的正文还在")
+
 def main():
+    global CARD_ADDED, USER_BODIES, USER_FILE_ID
     health()
     clause_a()
     clause_b()
     status, _, raw = request("GET", "/api/canvas")
     if status != 200:
         fail("C", f"取画布返回 {status}")
-    DISCUSS["card"] = situation_target(json_body(raw)["document"])
+    document = json_body(raw)["document"]
+    USER_FILE_ID = document.get("snowflake", {}).get("fileId")
+    USER_BODIES = {
+        card_id: body
+        for card_id, body in card_bodies(document).items()
+        if card_id != TEST_CARD_ID
+    }
+    DISCUSS["card"] = situation_target(document)
+    # 正本可以没有念头卡。先放验收自己的一张念头卡，C 和 D 打这张卡，测完按收尾删掉。
+    # 不改用户现有的场景表和一句话。
     if not DISCUSS["card"]:
-        fail("C", "文档里没有念头卡，讨论接口不能没有 cardId")
+        mutate_document(add_accept_card)
+        CARD_ADDED = True
+        _, payload = load_canvas()
+        DISCUSS["card"] = situation_target(payload["document"])
+        if DISCUSS["card"] != TEST_CARD_ID:
+            fail("C", "验收用的念头卡没有写上")
+        print("正本没有念头卡，已加上验收用的念头卡")
     status, _, raw = request("GET", "/api/discuss/session?cardId=" + quote(DISCUSS["card"]), timeout=60)
     if status != 200:
         fail("C", f"取会话返回 {status} {raw[:180]!r}")
@@ -548,6 +653,7 @@ def main():
     short = clause_c_short()
     clause_c_long()
     clause_d(session_id)
+    cleanup_cards()
     clause_e()
     clause_f()
     clause_g(short["body"])
@@ -555,10 +661,24 @@ def main():
 try:
     main()
 except ClauseFailure as error:
+    try:
+        cleanup_cards()
+    except Exception as cleanup_error:
+        print(f"FAIL {error.letter}")
+        print(error.detail)
+        print(f"收尾也失败：{cleanup_error}")
+        raise SystemExit(1)
     print(f"FAIL {error.letter}")
     print(error.detail)
     raise SystemExit(1)
 except Exception as error:
+    try:
+        cleanup_cards()
+    except Exception as cleanup_error:
+        print(f"FAIL {CURRENT}")
+        print(redact(repr(error)))
+        print(f"收尾也失败：{cleanup_error}")
+        raise SystemExit(1)
     print(f"FAIL {CURRENT}")
     print(redact(repr(error)))
     raise SystemExit(1)
