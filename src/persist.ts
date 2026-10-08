@@ -23,6 +23,7 @@ export const MSG_VERSION_MOVED = '版本已更新，请再试'
 export const MSG_WRITING = '正在写入正本'
 export const MSG_LOG_DOWN = '恢复日志不可用'
 export const MSG_OTHER_TAB = '另一个标签正在写这份正本，本页只读'
+export const MSG_NO_LOCK = '这个地址不能跨标签互斥。单页可以继续写。要用互斥，请改用 http://127.0.0.1 打开。'
 export const MSG_RESTORED = '正本不是完整 JSON，已用恢复日志换上上一份完整稿'
 export const MSG_SAVE_AS = '正本要另存'
 export const MSG_FILE_PROTOCOL = '请用本机的 http://127.0.0.1 打开。从文件地址打开时，目录句柄和恢复日志都不可用。'
@@ -96,7 +97,7 @@ export interface PersistPorts {
   queryPermission(): Promise<PermissionWord>
   requestPermission(): Promise<PermissionWord>
   logFactory(): Promise<RecoveryLog>
-  tryAcquireLock(name: string): Promise<LockHandle | null>
+  tryAcquireLock(name: string): Promise<LockHandle | null | 'unsupported'>
   lockHeld(name: string): Promise<boolean>
   channel: ChannelBus
   claim: ClaimStore
@@ -540,6 +541,7 @@ class Controller implements PersistController {
   private needChoice = false
   private needPermission = false
   private readonlyOther = false
+  private lockUnsupported = false
   private showWritingMessage = false
   private writing = false
   private canEdit = false
@@ -802,6 +804,10 @@ class Controller implements PersistController {
     )
   }
 
+  private writerHeld(): boolean {
+    return Boolean(this.lock) || this.lockUnsupported
+  }
+
   private async flushQueuedText(): Promise<void> {
     const queued = this.queuedText
     if (!queued || this.writing || this.disposed) return
@@ -903,6 +909,19 @@ class Controller implements PersistController {
     }
     const handle = await this.ports.tryAcquireLock(lockName)
     this.fileId = fileId
+    if (handle === 'unsupported') {
+      this.lockUnsupported = true
+      this.lock = null
+      this.readonlyOther = false
+      this.canEdit = true
+      this.showWritingMessage = false
+      this.otherStartedAt = null
+      this.ports.claim.set(fileId)
+      this.startedAt = formatLocalStart(this.ports.now())
+      this.watchChannel()
+      return true
+    }
+    this.lockUnsupported = false
     if (!handle) {
       this.readonlyOther = true
       this.canEdit = false
@@ -928,7 +947,7 @@ class Controller implements PersistController {
   }
 
   private async ensureLog(): Promise<void> {
-    if (this.logTried || !this.lock) return
+    if (this.logTried || !this.writerHeld()) return
     this.logTried = true
     try {
       this.log = await this.ports.logFactory()
@@ -1240,7 +1259,7 @@ class Controller implements PersistController {
       return
     }
     const logged = await this.readLogParsed()
-    if (!this.lock && logged) {
+    if (!this.writerHeld() && logged) {
       const acquired = await this.tryBecomeWriter(logged.state.snowflake.fileId, reason)
       if (!acquired) {
         await this.closeLog()
@@ -1248,7 +1267,7 @@ class Controller implements PersistController {
         return
       }
     }
-    if (!this.lock) {
+    if (!this.writerHeld()) {
       this.stopFailed()
       return
     }
@@ -1413,7 +1432,7 @@ class Controller implements PersistController {
       this.emit()
       return
     }
-    if (!this.lock || !this.editingAllowed()) return
+    if (!this.writerHeld() || !this.editingAllowed()) return
     const bytes = await this.currentCanonicalBytes()
     if (!bytes) return
     const kept = await this.copySnapshot(bytes)
@@ -1423,7 +1442,7 @@ class Controller implements PersistController {
   }
 
   async rollbackTo(name: string): Promise<void> {
-    if (!this.lock || !this.editingAllowed() || !this.directory) return
+    if (!this.writerHeld() || !this.editingAllowed() || !this.directory) return
     if (!isSnapshotFileName(name, this.fileName)) return
     const selected = await this.directory.read(name)
     if (!selected) return
@@ -1431,7 +1450,7 @@ class Controller implements PersistController {
   }
 
   async rollbackToBytes(bytes: Uint8Array): Promise<void> {
-    if (!this.lock || !this.editingAllowed()) return
+    if (!this.writerHeld() || !this.editingAllowed()) return
     await this.rollbackWithBytes(bytes)
   }
 
@@ -1570,6 +1589,7 @@ class Controller implements PersistController {
           : MSG_OTHER_TAB,
       )
     }
+    if (this.lockUnsupported && this.editingAllowed()) messages.push(MSG_NO_LOCK)
     if (this.restoredNotice) messages.push(MSG_RESTORED)
     if (this.needPermission) messages.push(MSG_NEED_PERMISSION)
     if (this.remoteMode) {

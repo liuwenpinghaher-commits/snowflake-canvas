@@ -6,6 +6,7 @@ import {
   CANONICAL_NAME,
   MSG_FILE_PROTOCOL,
   MSG_LOG_DOWN,
+  MSG_NO_LOCK,
   MSG_OTHER_TAB,
   MSG_RESTORED,
   MSG_SAVE_AS,
@@ -574,6 +575,41 @@ describe('落盘链路', () => {
     await second.ctl.commitText('c1', null, '第二页不该写下')
     expect(second.ctl.snapshot().state.snowflake.cards.c1?.body).toBe('已有')
     expect(first.ctl.snapshot().view.canEdit).toBe(true)
+  })
+
+  it('浏览器没有锁接口：另存模式单标签可写，提示改用 127.0.0.1，不显示被占用', async () => {
+    const bytes = documentToBytes(
+      createCard(createDocument('no-lock-file'), {
+        id: 'c1',
+        layer: 'situation',
+        x: 0,
+        y: 0,
+        body: '甲',
+      }),
+    )
+    let saved = 0
+    const h = harness({
+      ports: {
+        hasDirectoryPicker: false,
+        tryAcquireLock: async () => 'unsupported',
+        lockHeld: async () => false,
+        askSaveAs: async () => {
+          saved += 1
+          return true
+        },
+      },
+    })
+    await h.ctl.openLocalFile(bytes, 'snowflake.json')
+    expect(h.ctl.snapshot().view.canEdit).toBe(true)
+    expect(h.ctl.snapshot().view.readonlyOther).toBe(false)
+    const text = h.ctl.snapshot().view.messages.join('\n')
+    expect(text).toContain(MSG_NO_LOCK)
+    expect(text).toContain('http://127.0.0.1')
+    expect(text).not.toContain(MSG_OTHER_TAB)
+    await h.ctl.commitText('c1', null, '乙')
+    expect(h.ctl.snapshot().state.snowflake.cards.c1?.body).toBe('乙')
+    expect(saved).toBe(1)
+    expect(textOf(h.log.bytes ?? undefined)).toContain('乙')
   })
 
   it('源码不得对正本调用 createWritable，也不把 localStorage 当恢复日志', () => {

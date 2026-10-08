@@ -181,9 +181,9 @@ function browserChannel(): ChannelBus {
   }
 }
 
-function tryAcquireLock(name: string): Promise<LockHandle | null> {
+function tryAcquireLock(name: string): Promise<LockHandle | null | 'unsupported'> {
   const locks = navigator.locks
-  if (!locks) return Promise.resolve(null)
+  if (!locks) return Promise.resolve('unsupported')
   return new Promise((resolve, reject) => {
     locks
       .request(name, { mode: 'exclusive', ifAvailable: true }, (lock) => {
