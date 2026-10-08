@@ -39,6 +39,12 @@ button.on {
   flex-direction: column;
 }
 
+.discuss-panel {
+  flex: 0 0 auto;
+  max-height: 280px;
+  overflow: auto;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -338,4 +344,42 @@ button.on {
   border-radius: 6px;
   padding: 4px 8px;
   max-width: 240px;
+}
+
+.discuss-panel {
+  margin: 0 16px 12px;
+  padding: 10px 12px 12px;
+  border: 1px solid #d9d0c3;
+  border-radius: 8px;
+  background: #f7f4ee;
+}
+
+.discuss-panel h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.discuss-panel textarea,
+.discuss-panel input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: inherit;
+  border: 1px solid #c8bfb0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fffdf8;
+}
+
+.discuss-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.discuss-log {
+  min-height: 48px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }

@@ -40,3 +40,6 @@ EXPAND_DONE_REWORK
 
 # 返工完工哨兵，不进版本库
 REWORK_DONE
+
+# 记忆集成完工哨兵，不进版本库
+MEM集成_DONE

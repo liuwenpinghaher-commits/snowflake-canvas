@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
+import DiscussPanel from './DiscussPanel.tsx'
 import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
@@ -216,6 +217,7 @@ export default function App() {
           </p>
         ))}
       </header>
+      <DiscussPanel />
       <div className="workspace">
         <ReactFlowProvider>
           <FlowCanvas

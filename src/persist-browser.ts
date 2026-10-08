@@ -8,6 +8,7 @@ import {
   type PersistPorts,
   type RecoveryLog,
 } from './persist.ts'
+import { keepRemote, loadRemote, saveRemote } from './remote-canvas.ts'
 
 const HANDLE_DB = 'snowflake-canvas'
 const HANDLE_STORE = 'handles'
@@ -331,6 +332,11 @@ export function createBrowserPorts(ui: {
     askSaveAs: ui.askSaveAs,
     askFirstDownload: ui.askFirstDownload,
     askSnapshotDownload: ui.askSnapshotDownload,
+    remote: {
+      load: loadRemote,
+      save: saveRemote,
+      keep: keepRemote,
+    },
     expand: {
       apiKey: () => undefined,
       fetch: browserExpandFetch,

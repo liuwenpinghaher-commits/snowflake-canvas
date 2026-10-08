@@ -73,6 +73,15 @@ export interface ClaimStore {
 
 export type PermissionWord = 'granted' | 'prompt' | 'denied'
 
+export interface RemoteCanonical {
+  load(): Promise<{ etag: string; bytes: Uint8Array } | null>
+  save(
+    bytes: Uint8Array,
+    etag: string,
+  ): Promise<{ ok: true; etag: string } | { ok: false; conflict: true; etag: string } | { ok: false; conflict: false }>
+  keep(etag: string): Promise<{ ok: true; etag: string; snapshotCount: number } | { ok: false; message: string }>
+}
+
 export interface PersistPorts {
   protocol: string
   hasDirectoryPicker: boolean
@@ -89,6 +98,7 @@ export interface PersistPorts {
   askSaveAs(fileName: string, bytes: Uint8Array): Promise<boolean>
   askFirstDownload(fileName: string, bytes: Uint8Array): Promise<boolean>
   askSnapshotDownload?: (fileName: string, bytes: Uint8Array) => Promise<boolean>
+  remote?: RemoteCanonical
   expand?: ExpandClientOptions
   randomId?: () => string
   pauseBeforeMove?: () => Promise<void>
@@ -379,6 +389,9 @@ class Controller implements PersistController {
   private expandNotice: string | null = null
   private candidates: ShownCandidate[] = []
   private snapshotNames: string[] = []
+  private remoteMode = false
+  private remoteEtag = ''
+  private actionNotice: string | null = null
   private readonly issuedSnapshotNames = new Set<string>()
   private disposed = false
   private started = false
@@ -424,6 +437,7 @@ class Controller implements PersistController {
       this.enterFileProtocol()
       return
     }
+    if (await this.openRemote()) return
     this.downloadMode = !this.ports.hasDirectoryPicker
     if (!this.ports.hasDirectoryPicker) {
       this.needChoice = true
@@ -821,9 +835,58 @@ class Controller implements PersistController {
     if (existing) await this.removeQuiet(name)
   }
 
+  private async openRemote(): Promise<boolean> {
+    if (!this.ports.remote) return false
+    let loaded: { etag: string; bytes: Uint8Array } | null
+    try {
+      loaded = await this.ports.remote.load()
+    } catch {
+      return false
+    }
+    if (!loaded) return false
+    const parsed = parseCompleteDocument(loaded.bytes)
+    if (!parsed) return false
+    this.remoteMode = true
+    this.remoteEtag = loaded.etag
+    this.state = parsed.state
+    this.lastBytes = parsed.bytes
+    this.fileId = parsed.state.snowflake.fileId
+    this.fileName = CANONICAL_NAME
+    this.downloadMode = false
+    this.needChoice = false
+    this.needPermission = false
+    this.readonlyOther = false
+    this.failed = false
+    this.stopped = false
+    this.canEdit = true
+    this.emit()
+    return true
+  }
+
+  private async writeRemote(
+    bytes: Uint8Array,
+  ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false }> {
+    const remote = this.ports.remote
+    if (!remote) return { ok: false }
+    try {
+      let saved = await remote.save(bytes, this.remoteEtag)
+      if (!saved.ok && saved.conflict) {
+        this.remoteEtag = saved.etag
+        saved = await remote.save(bytes, saved.etag)
+      }
+      if (!saved.ok) return { ok: false }
+      this.remoteEtag = saved.etag
+      this.lastBytes = bytes.slice()
+      return { ok: true, logged: true, bytes }
+    } catch {
+      return { ok: false }
+    }
+  }
+
   private async writeExact(
     bytes: Uint8Array,
   ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false }> {
+    if (this.remoteMode && this.ports.remote) return this.writeRemote(bytes)
     if (this.downloadMode || !this.directory) {
       const accepted = await this.ports.askSaveAs(this.fileName, bytes)
       if (!accepted) return { ok: false }
@@ -854,6 +917,7 @@ class Controller implements PersistController {
   }
 
   private async persistState(next: AppState): Promise<void> {
+    this.actionNotice = null
     this.state = next
     this.writing = true
     this.canEdit = false
@@ -1128,6 +1192,19 @@ class Controller implements PersistController {
   }
 
   async keepVersion(): Promise<void> {
+    if (this.remoteMode && this.ports.remote) {
+      if (!this.editingAllowed()) return
+      const result = await this.ports.remote.keep(this.remoteEtag)
+      if (!result.ok) {
+        this.actionNotice = result.message
+        this.emit()
+        return
+      }
+      this.remoteEtag = result.etag
+      this.actionNotice = `已留下这一版，快照 ${result.snapshotCount} 份`
+      this.emit()
+      return
+    }
     if (!this.lock || !this.editingAllowed()) return
     const bytes = await this.currentCanonicalBytes()
     if (!bytes) return
@@ -1287,6 +1364,8 @@ class Controller implements PersistController {
     }
     if (this.restoredNotice) messages.push(MSG_RESTORED)
     if (this.needPermission) messages.push(MSG_NEED_PERMISSION)
+    if (this.remoteMode) messages.push('正本在服务器')
+    if (this.actionNotice) messages.push(this.actionNotice)
     return {
       canEdit: this.editingAllowed(),
       writing: this.writing,
