@@ -4,6 +4,7 @@ import {
   commitCardText,
   createCard,
   createDocument,
+  cardFace,
   frontText,
   layerLabel,
   nextLayer,
@@ -215,6 +216,56 @@ describe('十层雪花', () => {
     expect(state.snowflake.cards.story?.fields.story).toContain('她已经写过开头。')
     expect(state.snowflake.cards.story?.fields.story).toContain('全文在故事里')
     expect(state.snowflake.cards.story?.fields.story).toContain('备注也在')
+  })
+
+  it('场景表旧摘要字段是空的时，打开不会丢掉正文', () => {
+    const state = load({
+      canvas: { nodes: [node('scene', 0)], edges: [] },
+      snowflake: {
+        fileId: 'keep-body',
+        cards: {
+          scene: {
+            layer: '场景表',
+            body: '标题：\n视角：\n门口那个人先说话。\n\n她没有应。',
+            fields: { title: '', pov: '', summarySentence: '', summaryFull: '', notes: '' },
+          },
+        },
+      },
+    })
+    expect(state.snowflake.cards.scene?.fields.what).toContain('门口那个人先说话。')
+    expect(state.snowflake.cards.scene?.fields.what).toContain('她没有应。')
+    expect(cardFace(state.snowflake.cards.scene!).title).toBe('门口那个人先说话。')
+    expect(cardFace(state.snowflake.cards.scene!).body).toContain('她没有应。')
+  })
+
+  it('卡片正面分开标题和正文，空字段标签不会把正文显示成空', () => {
+    expect(
+      cardFace({
+        layer: '场景表',
+        body: '标题：\n视角：\n门口那个人先说话。\n\n她没有应。',
+        fields: { title: '', pov: '' },
+      }),
+    ).toEqual({
+      title: '门口那个人先说话。',
+      body: '她没有应。',
+      meta: '14 字',
+    })
+    expect(
+      cardFace({
+        layer: '场景表',
+        body: '',
+        fields: { title: '雪夜开门', pov: '林晚', what: '她发现门口的人是弟弟' },
+      }),
+    ).toEqual({
+      title: '雪夜开门',
+      body: '她发现门口的人是弟弟',
+      meta: '视角 林晚',
+    })
+    expect(cardFace({ layer: '一句话', body: '', fields: { sentence: '' } })).toEqual({
+      title: '',
+      body: '',
+      meta: '',
+    })
   })
 
   it('认不出的层名不会让整份文档打不开，原文留在念头正文开头', () => {

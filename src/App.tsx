@@ -103,7 +103,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <h1>雪花画布</h1>
-        <p>空白处双击放一张念头。双击卡片，讨论挂在这张卡片正下方。从卡片右边拖出去，长出后面的层。</p>
+        <p className="top-hint">空白处双击放一张念头。双击卡片，讨论挂在这张卡片正下方。从卡片右边拖出去，长出后面的层。</p>
         <div className="top-actions">
           {view.needChoice && !view.fileProtocol ? (
             <button type="button" onClick={() => void ctlRef.current?.selectDirectory()}>
@@ -139,6 +139,7 @@ export default function App() {
           ) : null}
           <button
             type="button"
+            className="primary"
             disabled={!canEdit}
             onClick={() => {
               void ctlRef.current?.mutate((current) => {

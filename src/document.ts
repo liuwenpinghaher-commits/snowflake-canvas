@@ -475,6 +475,131 @@ function shownFieldValue(key: string, value: string): string {
   return value
 }
 
+export interface CardFace {
+  title: string
+  body: string
+  meta: string
+}
+
+function cleanField(value: string | undefined): string {
+  return (value ?? '').trim()
+}
+
+function proseWithoutEmptyLabels(body: string): string {
+  const kept: string[] = []
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      if (kept.length > 0 && kept[kept.length - 1] !== '') kept.push('')
+      continue
+    }
+    const mark = trimmed.indexOf('：')
+    if (mark > 0 && mark <= 24 && trimmed.slice(mark + 1).trim() === '') continue
+    kept.push(trimmed)
+  }
+  while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
+  return kept.join('\n').trim()
+}
+
+function splitLead(text: string): { title: string; body: string } {
+  const trimmed = text.trim()
+  if (!trimmed) return { title: '', body: '' }
+  const line = firstLine(trimmed)
+  const rest = trimmed.slice(line.length).trim()
+  if (rest) return { title: line, body: rest }
+  const sentence = firstSentence(trimmed)
+  if (sentence && sentence.length < trimmed.length) {
+    return { title: sentence, body: trimmed.slice(sentence.length).trim() }
+  }
+  return { title: trimmed, body: '' }
+}
+
+function countChars(text: string): number {
+  return [...text.replace(/\s/g, '')].length
+}
+
+export function cardFace(card: Card): CardFace {
+  const prose = proseWithoutEmptyLabels(card.body)
+  switch (card.layer) {
+    case 'situation':
+    case '正文草稿': {
+      const parts = splitLead(card.body)
+      const count = countChars(card.body)
+      return { ...parts, meta: count ? `${count} 字` : '' }
+    }
+    case '一句话':
+      return { title: cleanField(card.fields.sentence) || cleanField(card.body), body: '', meta: '' }
+    case '一段':
+    case 'yiyedagang': {
+      const background = cleanField(card.fields.background)
+      const head = firstSentence(background)
+      const rest = background.slice(head.length).trim()
+      const ending = cleanField(card.fields.ending)
+      const disasters = ['disaster1', 'disaster2', 'disaster3'].filter((key) => cleanField(card.fields[key])).length
+      const body = [rest, ending].filter((part) => part.length > 0).join('\n')
+      if (head || body) return { title: head, body, meta: disasters ? `${disasters} 个灾难` : '' }
+      return { ...splitLead(prose), meta: '' }
+    }
+    case 'renwubiao': {
+      const name = cleanField(card.fields.name)
+      const sentence = firstLine(card.fields.sentence ?? '')
+      const meta = [cleanField(card.fields.grade), cleanField(card.fields.role)].filter((part) => part.length > 0).join(' · ')
+      if (name || sentence) return { title: name || sentence, body: name ? sentence : '', meta }
+      return { ...splitLead(prose), meta }
+    }
+    case 'renwugushi': {
+      const who = cleanField(card.fields.who)
+      const story = cleanField(card.fields.story)
+      const length = cleanField(card.fields.length)
+      if (who || story) return { title: who, body: story, meta: length }
+      return { ...splitLead(prose), meta: length }
+    }
+    case 'renwudangan': {
+      const name = cleanField(card.fields.bodyName)
+      const line = cleanField(card.fields.traitLine) || cleanField(card.fields.endingChange)
+      const age = cleanField(card.fields.age)
+      if (name || line) return { title: name || line, body: name ? line : '', meta: age ? `${age} 岁` : '' }
+      return { ...splitLead(prose), meta: '' }
+    }
+    case '场景表': {
+      const title = cleanField(card.fields.title)
+      const what = cleanField(card.fields.what)
+      const pov = cleanField(card.fields.pov)
+      const chapter = cleanField(card.fields.chapter)
+      const words = cleanField(card.fields.words)
+      const meta = [pov ? `视角 ${pov}` : '', chapter ? `${chapter} 章` : '', words ? `${words} 字` : '']
+        .filter((part) => part.length > 0)
+        .join(' · ')
+      if (title || what) {
+        const lead = firstLine(what)
+        return {
+          title: title || lead,
+          body: title ? what : what.slice(lead.length).trim(),
+          meta,
+        }
+      }
+      const parts = splitLead(prose)
+      const count = countChars(prose)
+      return { ...parts, meta: meta || (count ? `${count} 字` : '') }
+    }
+    case 'changci': {
+      const alpha = cleanField(card.fields.alpha)
+      const task = cleanField(card.fields.task)
+      const happened = cleanField(card.fields.happened)
+      const kind = shownFieldValue('structureKind', cleanField(card.fields.structureKind))
+      const title = alpha || task
+      const body = [happened, alpha && task ? task : ''].filter((part) => part.length > 0).join('\n')
+      if (title || body) return { title, body, meta: kind }
+      return { ...splitLead(prose), meta: kind }
+    }
+    default: {
+      const count = countChars(prose)
+      return { ...splitLead(prose), meta: count ? `${count} 字` : '' }
+    }
+  }
+}
+
+
 function bodyFor(layer: Layer, fields: Record<string, string>, freeText: string): string {
   if (layer === 'situation' || layer === '正文草稿') return freeText
   if (layer === '一句话') return fields.sentence ?? ''
@@ -913,6 +1038,10 @@ export function loadCards(
     }
     if (legacy.trim()) card.fields.legacySummary = legacy
     if (!card.fields.what) card.fields.what = card.fields.summarySentence ?? ''
+    if (!cleanField(card.fields.what)) {
+      const loose = proseWithoutEmptyLabels(card.body)
+      if (loose) card.fields.what = loose
+    }
     delete card.fields.summarySentence
     delete card.fields.summaryFull
     delete card.fields.notes

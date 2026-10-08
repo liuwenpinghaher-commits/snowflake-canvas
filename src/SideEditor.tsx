@@ -3,6 +3,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder } from '@codemirror/view'
 import {
+  cardFace,
   choiceFields,
   defaultFieldKey,
   editorText,
@@ -262,6 +263,28 @@ export default function SideEditor({
   }, [])
 
   const text = card ? editorText(card, fieldKey) : ''
+  const face = card ? cardFace(card) : null
+  const heldInField = Boolean(
+    card &&
+      face &&
+      Object.values(card.fields).some((value) => {
+        const trimmed = value.trim()
+        if (!trimmed) return false
+        const titleOk = face.title.trim().length === 0 || trimmed.includes(face.title.trim())
+        const bodyOk = face.body.trim().length === 0 || trimmed.includes(face.body.trim())
+        return titleOk && bodyOk
+      }),
+  )
+  const showFaceBody = Boolean(face && face.body.trim() && face.body.trim() !== text.trim())
+  const warnOrphan = Boolean(
+    card &&
+      face &&
+      (face.title || face.body) &&
+      !heldInField &&
+      card.layer !== 'situation' &&
+      card.layer !== '正文草稿' &&
+      card.layer !== '一句话',
+  )
   const editable = Boolean(card) && canType
 
   useEffect(() => {
@@ -305,9 +328,20 @@ export default function SideEditor({
         ) : groupSelected ? (
           <strong>分组</strong>
         ) : (
-          <strong>还没有打开卡片</strong>
+          <strong>还没有打开卡片。点一张卡片，在这里改。</strong>
         )}
       </div>
+
+      {card && face ? (
+        <div className="side-face">
+          <p className="side-face-title">{face.title || '还没有写下内容'}</p>
+          {showFaceBody ? <p className="side-face-body">{face.body}</p> : null}
+          {face.meta ? <p className="side-face-meta">{face.meta}</p> : null}
+          {warnOrphan ? (
+            <p className="side-face-note">这段写在卡片正文里，不在当前字段。改字段会按字段重写正文，这段会被盖掉。</p>
+          ) : null}
+        </div>
+      ) : null}
 
       {card ? (
         <>

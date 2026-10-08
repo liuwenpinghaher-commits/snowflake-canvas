@@ -12,7 +12,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import CardDiscuss from './CardDiscuss.tsx'
-import { laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
+import { cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
 
 type DiscussBind = {
   cardBody: string
@@ -21,21 +21,31 @@ type DiscussBind = {
 }
 
 type CardData = {
-  text: string
   layerLabel: string
   color: string
   canGrow: boolean
   flash: boolean
   discuss: DiscussBind | null
+  title: string
+  body: string
+  meta: string
 }
 type GroupData = { text: string }
 
 function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
+  const title = data.title.trim()
+  const body = data.body.trim()
   return (
     <div className="snow-node">
       <div className={data.flash ? 'snow-card adopt-flash' : 'snow-card'} data-color={data.color}>
-        <div className="snow-layer">{data.layerLabel}</div>
-        <div className="snow-text">{data.text || '（空）'}</div>
+        <div className="snow-kicker">
+          <div className="snow-layer">{data.layerLabel}</div>
+          {data.meta ? <div className="snow-meta">{data.meta}</div> : null}
+        </div>
+        <div className="snow-copy">
+          <div className="snow-title">{title || '还没有写下内容'}</div>
+          {body ? <div className="snow-body">{body}</div> : null}
+        </div>
         <Handle type="target" position={Position.Left} />
         {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
       </div>
@@ -79,23 +89,28 @@ function toFlowNode(
       style: { width: node.width, height: node.height },
     }
   }
+  const face = card ? cardFace(card) : { title: node.text ?? '', body: '', meta: '' }
+  const tall = face.body.trim().length > 0 || face.title.trim().length > 18
+  const height = Math.max(node.height, tall ? 176 : node.height)
   return {
     id: node.id,
     type: 'snowCard',
     position: { x: node.x, y: node.y },
     width: node.width,
-    height: node.height,
+    height,
     selected: node.id === activeId,
     zIndex: discuss?.cardId === node.id ? 20 : 1,
     data: {
-      text: node.text ?? '',
       layerLabel: card ? layerLabel(card.layer) : '',
       color: node.color ?? '1',
       canGrow: card ? laterLayers(card.layer).length > 0 : false,
       flash: flashId === node.id,
       discuss: discuss?.cardId === node.id ? discuss.bind : null,
+      title: face.title,
+      body: face.body,
+      meta: face.meta,
     },
-    style: { width: node.width, height: node.height },
+    style: { width: node.width, height },
   }
 }
 

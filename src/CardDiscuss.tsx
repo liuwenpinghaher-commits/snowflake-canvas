@@ -198,7 +198,7 @@ export default function CardDiscuss({
     }
     if (ticket !== loadGen.current) return
     if (!response.ok) {
-      setNotice(payload.error || '讨论记录没有取到')
+      setNotice(payload.error || '讨论记录没有取到。再打开一次这张卡片。')
       setMessages([])
       return
     }
@@ -236,7 +236,7 @@ export default function CardDiscuss({
       }
       if (cancelled) return
       if (!response.ok || !payload.sessionId) {
-        setNotice(payload.error || '画布会话没有取到')
+        setNotice(payload.error || '画布会话没有取到。再双击这张卡片。')
         return
       }
       const list = Array.isArray(payload.sessions) ? payload.sessions : []
@@ -255,7 +255,7 @@ export default function CardDiscuss({
         }
         if (cancelled) return
         if (!selected.ok || !selectedPayload.sessionId) {
-          setNotice(selectedPayload.error || '没有切到上次的讨论')
+          setNotice(selectedPayload.error || '没有切到上次的讨论。先看当前这条。')
           await remember(payload.sessionId, list)
           return
         }
@@ -264,7 +264,7 @@ export default function CardDiscuss({
       }
       await remember(picked, list)
     })().catch(() => {
-      if (!cancelled) setNotice('画布会话没有连上')
+      if (!cancelled) setNotice('画布会话没有连上。检查本机服务后再试。')
     })
     return () => {
       cancelled = true
@@ -289,12 +289,12 @@ export default function CardDiscuss({
         error?: string
       }
       if (!response.ok || !payload.sessionId) {
-        setNotice(payload.error || '没有打开这条讨论')
+        setNotice(payload.error || '没有打开这条讨论。从历史讨论里再选一次。')
         return
       }
       await remember(payload.sessionId, payload.sessions || sessions)
     } catch {
-      setNotice('没有打开这条讨论')
+      setNotice('没有打开这条讨论。从历史讨论里再选一次。')
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -318,12 +318,12 @@ export default function CardDiscuss({
         error?: string
       }
       if (!response.ok || !payload.sessionId) {
-        setNotice(payload.error || '新讨论没有建成')
+        setNotice(payload.error || '新讨论没有建成。再点一次「新建讨论」。')
         return
       }
       await remember(payload.sessionId, payload.sessions || [])
     } catch {
-      setNotice('画布会话没有连上')
+      setNotice('画布会话没有连上。检查本机服务后再试。')
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -469,7 +469,7 @@ export default function CardDiscuss({
       await navigator.clipboard.writeText(text)
       setCopiedAt(index)
     } catch {
-      setNotice('没有复制上')
+      setNotice('没有复制上。再点一次「复制」。')
     }
   }
 
@@ -483,7 +483,7 @@ export default function CardDiscuss({
       setMessages((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, adopted: true } : item)))
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
-      setNotice(message || '正文没有写上')
+      setNotice(message || '正文没有写上。再点一次「采纳进本念头」。')
     }
   }
 
@@ -509,6 +509,9 @@ export default function CardDiscuss({
         </label>
         <button type="button" disabled={busy} onClick={() => void createSession()}>
           新建讨论
+        </button>
+        <button type="button" onClick={() => onClose()}>
+          关闭
         </button>
       </div>
       <div className="discuss-chat" aria-label="讨论记录" ref={chatRef} onScroll={onChatScroll}>
@@ -539,7 +542,7 @@ export default function CardDiscuss({
                 <div className="bubble-meta">
                   <span className="who">{mine ? '我' : 'AI'}</span>
                   {time ? (
-                    <time className="stamp" dateTime={item.at}>
+                    <time className="stamp" dateTime={item.at} title={time.full}>
                       <span className="stamp-short">{time.short}</span>
                       <span className="stamp-full">{time.full}</span>
                     </time>
@@ -576,12 +579,13 @@ export default function CardDiscuss({
         ) : null}
       </div>
       <div className="discuss-compose">
+        <p className="compose-hint">Enter 发送，Shift+Enter 换行</p>
         <textarea
           aria-label="讨论内容"
           value={draft}
           disabled={busy}
           rows={3}
-          placeholder="输入讨论，Enter 发送，Shift+Enter 换行"
+          placeholder="接着这张念头写一句"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onDraftKey}
         />
