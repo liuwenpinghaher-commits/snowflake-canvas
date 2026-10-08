@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import DiscussPanel from './DiscussPanel.tsx'
+import CardDiscuss from './CardDiscuss.tsx'
 import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
@@ -22,6 +22,7 @@ import {
   deleteSelection,
   linkCards,
   moveNode,
+  setCardBody,
   spawnChild,
   type Layer,
 } from './document.ts'
@@ -38,6 +39,7 @@ export default function App() {
   const [dialog, setDialog] = useState<SaveDialog | null>(null)
   const [snapName, setSnapName] = useState('')
   const ctlRef = useRef<PersistController | null>(null)
+  const [discuss, setDiscuss] = useState<{ cardId: string; left: number; top: number; right: number } | null>(null)
 
   useEffect(() => {
     const ctl = createPersistController(
@@ -98,7 +100,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <h1>雪花画布</h1>
-        <p>空白处双击放一张念头。从卡片右边拖出去，长出后面的层。</p>
+        <p>空白处双击放一张念头。双击卡片，在旁边讨论。从卡片右边拖出去，长出后面的层。</p>
         <div className="top-actions">
           {view.needChoice && !view.fileProtocol ? (
             <button type="button" onClick={() => void ctlRef.current?.selectDirectory()}>
@@ -217,7 +219,6 @@ export default function App() {
           </p>
         ))}
       </header>
-      <DiscussPanel />
       <div className="workspace">
         <ReactFlowProvider>
           <FlowCanvas
@@ -242,6 +243,7 @@ export default function App() {
               if (!canEdit) return
               void ctlRef.current?.mutate((current) => createCard(current, { layer: 'situation', x, y, body: '' }))
             }}
+            onOpenDiscuss={(cardId, anchor) => setDiscuss({ cardId, ...anchor })}
           />
         </ReactFlowProvider>
         <SideEditor
@@ -267,6 +269,17 @@ export default function App() {
           onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
         />
       </div>
+      {discuss && state.snowflake.cards[discuss.cardId] ? (
+        <CardDiscuss
+          cardId={discuss.cardId}
+          cardBody={state.snowflake.cards[discuss.cardId].body}
+          anchor={discuss}
+          onClose={() => setDiscuss(null)}
+          onCommitBody={(cardId, text) =>
+            ctlRef.current?.mutate((current) => setCardBody(current, cardId, text)) ?? Promise.resolve()
+          }
+        />
+      ) : null}
       {dialog ? (
         <div className="modal-back" role="presentation">
           <div className="modal" role="dialog" aria-label={dialog.title}>

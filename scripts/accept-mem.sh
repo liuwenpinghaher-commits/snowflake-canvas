@@ -10,6 +10,7 @@ python3 - << 'PY'
 import hashlib, http.client, json, os, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = os.environ["ROOT"]
 HOST = "127.0.0.1"
@@ -42,6 +43,31 @@ def load_key():
 
 KEY = load_key()
 CURRENT = "A"
+DISCUSS = {"card": "", "session": ""}
+
+def situation_target(document):
+    cards = document.get("snowflake", {}).get("cards", {})
+    nodes = document.get("canvas", {}).get("nodes", [])
+    edges = document.get("canvas", {}).get("edges", [])
+    incoming = {edge.get("toNode") for edge in edges if isinstance(edge, dict) and edge.get("toNode")}
+    ordered = []
+    seen = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        ordered.append(node_id)
+    for card_id in cards:
+        if card_id not in seen:
+            ordered.append(card_id)
+    situations = [card_id for card_id in ordered if isinstance(cards.get(card_id), dict) and cards[card_id].get("layer") == "situation"]
+    roots = [card_id for card_id in situations if card_id not in incoming]
+    if roots:
+        return roots[0]
+    return situations[0] if situations else ""
 
 def redact(text):
     if KEY and KEY in text:
@@ -204,7 +230,10 @@ def clause_b():
 
 def read_stream(message, deadline_s):
     conn = http.client.HTTPConnection(HOST, PORT, timeout=deadline_s + 30)
-    body = json.dumps({"message": message}, ensure_ascii=False).encode()
+    body = json.dumps(
+        {"message": message, "cardId": DISCUSS["card"], "sessionId": DISCUSS["session"]},
+        ensure_ascii=False,
+    ).encode()
     started = time.time()
     conn.request(
         "POST",
@@ -343,12 +372,13 @@ def clause_d(session_before):
     payload = json_body(raw)
     if status != 200 or payload["version"] != version or headers.get("etag") != etag:
         fail("D", f"拉起后版本变化：{version}/{etag} -> {payload.get('version')}/{headers.get('etag')}")
-    status, _, raw = request("GET", "/api/discuss/session")
+    status, _, raw = request("GET", "/api/discuss/session?cardId=" + quote(DISCUSS["card"]))
     session = json_body(raw).get("sessionId", "")
     if status != 200 or session != session_before:
         fail("D", "拉起后会话号变了，不能把新建会话当成原来那条")
-    disk_session = json.loads(SESSION_FILE.read_text(encoding="utf-8"))["sessionId"]
-    if disk_session != session_before:
+    disk = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+    disk_sessions = disk.get("cards", {}).get(DISCUSS["card"], {}).get("sessions", [])
+    if not any(item.get("sessionId") == session_before and item.get("cardId") == DISCUSS["card"] for item in disk_sessions):
         fail("D", "磁盘上的会话号文件变了")
     result = read_stream("只回复一个字：在。不要调用工具。", 70)
     if result["status"] != 200 or "run.started" not in result["body"]:
@@ -501,10 +531,20 @@ def main():
     health()
     clause_a()
     clause_b()
-    status, _, raw = request("GET", "/api/discuss/session", timeout=60)
+    status, _, raw = request("GET", "/api/canvas")
     if status != 200:
-        fail("C", f"取会话返回 {status}")
-    session_id = json_body(raw)["sessionId"]
+        fail("C", f"取画布返回 {status}")
+    DISCUSS["card"] = situation_target(json_body(raw)["document"])
+    if not DISCUSS["card"]:
+        fail("C", "文档里没有念头卡，讨论接口不能没有 cardId")
+    status, _, raw = request("GET", "/api/discuss/session?cardId=" + quote(DISCUSS["card"]), timeout=60)
+    if status != 200:
+        fail("C", f"取会话返回 {status} {raw[:180]!r}")
+    session_payload = json_body(raw)
+    session_id = session_payload.get("sessionId") or ""
+    if session_payload.get("cardId") != DISCUSS["card"] or not session_id:
+        fail("C", "会话没有挂在这张念头卡上")
+    DISCUSS["session"] = session_id
     short = clause_c_short()
     clause_c_long()
     clause_d(session_id)
@@ -539,9 +579,25 @@ if [ "$page_code" != "200" ] || ! grep -q "/xuehua/" /tmp/accept-mem-page.html; 
   echo "/xuehua/ 没有打开，HTTP ${page_code}"
   exit 1
 fi
+# 右侧固定「画布讨论」不再作为通过条件。429 提示语仍要在构建产物里，新浮窗文案也要在。
 if ! grep -q "讨论忙，网关同时最多 10 路" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
   echo "FAIL H"
   echo "构建产物里没有 429 退避提示"
+  exit 1
+fi
+if ! grep -q "历史讨论" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+  echo "FAIL H"
+  echo "构建产物里没有历史讨论"
+  exit 1
+fi
+if ! grep -q "采纳进本念头正文" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+  echo "FAIL H"
+  echo "构建产物里没有采纳进本念头正文"
+  exit 1
+fi
+if ! grep -q "data-discuss-popover" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+  echo "FAIL H"
+  echo "构建产物里没有浮窗挂载点"
   exit 1
 fi
 loop_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8093/__snowflake/expand -H 'Content-Type: application/json' --data '{}')"

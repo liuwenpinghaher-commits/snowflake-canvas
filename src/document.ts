@@ -426,6 +426,27 @@ export function commitCardText(
   }
 }
 
+export function setCardBody(state: AppState, cardId: string, body: string): AppState {
+  const current = state.snowflake.cards[cardId]
+  if (!current || current.body === body) return state
+  const card: Card =
+    current.layer === '一句话'
+      ? { layer: '一句话', body, fields: { ...current.fields, sentence: body } }
+      : { ...current, body }
+  const front = frontText(card)
+  return {
+    ...state,
+    canvas: {
+      ...state.canvas,
+      nodes: state.canvas.nodes.map((node) => (node.id === cardId ? { ...node, text: front } : node)),
+    },
+    snowflake: {
+      ...state.snowflake,
+      cards: { ...state.snowflake.cards, [cardId]: card },
+    },
+  }
+}
+
 export function applyComposition(
   state: AppState,
   session: ComposeSession,

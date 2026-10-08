@@ -75,6 +75,7 @@ export default function FlowCanvas({
   onSpawn,
   onLink,
   onCreateAt,
+  onOpenDiscuss,
 }: {
   nodes: CanvasNode[]
   edges: CanvasEdge[]
@@ -85,6 +86,7 @@ export default function FlowCanvas({
   onSpawn: (fromId: string, x: number, y: number) => void
   onLink: (fromId: string, toId: string) => void
   onCreateAt: (x: number, y: number) => void
+  onOpenDiscuss: (cardId: string, anchor: { left: number; top: number; right: number }) => void
 }) {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const lastPaneClick = useRef(0)
@@ -135,6 +137,20 @@ export default function FlowCanvas({
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={(_, node) => onSelect(node.id)}
+        onNodeDoubleClick={(event, node) => {
+          if (node.type !== 'snowCard') return
+          event.preventDefault()
+          const point = 'clientX' in event ? event : null
+          const host = point?.target instanceof Element ? point.target.closest('.react-flow__node') : null
+          const rect = host?.getBoundingClientRect()
+          const clientX = point && 'clientX' in point ? point.clientX : 0
+          const clientY = point && 'clientY' in point ? point.clientY : 0
+          onOpenDiscuss(node.id, {
+            left: rect ? rect.left : clientX,
+            right: rect ? rect.right : clientX,
+            top: rect ? rect.top : clientY,
+          })
+        }}
         onConnect={(connection) => {
           if (!connection.source || !connection.target) return
           onLink(connection.source, connection.target)

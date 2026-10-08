@@ -7,6 +7,19 @@ import { fileURLToPath } from 'node:url'
 import { Agent, fetch as undiciFetch } from 'undici'
 import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
+import {
+  activeSessionId,
+  isLegacyRecord,
+  knownSessionIds,
+  mergeStores,
+  normalizeStore,
+  publicSessions,
+  sessionOwned,
+  situationTarget,
+  storeFromLegacy,
+  withLast,
+  withSession,
+} from './discuss-store.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
@@ -15,6 +28,7 @@ const canonicalPath = join(dataDir, 'snowflake.json')
 const canonicalTempPath = join(dataDir, '.snowflake.json.tmp')
 const keepTempPath = join(dataDir, '.snowflake.keep.tmp')
 const sessionPath = join(dataDir, 'session.json')
+const sessionBackupPath = join(dataDir, 'session.json.bak')
 const configPath = join(dataDir, 'config.json')
 const gbrainFailFlag = join(dataDir, 'gbrain-force-fail')
 
@@ -213,74 +227,212 @@ async function gatewayFetch(path, options = {}) {
   }
 }
 
-async function readSessionFile() {
+function httpError(statusCode, message) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  return error
+}
+
+function textField(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+let legacyHeld = null
+
+async function readSessionRaw() {
   try {
-    const value = await readJson(sessionPath)
-    if (value && typeof value.sessionId === 'string' && value.sessionId.trim()) {
-      return value.sessionId.trim()
-    }
-  } catch {
-    // 还没有会话文件。
-  }
-  return ''
-}
-
-async function writeSessionFile(sessionId) {
-  const text = JSON.stringify({ sessionId, title: DISCUSS_TITLE })
-  const temp = join(dataDir, '.session.json.tmp')
-  await writeExact(temp, text)
-  const back = await readJson(temp)
-  if (back.sessionId !== sessionId) {
-    await rm(temp, { force: true })
-    throw new Error('会话号临时文件校验失败')
-  }
-  await rename(temp, sessionPath)
-}
-
-function sessionIdFromTitleError(text) {
-  const matched = String(text).match(/session\s+([A-Za-z0-9_-]+)/)
-  return matched?.[1] || ''
-}
-
-async function ensureDiscussSession() {
-  return exclusiveSession(() => ensureDiscussSessionInner())
-}
-
-async function ensureDiscussSessionInner() {
-  const key = readEnv('API_SERVER_KEY')
-  if (!key) {
-    const error = new Error('API_SERVER_KEY 未注入')
-    error.statusCode = 503
+    return await readJson(sessionPath)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null
     throw error
   }
-  const existing = await readSessionFile()
-  if (existing) {
-    const check = await gatewayFetch(`/api/sessions/${encodeURIComponent(existing)}`, { method: 'GET' })
-    if (check.ok) return existing
-    if (check.status !== 404) {
-      const error = new Error('网关会话查询失败')
-      error.statusCode = 502
-      throw error
+}
+
+function backupLooksComplete(bytes) {
+  try {
+    const value = JSON.parse(Buffer.from(bytes).toString('utf8'))
+    if (isLegacyRecord(value)) return true
+    if (value && value.cards && typeof value.cards === 'object') return true
+  } catch {
+    return false
+  }
+  return false
+}
+
+async function backupLegacyOnce(original) {
+  let existing = null
+  try {
+    existing = await readFile(sessionBackupPath)
+  } catch {
+    existing = null
+  }
+  if (existing && existing.equals(original)) return
+  if (existing && backupLooksComplete(existing)) return
+  const handle = await open(sessionBackupPath, 'w', 0o600)
+  try {
+    await handle.writeFile(original)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  const back = await readFile(sessionBackupPath)
+  if (!back.equals(original)) {
+    await rm(sessionBackupPath, { force: true })
+    throw new Error('会话备份校验失败')
+  }
+}
+
+async function writeSessionStore(store, mustKeep) {
+  const normalized = normalizeStore(store)
+  const text = JSON.stringify(normalized)
+  const temp = join(dataDir, '.session.json.tmp')
+  await writeExact(temp, text)
+  let back
+  try {
+    back = normalizeStore(await readJson(temp))
+  } catch (error) {
+    await rm(temp, { force: true })
+    throw error
+  }
+  const expected = new Set(knownSessionIds(normalized))
+  const got = new Set(knownSessionIds(back))
+  const same = expected.size === got.size && [...expected].every((id) => got.has(id))
+  const kept = mustKeep.every((id) => got.has(id))
+  if (!same || !kept) {
+    await rm(temp, { force: true })
+    throw new Error('会话文件校验失败')
+  }
+  await rename(temp, sessionPath)
+  legacyHeld = null
+  return back
+}
+
+async function loadDiscussStoreInner() {
+  const record = await exclusive(() => readCanonical())
+  const raw = await readSessionRaw()
+  if (!raw) {
+    legacyHeld = null
+    return { cards: {} }
+  }
+  if (!isLegacyRecord(raw)) {
+    legacyHeld = null
+    return normalizeStore(raw)
+  }
+  const legacy = {
+    sessionId: raw.sessionId.trim(),
+    title: typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : DISCUSS_TITLE,
+  }
+  const target = situationTarget(record.document)
+  if (!target) {
+    legacyHeld = legacy
+    return { cards: {} }
+  }
+  const original = await readFile(sessionPath)
+  await backupLegacyOnce(original)
+  const store = storeFromLegacy(legacy, target, new Date().toISOString())
+  return writeSessionStore(store, [legacy.sessionId])
+}
+
+async function saveDiscussStore(store) {
+  if (legacyHeld) {
+    const record = await exclusive(() => readCanonical())
+    const target = situationTarget(record.document)
+    if (!target) {
+      throw httpError(409, '还没有念头卡，原来的讨论先留在原文件里')
+    }
+    const original = await readFile(sessionPath)
+    await backupLegacyOnce(original)
+    const migrated = storeFromLegacy(legacyHeld, target, new Date().toISOString())
+    return writeSessionStore(mergeStores(migrated, store), [legacyHeld.sessionId])
+  }
+  return writeSessionStore(store, [])
+}
+
+async function createGatewaySession(cardId, store) {
+  const key = readEnv('API_SERVER_KEY')
+  if (!key) throw httpError(503, 'API_SERVER_KEY 未注入')
+  const used = new Set(knownSessionIds(store))
+  let lastStatus = 502
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const createdAt = new Date().toISOString()
+    const nonce = Math.random().toString(36).slice(2, 8)
+    const title = `念头讨论 ${createdAt} ${nonce}`
+    const created = await gatewayFetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ title, system_prompt: DISCUSS_INSTRUCTIONS }),
+    })
+    const payload = await created.json().catch(() => ({}))
+    lastStatus = created.status
+    if (created.status === 201 && payload.session && typeof payload.session.id === 'string') {
+      const sessionId = payload.session.id.trim()
+      if (sessionId && !used.has(sessionId)) {
+        return { sessionId, title, createdAt, cardId }
+      }
     }
   }
-  const created = await gatewayFetch('/api/sessions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ title: DISCUSS_TITLE, system_prompt: DISCUSS_INSTRUCTIONS }),
+  throw httpError(lastStatus === 503 ? 503 : 502, '画布会话没有建成')
+}
+
+async function ensureCardSession(cardId) {
+  if (!cardId) throw httpError(400, '缺少 cardId')
+  return exclusiveSession(async () => {
+    let store = await loadDiscussStoreInner()
+    const existing = activeSessionId(store, cardId)
+    if (existing) return { store, sessionId: existing }
+    const created = await createGatewaySession(cardId, store)
+    store = await saveDiscussStore(withSession(store, cardId, created))
+    return { store, sessionId: created.sessionId }
   })
-  const payload = await created.json().catch(() => ({}))
-  if (created.status === 201 && payload.session && typeof payload.session.id === 'string') {
-    await writeSessionFile(payload.session.id)
-    return payload.session.id
-  }
-  const reused = sessionIdFromTitleError(JSON.stringify(payload))
-  if (reused) {
-    await writeSessionFile(reused)
-    return reused
-  }
-  const error = new Error('画布会话没有建成')
-  error.statusCode = 502
-  throw error
+}
+
+async function createCardSession(cardId) {
+  if (!cardId) throw httpError(400, '缺少 cardId')
+  return exclusiveSession(async () => {
+    const store = await loadDiscussStoreInner()
+    const created = await createGatewaySession(cardId, store)
+    const saved = await saveDiscussStore(withSession(store, cardId, created))
+    return { store: saved, sessionId: created.sessionId }
+  })
+}
+
+async function selectCardSession(cardId, sessionId) {
+  if (!cardId) throw httpError(400, '缺少 cardId')
+  if (!sessionId) throw httpError(400, 'cardId 对不上该会话')
+  return exclusiveSession(async () => {
+    const store = await loadDiscussStoreInner()
+    if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
+    const saved = await saveDiscussStore(withLast(store, cardId, sessionId))
+    return { store: saved, sessionId }
+  })
+}
+
+async function assertOwned(cardId, sessionId, touch) {
+  if (!cardId) throw httpError(400, '缺少 cardId')
+  if (!sessionId) throw httpError(400, 'cardId 对不上该会话')
+  return exclusiveSession(async () => {
+    const store = await loadDiscussStoreInner()
+    if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
+    if (!touch) return store
+    return saveDiscussStore(withLast(store, cardId, sessionId))
+  })
+}
+
+function messageText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      if (part && typeof part === 'object' && typeof part.text === 'string') return part.text
+      return ''
+    })
+    .join('')
+}
+
+function discussFailure(reply, error, fallback) {
+  reply.code(error && error.statusCode ? error.statusCode : 502)
+  return reply.send({ error: error instanceof Error ? error.message : fallback })
 }
 
 function gbrainDisabled() {
@@ -556,13 +708,63 @@ function registerApi(app, prefix) {
 
   app.get(`${prefix}/api/health`, async () => ({ ok: true }))
 
-  app.get(`${prefix}/api/discuss/session`, async (_request, reply) => {
+  app.get(`${prefix}/api/discuss/session`, async (request, reply) => {
+    const cardId = textField(request.query?.cardId)
+    if (!cardId) {
+      reply.code(400)
+      return reply.send({ error: '缺少 cardId' })
+    }
     try {
-      const sessionId = await ensureDiscussSession()
-      return reply.send({ sessionId, title: DISCUSS_TITLE })
+      const { store, sessionId } = await ensureCardSession(cardId)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ cardId, sessionId, sessions: publicSessions(store, cardId) })
     } catch (error) {
-      reply.code(error && error.statusCode ? error.statusCode : 502)
-      return reply.send({ error: error instanceof Error ? error.message : '画布会话没有建成' })
+      return discussFailure(reply, error, '画布会话没有建成')
+    }
+  })
+
+  app.post(`${prefix}/api/discuss/session`, async (request, reply) => {
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const cardId = textField(body.cardId)
+    const sessionId = textField(body.sessionId)
+    if (!cardId) {
+      reply.code(400)
+      return reply.send({ error: '缺少 cardId' })
+    }
+    try {
+      const result = sessionId ? await selectCardSession(cardId, sessionId) : await createCardSession(cardId)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ cardId, sessionId: result.sessionId, sessions: publicSessions(result.store, cardId) })
+    } catch (error) {
+      return discussFailure(reply, error, '画布会话没有建成')
+    }
+  })
+
+  app.get(`${prefix}/api/discuss/messages`, async (request, reply) => {
+    const cardId = textField(request.query?.cardId)
+    const sessionId = textField(request.query?.sessionId)
+    try {
+      await assertOwned(cardId, sessionId, false)
+      const upstream = await gatewayFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=80&order=oldest`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+      )
+      const payload = await upstream.json().catch(() => ({}))
+      if (!upstream.ok) {
+        reply.code(502)
+        return reply.send({ error: '讨论记录没有取到' })
+      }
+      const messages = []
+      for (const item of Array.isArray(payload.messages) ? payload.messages : []) {
+        if (!item || (item.role !== 'user' && item.role !== 'assistant')) continue
+        const content = messageText(item.content).trim()
+        if (!content) continue
+        messages.push({ role: item.role, content })
+      }
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ cardId, sessionId, messages })
+    } catch (error) {
+      return discussFailure(reply, error, '讨论记录没有取到')
     }
   })
 
@@ -572,16 +774,22 @@ function registerApi(app, prefix) {
     const raw = reply.raw
     raw.setTimeout(0)
     if (raw.socket && typeof raw.socket.setNoDelay === 'function') raw.socket.setNoDelay(true)
-    const message = request.body && typeof request.body.message === 'string' ? request.body.message.trim() : ''
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const message = textField(body.message)
+    const cardId = textField(body.cardId)
+    const sessionId = textField(body.sessionId)
     if (!message) {
       failRaw(raw, 400, '缺少讨论内容')
       return
     }
-    let sessionId
+    if (!cardId) {
+      failRaw(raw, 400, '缺少 cardId')
+      return
+    }
     try {
-      sessionId = await ensureDiscussSession()
+      await assertOwned(cardId, sessionId, true)
     } catch (error) {
-      failRaw(raw, error && error.statusCode ? error.statusCode : 502, error instanceof Error ? error.message : '画布会话没有建成')
+      failRaw(raw, error && error.statusCode ? error.statusCode : 400, error instanceof Error ? error.message : 'cardId 对不上该会话')
       return
     }
     let upstream
@@ -599,6 +807,13 @@ function registerApi(app, prefix) {
   })
 
   app.get(`${prefix}/api/discuss/runs/:runId`, async (request, reply) => {
+    const cardId = textField(request.query?.cardId)
+    const sessionId = textField(request.query?.sessionId)
+    try {
+      await assertOwned(cardId, sessionId, false)
+    } catch (error) {
+      return discussFailure(reply, error, 'cardId 对不上该会话')
+    }
     const runId = request.params.runId
     const upstream = await gatewayFetch(`/v1/runs/${encodeURIComponent(runId)}`, {
       method: 'GET',
@@ -611,6 +826,13 @@ function registerApi(app, prefix) {
   })
 
   app.post(`${prefix}/api/discuss/runs/:runId/stop`, async (request, reply) => {
+    const cardId = textField(request.query?.cardId)
+    const sessionId = textField(request.query?.sessionId)
+    try {
+      await assertOwned(cardId, sessionId, false)
+    } catch (error) {
+      return discussFailure(reply, error, 'cardId 对不上该会话')
+    }
     const runId = request.params.runId
     const upstream = await gatewayFetch(`/v1/runs/${encodeURIComponent(runId)}/stop`, {
       method: 'POST',

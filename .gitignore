@@ -43,3 +43,6 @@ REWORK_DONE
 
 # 记忆集成完工哨兵，不进版本库
 MEM集成_DONE
+
+# 卡片讨论浮窗完工哨兵，不进版本库
+.sentinel-t_d18ec222
