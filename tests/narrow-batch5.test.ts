@@ -55,17 +55,18 @@ function functionBody(source: string, name: string): string {
 }
 
 describe('窄屏画布不再被钉成 160px', () => {
-  it('max-width 760px 下画布高度跟窗口走，最低高度大于 240px', () => {
+  it('max-width 760px 下画布保持扣除顶栏后的全部高度，抽屉从右边盖上来', () => {
     const narrow = mediaBlock(read('src/index.css'), '(max-width: 760px)')
     const canvas = ruleBody(narrow, '.canvas-wrap')
     expect(canvas).not.toMatch(/160px/)
-    expect(canvas).toMatch(/height:\s*\d+d?vh/)
-    const vh = Number(/height:\s*(\d+)d?vh/.exec(canvas)![1])
-    expect(vh).toBeGreaterThanOrEqual(50)
-    // 320×720 时：55vh = 396px，且 min-height 兜底也要大于 240px。
-    expect((720 * vh) / 100).toBeGreaterThan(240)
-    const min = Number(/min-height:\s*(\d+)px/.exec(canvas)![1])
-    expect(min).toBeGreaterThan(240)
+    expect(canvas).not.toMatch(/55vh|55dvh/)
+    expect(canvas).toMatch(/height:\s*100%/)
+    expect(canvas).toMatch(/min-height:\s*0/)
+    const overlay = ruleBody(narrow, '.side-stack')
+    expect(overlay).toContain('position: absolute')
+    expect(overlay).toContain('right: 0')
+    expect(overlay).toMatch(/width:\s*min\(380px,\s*100%\)/)
+    expect(overlay).toContain('bottom: 0')
   })
 
   it('打开页面卡片量好尺寸后自动看一次全稿，只看一次', () => {
@@ -78,38 +79,43 @@ describe('窄屏画布不再被钉成 160px', () => {
   })
 })
 
-describe('讨论浮窗不在卡片节点里，不跟画布缩放', () => {
+describe('讨论在右侧抽屉里，不再贴着卡片', () => {
   const flow = read('src/FlowCanvas.tsx')
+  const app = read('src/App.tsx')
+  const css = read('src/index.css')
 
-  it('SnowCard 里没有 DiscussDock，节点数据里也不再带讨论', () => {
+  it('SnowCard 里没有讨论浮窗，节点数据里也不再带讨论', () => {
     const card = functionBody(flow, 'SnowCard')
     expect(card).not.toContain('DiscussDock')
     expect(card).not.toContain('data.discuss')
+    expect(flow).not.toContain('DiscussDock')
+    expect(flow).not.toContain('createPortal')
   })
 
-  it('DiscussDock 用 portal 挂到 document.body，按屏幕坐标摆放，放在 <ReactFlow> 外层', () => {
-    const dock = functionBody(flow, 'DiscussDock')
-    expect(flow).toContain("import { createPortal } from 'react-dom'")
-    expect(dock).toMatch(/createPortal\([\s\S]*document\.body,\s*\)/)
-    expect(dock).toContain('getBoundingClientRect()')
-    expect(dock).not.toContain('closest(')
-    const closeFlow = flow.lastIndexOf('</ReactFlow>')
-    const mount = flow.indexOf('<DiscussDock')
-    expect(mount).toBeGreaterThan(closeFlow)
+  it('双击卡片不再把讨论挂到 document.body，讨论渲染在抽屉里', () => {
+    expect(flow).not.toContain("from 'react-dom'")
+    const dbl = flow.slice(flow.indexOf('onNodeDoubleClick'), flow.indexOf('onConnect='))
+    expect(dbl).not.toContain('onOpenDiscuss')
+    expect(dbl).toContain('preventDefault()')
+    expect(app).toContain('<CardDiscuss')
+    expect(app).toContain('className="discuss-dock"')
+    expect(app).toContain('aria-label={`讨论：${discussName}`}')
+    expect(app).toContain('state.activeId !== dismissedId')
+    const dock = ruleBody(css, '.discuss-dock')
+    expect(dock).not.toContain('position: absolute')
+    expect(dock).not.toContain('position: fixed')
+    expect(dock).toContain('flex: 1 1 auto')
+    expect(css).not.toContain('discuss-sheet')
   })
 
-  it('窄屏改成贴在视口下半屏、宽度不超过视口的面板', () => {
-    const dock = functionBody(flow, 'DiscussDock')
-    expect(flow).toContain("NARROW_QUERY = '(max-width: 760px)'")
-    expect(dock).toContain("narrow ? 'discuss-sheet' : ''")
-    const css = read('src/index.css')
-    const sheet = ruleBody(css, '.discuss-dock.discuss-sheet')
-    expect(sheet).toContain('position: fixed')
-    expect(sheet).toMatch(/left: 0;[\s\S]*right: 0;[\s\S]*bottom: 0;/)
-    expect(sheet).toContain('max-width: 100vw')
-    const base = ruleBody(css, '.discuss-dock')
-    expect(base).toContain('position: absolute')
-    expect(base).toContain('width: min(380px, calc(100vw - 16px))')
+  it('窄屏抽屉盖住画布，并且顶上有关闭按钮', () => {
+    const narrow = mediaBlock(css, '(max-width: 760px)')
+    const overlay = ruleBody(narrow, '.side-stack')
+    expect(overlay).toContain('position: absolute')
+    expect(overlay).toContain('side-drawer-in')
+    expect(css).toContain('translateX(100%)')
+    expect(app).toContain('关闭')
+    expect(app).toContain('closeDrawer')
   })
 })
 

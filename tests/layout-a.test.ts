@@ -1,0 +1,177 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import {
+  BODY_LINE_CAP,
+  COLUMN_GAP,
+  discussCardName,
+  estimateSnowCardHeight,
+  shiftOverlappingCards,
+  type ShiftBox,
+} from '../src/card-layout.ts'
+
+const root = process.cwd()
+const read = (path: string) => readFileSync(join(root, path), 'utf8')
+
+function card(partial: Partial<ShiftBox> & Pick<ShiftBox, 'id' | 'x' | 'y' | 'height' | 'prevHeight'>): ShiftBox {
+  return {
+    width: 280,
+    kind: 'card',
+    ...partial,
+  }
+}
+
+describe('卡片正文按 12 行封顶', () => {
+  it('常量是 12 行，样式不再 line-clamp，正文超出后在卡片内滚动', () => {
+    expect(BODY_LINE_CAP).toBe(12)
+    const css = read('src/index.css')
+    expect(css).not.toContain('line-clamp')
+    expect(css).not.toContain('max-height: 160px')
+    const body = css.slice(css.indexOf('.snow-body {'), css.indexOf('}', css.indexOf('.snow-body {')))
+    expect(body).toContain('max-height: calc(1.5em * 12)')
+    expect(body).toContain('overflow-y: auto')
+    const title = css.slice(css.indexOf('.snow-title {'), css.indexOf('}', css.indexOf('.snow-title {')))
+    expect(title).not.toContain('overflow: hidden')
+  })
+
+  it('20 行正文和 12 行估出来一样高，2 行更矮', () => {
+    const line = '一二三四五六七八九十'
+    const body = (n: number) => Array.from({ length: n }, () => line).join('\n')
+    const input = (n: number) => ({ title: '标题', body: body(n), meta: '', width: 280 })
+    const h2 = estimateSnowCardHeight(input(2))
+    const h12 = estimateSnowCardHeight(input(12))
+    const h20 = estimateSnowCardHeight(input(20))
+    expect(h20).toBe(h12)
+    expect(h2).toBeLessThan(h12)
+  })
+
+  it('节点高度跟着内容走，分组尺寸不走这套算法', () => {
+    const flow = read('src/FlowCanvas.tsx')
+    const fn = flow.slice(flow.indexOf('function toFlowNode('), flow.indexOf('\nexport default function'))
+    expect(fn).not.toContain('176')
+    expect(fn).toContain('estimateSnowCardHeight(')
+    const groupBranch = fn.slice(fn.indexOf("node.type === 'group'"), fn.indexOf('const face'))
+    expect(groupBranch).toContain('height: node.height')
+    expect(read('src/document.ts')).toContain('const TEXT_HEIGHT = 120')
+  })
+})
+
+describe('讨论标题用卡片标题，没有标题就用层名', () => {
+  it('有标题用标题，空白标题退回层名', () => {
+    expect(discussCardName('门口的人', '念头')).toBe('门口的人')
+    expect(discussCardName('  ', '念头')).toBe('念头')
+    expect(discussCardName('', '人物表')).toBe('人物表')
+  })
+})
+
+describe('顶栏只留常用按钮，其余进更多', () => {
+  const app = read('src/App.tsx')
+  const resident = app.slice(app.indexOf('className="top-actions"'), app.indexOf('<MoreMenu>'))
+  const menu = app.slice(app.indexOf('<MoreMenu>'), app.indexOf('</MoreMenu>'))
+  const moreFn = app.slice(app.indexOf('function MoreMenu'), app.indexOf('export default function App'))
+
+  it('顶栏一行：当前书、书籍、字数、保存状态、正本状态、新建念头；新建书和留下这一版进更多', () => {
+    const bar = app.slice(app.indexOf('<header className="topbar">'), app.indexOf('<MoreMenu>'))
+    expect(bar).toContain('aria-label="当前书"')
+    expect(bar).toContain('书籍')
+    expect(bar).toContain('className="top-words"')
+    expect(bar).toContain('保存状态')
+    expect(bar).toContain('正本状态')
+    expect(resident).toContain('新建念头')
+    expect(bar).not.toContain('<h1>')
+    expect(bar).not.toContain('top-hint')
+    expect(resident).not.toContain('MSG_KEEP_SNAPSHOT')
+    expect(resident).not.toContain('新建分组')
+    expect(resident).not.toContain('回退到这一版')
+    expect(resident).not.toContain('撤销')
+    expect(resident).not.toContain('选择正本')
+    expect(menu).toContain('MSG_KEEP_SNAPSHOT')
+    expect(menu).toContain('新建书')
+    expect(menu).toContain('书籍管理')
+    expect(menu).toContain('版本 ${version}')
+  })
+
+  it('更多里仍有分组、删除、快照、回退、撤销和条件按钮，键盘能开关', () => {
+    for (const label of [
+      '新建分组',
+      '删除',
+      '撤销',
+      '选择一份快照',
+      '回退到这一版',
+      '选择正本',
+      '允许读写',
+      '改由本页写入',
+      '打开正本',
+      '选快照回退',
+    ]) {
+      expect(menu).toContain(label)
+    }
+    expect(moreFn).toContain("event.key !== 'ArrowDown'")
+    expect(moreFn).toContain("event.key !== 'Escape'")
+    expect(moreFn).toContain("addEventListener('pointerdown'")
+    expect(menu).toContain('disabled={!canEdit || !state.activeId}')
+    expect(menu).toContain('disabled={!canEdit || !view.canUndo}')
+    expect(menu).toContain('disabled={!canEdit || snapName.length === 0}')
+  })
+})
+
+describe('同列卡片变高后，被挡住的往下让', () => {
+  it('新的重叠下移重叠高度再加 16，原来就叠着的不动', () => {
+    expect(COLUMN_GAP).toBe(16)
+    const pushed = shiftOverlappingCards([
+      card({ id: 'a', x: 0, y: 0, height: 180, prevHeight: 100 }),
+      card({ id: 'b', x: 0, y: 150, height: 100, prevHeight: 100 }),
+    ])
+    expect(pushed).toEqual([{ id: 'b', x: 0, y: 150 + 30 + COLUMN_GAP }])
+
+    const already = shiftOverlappingCards([
+      card({ id: 'a', x: 0, y: 0, height: 180, prevHeight: 160 }),
+      card({ id: 'b', x: 0, y: 80, height: 40, prevHeight: 40 }),
+    ])
+    expect(already).toEqual([])
+  })
+
+  it('从上往下连带下移，分组框留在原地，正在拖的那张不改 y', () => {
+    const boxes: ShiftBox[] = [
+      card({ id: 'a', x: 0, y: 0, height: 200, prevHeight: 80 }),
+      card({ id: 'b', x: 0, y: 100, height: 40, prevHeight: 40 }),
+      card({ id: 'c', x: 0, y: 150, height: 40, prevHeight: 40 }),
+      { id: 'g', x: 0, y: 0, width: 400, height: 300, prevHeight: 300, kind: 'group' },
+    ]
+    const moves = shiftOverlappingCards(boxes, 'b')
+    expect(moves.find((item) => item.id === 'b')).toBeUndefined()
+    expect(moves.find((item) => item.id === 'g')).toBeUndefined()
+    expect(moves.find((item) => item.id === 'a')).toBeUndefined()
+    const c = moves.find((item) => item.id === 'c')
+    expect(c).toBeDefined()
+    expect(c!.y).toBeGreaterThan(150)
+    expect(c!.y).toBe(200 + COLUMN_GAP)
+
+    const cascade = shiftOverlappingCards([
+      card({ id: 'a', x: 0, y: 0, height: 200, prevHeight: 80 }),
+      card({ id: 'b', x: 0, y: 100, height: 40, prevHeight: 40 }),
+      card({ id: 'c', x: 0, y: 150, height: 40, prevHeight: 40 }),
+    ])
+    expect(cascade.find((item) => item.id === 'a')).toBeUndefined()
+    const movedB = cascade.find((item) => item.id === 'b')
+    const movedC = cascade.find((item) => item.id === 'c')
+    expect(movedB?.y).toBe(200 + COLUMN_GAP)
+    expect(movedC!.y).toBeGreaterThan(movedB!.y)
+    expect(movedC!.y).toBe(movedB!.y + 40 + COLUMN_GAP)
+  })
+
+  it('左右没叠上的不动；高度没变出新重叠时也不动', () => {
+    expect(
+      shiftOverlappingCards([
+        card({ id: 'a', x: 0, y: 0, height: 200, prevHeight: 80 }),
+        card({ id: 'b', x: 400, y: 40, height: 80, prevHeight: 80 }),
+      ]),
+    ).toEqual([])
+    expect(
+      shiftOverlappingCards([
+        card({ id: 'a', x: 0, y: 0, height: 100, prevHeight: 100 }),
+        card({ id: 'b', x: 0, y: 140, height: 80, prevHeight: 80 }),
+      ]),
+    ).toEqual([])
+  })
+})

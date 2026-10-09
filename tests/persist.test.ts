@@ -620,7 +620,54 @@ describe('落盘链路', () => {
     expect(receivers.filter((name) => name === 'suggestionFile')).toEqual(['suggestionFile'])
     expect(receivers).toHaveLength(2)
     expect(source).not.toContain('fileHandle.createWritable')
-    expect(source).not.toMatch(/localStorage/)
+    // localStorage 只许存界面偏好，键名只能是下面五个字面量；正文、文档、快照、恢复日志一律不许进。
+    const allowedKeys = new Set([
+      'snowflake-drawer-width',
+      'snowflake-drawer-split',
+      'snowflake-discuss-line-height',
+      'snowflake-hint-seen',
+      'snowflake-book-meta',
+    ])
+    const constValues = (name: string) =>
+      [...source.matchAll(new RegExp(`\\bconst\\s+${name}\\s*=\\s*([^\\n;]+)`, 'g'))].map((match) => match[1]!.trim())
+    const literalKey = (expr: string): string | null => {
+      const match = /^(['"`])([^'"`$\\\\]*)\1$/.exec(expr.trim())
+      return match ? match[2]! : null
+    }
+    const resolveKey = (expr: string): string[] | null => {
+      const literal = literalKey(expr)
+      if (literal !== null) return [literal]
+      if (!/^[A-Za-z_$][\w$]*$/.test(expr.trim())) return null
+      const values = constValues(expr.trim()).map(literalKey)
+      if (values.length === 0 || values.some((value) => value === null)) return null
+      return values as string[]
+    }
+    const storageUses = [...source.matchAll(/localStorage/g)]
+    const storageCalls = [...source.matchAll(/localStorage\.(getItem|setItem|removeItem)\(\s*([^,)]*)/g)]
+    expect(storageCalls).toHaveLength(storageUses.length)
+    const usedKeys: string[] = []
+    for (const call of storageCalls) {
+      const arg = call[2]!.trim()
+      const direct = resolveKey(arg)
+      if (direct) {
+        usedKeys.push(...direct)
+        continue
+      }
+      // 键名经一层参数转手时，转手函数的每个调用方都必须传白名单常量。
+      expect(arg, `localStorage 键名看不出字面量：${call[0]}`).toMatch(/^[A-Za-z_]\w*$/)
+      const before = source.slice(0, call.index)
+      const owners = [...before.matchAll(new RegExp(`function\\s+(\\w+)(?:<[^>]*>)?\\(\\s*${arg}\\s*:`, 'g'))]
+      const owner = owners.at(-1)?.[1]
+      expect(owner, `localStorage 键名看不出字面量：${call[0]}`).toBeTruthy()
+      const callers = [...source.matchAll(new RegExp(`(?<![\\w.]|function\\s)\\b${owner}(?:<[^>]*>)?\\(\\s*([^,)]*)`, 'g'))]
+      expect(callers.length, `${owner} 没有调用方`).toBeGreaterThan(0)
+      for (const caller of callers) {
+        const resolved = resolveKey(caller[1]!)
+        expect(resolved, `localStorage 键名看不出字面量：${caller[0]}`).not.toBeNull()
+        usedKeys.push(...resolved!)
+      }
+    }
+    expect(usedKeys.filter((key) => !allowedKeys.has(key))).toEqual([])
     expect(source).not.toMatch(/\bpauseVfs\b/)
     expect(source).not.toMatch(/\bunpauseVfs\b/)
     expect(source).not.toMatch(/['"]opfs['"]/)
