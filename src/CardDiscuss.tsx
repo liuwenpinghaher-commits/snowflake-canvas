@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { MarkdownText } from './markdown-lite.tsx'
+import { MarkdownText, stripMarkdown } from './markdown-lite.tsx'
 
 function api(path: string): string {
   const base = import.meta.env.BASE_URL || '/'
@@ -8,20 +8,118 @@ function api(path: string): string {
 }
 
 const BUSY = '讨论的人有点多，正在排队，稍后自动重试。'
+const STOP_FAILED = '屏幕上的回复停了，但网关任务可能还在跑。'
+const PAGE_SIZE = 40
 
-type DiscussSession = {
+export type DiscussSession = {
   sessionId: string
   title: string
   createdAt: string
   cardId: string
+  firstAsk?: string
 }
 
-type ChatMessage = {
+export type ChatMessage = {
+  key: string
   role: 'user' | 'assistant' | 'error'
   content: string
   at?: string
+  id?: string
+  serverKey?: string
   adopted?: boolean
+  brainSlug?: string
   retryText?: string
+}
+
+type ServerMessage = { role?: string; content?: string; at?: string; id?: string; key?: string; adopted?: boolean }
+
+let localSerial = 0
+function localKey(): string {
+  localSerial += 1
+  return `local-${localSerial}`
+}
+
+function fromServer(list: ServerMessage[]): ChatMessage[] {
+  return list
+    .filter((item) => item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string')
+    .map((item) => ({
+      key: item.key ? `srv-${item.key}` : localKey(),
+      role: item.role === 'assistant' ? 'assistant' : 'user',
+      content: item.content ?? '',
+      at: typeof item.at === 'string' ? item.at : undefined,
+      id: typeof item.id === 'string' ? item.id : undefined,
+      serverKey: item.key,
+      adopted: item.adopted === true,
+    }))
+}
+
+// 往前翻时网关的 offset 会因为新消息往后挪，可能和已显示的重叠；按服务器给的消息键去重，不覆盖已显示的消息。
+export function prependOlder(current: ChatMessage[], older: ChatMessage[]): ChatMessage[] {
+  const known = new Set(current.map((item) => item.serverKey).filter(Boolean))
+  return [...older.filter((item) => !item.serverKey || !known.has(item.serverKey)), ...current]
+}
+
+type ClosestTarget = { closest: (selector: string) => { getAttribute: (name: string) => string | null } | null }
+
+// 点浮窗自己、右侧编辑器、本卡节点不关；点画布空白、别的卡、顶栏都关。
+export function pointerCloses(target: unknown, cardId: string): boolean {
+  if (!target || typeof (target as ClosestTarget).closest !== 'function') return false
+  const el = target as ClosestTarget
+  if (el.closest('[data-discuss-popover]')) return false
+  if (el.closest('.side')) return false
+  const host = el.closest('.react-flow__node')
+  if (host?.getAttribute('data-id') === cardId) return false
+  return true
+}
+
+export type ReplyRun = {
+  cardId: string
+  sessionId: string
+  runId: string
+  controller: AbortController
+  done: Promise<void>
+}
+
+// 浮窗关掉后回复继续在后台收；同一张卡再开时接上这条，收完再从服务器拉全文。
+const liveRuns = new Map<string, ReplyRun>()
+
+export function liveRunFor(cardId: string): ReplyRun | undefined {
+  return liveRuns.get(cardId)
+}
+
+export function startRun(cardId: string, sessionId: string, work: (run: ReplyRun) => Promise<void>): ReplyRun {
+  const run: ReplyRun = { cardId, sessionId, runId: '', controller: new AbortController(), done: Promise.resolve() }
+  liveRuns.set(cardId, run)
+  run.done = work(run).finally(() => {
+    if (liveRuns.get(cardId) === run) liveRuns.delete(cardId)
+  })
+  return run
+}
+
+// 换卡只断旧卡的浏览器连接，不停网关任务；停网关只给「停止」按钮。
+export function leaveCard(run: ReplyRun | null, nextCardId: string): boolean {
+  if (!run || run.cardId === nextCardId) return false
+  run.controller.abort()
+  if (liveRuns.get(run.cardId) === run) liveRuns.delete(run.cardId)
+  return true
+}
+
+export type StopOutcome = 'local' | 'stopped' | 'failed'
+
+export async function stopRun(run: ReplyRun, fetchImpl: typeof fetch = fetch): Promise<StopOutcome> {
+  run.controller.abort()
+  if (!run.runId) return 'local'
+  const query = `cardId=${encodeURIComponent(run.cardId)}&sessionId=${encodeURIComponent(run.sessionId)}`
+  try {
+    const response = await fetchImpl(api(`/api/discuss/runs/${encodeURIComponent(run.runId)}/stop?${query}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    return response.ok ? 'stopped' : 'failed'
+  } catch {
+    return 'failed'
+  }
 }
 
 function storageKey(cardId: string): string {
@@ -48,9 +146,10 @@ function clock(iso: string | undefined): { short: string; full: string } | null 
   return { short, full }
 }
 
-function sessionLabel(item: DiscussSession): string {
+export function sessionLabel(item: DiscussSession): string {
+  const ask = typeof item.firstAsk === 'string' ? item.firstAsk.trim() : ''
   const date = new Date(item.createdAt)
-  if (Number.isNaN(date.getTime())) return '念头讨论'
+  if (Number.isNaN(date.getTime())) return ask ? `念头讨论 ${ask}` : '念头讨论'
   const when = new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -58,7 +157,80 @@ function sessionLabel(item: DiscussSession): string {
     minute: '2-digit',
     second: '2-digit',
   }).format(date)
-  return `念头讨论 ${when}`
+  return ask ? `${when} ${ask}` : `念头讨论 ${when}`
+}
+
+export function adoptionText(content: string): string {
+  return stripMarkdown(content)
+}
+
+export type BrainOutcome = { ok: true; slug: string } | { ok: false; error: string }
+
+export function brainFailure(error: string): string {
+  return `没写入脑：${error}`
+}
+
+// 只把这一条回复交给服务器追加进 gbrain；来源行和 slug 都由服务器和 gbrain 定，浏览器不拼页面。
+export async function captureToBrain(
+  cardId: string,
+  sessionId: string,
+  item: ChatMessage,
+  fetchImpl: typeof fetch = fetch,
+): Promise<BrainOutcome> {
+  const content = adoptionText(item.content)
+  if (!content) return { ok: false, error: '这条结论是空的，没有写入' }
+  try {
+    const response = await fetchImpl(api('/api/brain/capture'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardId, sessionId, messageId: item.id, role: item.role, at: item.at, content }),
+    })
+    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; slug?: string; error?: string }
+    if (!response.ok || payload.ok !== true || typeof payload.slug !== 'string' || !payload.slug) {
+      return { ok: false, error: payload.error || 'gbrain 不可用' }
+    }
+    return { ok: true, slug: payload.slug }
+  } catch {
+    return { ok: false, error: '连不上画布服务' }
+  }
+}
+
+export function AssistantActions({
+  item,
+  copied,
+  writing,
+  finished,
+  onAdopt,
+  onCopy,
+  onWriteBrain,
+}: {
+  item: ChatMessage
+  copied: boolean
+  writing: boolean
+  finished: boolean
+  onAdopt: () => void
+  onCopy: () => void
+  onWriteBrain: () => void
+}) {
+  if (item.role !== 'assistant' || !item.content.trim()) return null
+  return (
+    <>
+      {item.brainSlug ? <p className="brain-mark">已写入脑：{item.brainSlug}</p> : null}
+      <div className="bubble-actions">
+        <button type="button" onClick={onAdopt}>
+          采纳进本念头
+        </button>
+        <button type="button" onClick={onCopy}>
+          {copied ? '已复制' : '复制'}
+        </button>
+        {finished ? (
+          <button type="button" disabled={writing} aria-busy={writing} onClick={onWriteBrain}>
+            写入脑
+          </button>
+        ) : null}
+      </div>
+    </>
+  )
 }
 
 function mergeBody(base: string, addition: string): string {
@@ -70,7 +242,7 @@ function mergeBody(base: string, addition: string): string {
   return `${trimmed}\n${cleaned}`
 }
 
-function applySse(
+export function applySse(
   block: string,
   append: (text: string) => void,
   replace: (text: string) => void,
@@ -113,15 +285,24 @@ export default function CardDiscuss({
   const [draft, setDraft] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [copiedAt, setCopiedAt] = useState<number | null>(null)
+  const [copiedAt, setCopiedAt] = useState<string | null>(null)
   const [pendingNew, setPendingNew] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [writingBrain, setWritingBrain] = useState<Record<string, true>>({})
+  const writingRef = useRef(new Set<string>())
   const chatRef = useRef<HTMLDivElement>(null)
   const draftRef = useRef<HTMLTextAreaElement>(null)
   const stickRef = useRef(true)
-  const abortRef = useRef<AbortController | null>(null)
+  const runRef = useRef<ReplyRun | null>(null)
   const genRef = useRef(0)
   const busyRef = useRef(false)
   const loadGen = useRef(0)
+  const offsetRef = useRef(0)
+  const hasMoreRef = useRef(false)
+  const olderRef = useRef(false)
+  const anchorRef = useRef<{ height: number; top: number } | null>(null)
+  const cardRef = useRef(cardId)
   const onCloseRef = useRef(onClose)
   const onCommitRef = useRef(onCommitBody)
   onCloseRef.current = onClose
@@ -130,8 +311,8 @@ export default function CardDiscuss({
   function halt() {
     genRef.current += 1
     loadGen.current += 1
-    abortRef.current?.abort()
-    abortRef.current = null
+    runRef.current?.controller.abort()
+    runRef.current = null
     busyRef.current = false
   }
 
@@ -153,12 +334,7 @@ export default function CardDiscuss({
 
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
-      const target = event.target
-      if (!(target instanceof Element)) return
-      if (target.closest('[data-discuss-popover]')) return
-      const host = target.closest('.react-flow__node')
-      if (host?.getAttribute('data-id') === cardId) return
-      onCloseRef.current()
+      if (pointerCloses(event.target, cardId)) onCloseRef.current()
     }
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') requestClose()
@@ -168,8 +344,19 @@ export default function CardDiscuss({
     return () => {
       document.removeEventListener('pointerdown', onPointer, true)
       document.removeEventListener('keydown', onKey)
-      halt()
+      loadGen.current += 1
     }
+  }, [cardId])
+
+  useEffect(() => {
+    if (cardRef.current === cardId) return
+    if (leaveCard(runRef.current, cardId)) {
+      runRef.current = null
+      genRef.current += 1
+      busyRef.current = false
+      setBusy(false)
+    }
+    cardRef.current = cardId
   }, [cardId])
 
   function nearBottom(el: HTMLElement): boolean {
@@ -182,6 +369,7 @@ export default function CardDiscuss({
     const bottom = nearBottom(el)
     stickRef.current = bottom
     if (bottom) setPendingNew(false)
+    if (el.scrollTop < 24 && hasMoreRef.current) void loadOlder()
   }
 
   function jumpLatest() {
@@ -191,9 +379,15 @@ export default function CardDiscuss({
     if (el) el.scrollTop = el.scrollHeight
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = chatRef.current
     if (!el) return
+    const anchor = anchorRef.current
+    if (anchor) {
+      anchorRef.current = null
+      el.scrollTop = el.scrollHeight - anchor.height + anchor.top
+      return
+    }
     if (stickRef.current) {
       el.scrollTop = el.scrollHeight
       setPendingNew(false)
@@ -202,35 +396,81 @@ export default function CardDiscuss({
     setPendingNew(true)
   }, [messages])
 
+  function setMore(more: boolean) {
+    hasMoreRef.current = more
+    setHasMore(more)
+  }
+
+  function pageUrl(nextSessionId: string, offset: number): string {
+    const query = `cardId=${encodeURIComponent(cardId)}&sessionId=${encodeURIComponent(nextSessionId)}&limit=${PAGE_SIZE}`
+    return api(`/api/discuss/messages?${query}${offset > 0 ? `&offset=${offset}` : ''}`)
+  }
+
   async function loadMessages(nextSessionId: string) {
     const ticket = loadGen.current + 1
     loadGen.current = ticket
-    const response = await fetch(
-      api(`/api/discuss/messages?cardId=${encodeURIComponent(cardId)}&sessionId=${encodeURIComponent(nextSessionId)}`),
-      { cache: 'no-store' },
-    )
+    const response = await fetch(pageUrl(nextSessionId, 0), { cache: 'no-store' })
     const payload = (await response.json().catch(() => ({}))) as {
-      messages?: Array<{ role?: string; content?: string; at?: string }>
+      messages?: ServerMessage[]
+      hasMore?: boolean
+      nextOffset?: number
       error?: string
     }
     if (ticket !== loadGen.current) return
     if (!response.ok) {
       setNotice(payload.error || '讨论记录没有取到。再打开一次这张卡片。')
       setMessages([])
+      setMore(false)
       return
     }
-    const list = Array.isArray(payload.messages) ? payload.messages : []
+    offsetRef.current = typeof payload.nextOffset === 'number' ? payload.nextOffset : 0
+    setMore(payload.hasMore === true)
     stickRef.current = true
     setPendingNew(false)
-    setMessages(
-      list
-        .filter((item) => item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string')
-        .map((item) => ({
-          role: item.role === 'assistant' ? 'assistant' : 'user',
-          content: item.content ?? '',
-          at: typeof item.at === 'string' ? item.at : undefined,
-        })),
-    )
+    setMessages(fromServer(Array.isArray(payload.messages) ? payload.messages : []))
+  }
+
+  async function loadOlder() {
+    if (olderRef.current || !hasMoreRef.current || !sessionId) return
+    olderRef.current = true
+    setLoadingOlder(true)
+    const ticket = loadGen.current
+    const forSession = sessionId
+    try {
+      let offset = offsetRef.current
+      let more = true
+      let older: ChatMessage[] = []
+      // 一页里可能全是工具消息，过滤后为空就再往前取几页。
+      for (let round = 0; round < 5 && more && older.length === 0; round += 1) {
+        const response = await fetch(pageUrl(forSession, offset), { cache: 'no-store' })
+        const payload = (await response.json().catch(() => ({}))) as {
+          messages?: ServerMessage[]
+          hasMore?: boolean
+          nextOffset?: number
+          error?: string
+        }
+        if (ticket !== loadGen.current) return
+        if (!response.ok) {
+          setNotice(payload.error || '更早的讨论没有取到。往上滚再试一次。')
+          return
+        }
+        older = fromServer(Array.isArray(payload.messages) ? payload.messages : [])
+        more = payload.hasMore === true
+        offset = typeof payload.nextOffset === 'number' ? payload.nextOffset : offset
+      }
+      offsetRef.current = offset
+      setMore(more)
+      if (older.length > 0) {
+        const el = chatRef.current
+        anchorRef.current = el ? { height: el.scrollHeight, top: el.scrollTop } : null
+        setMessages((current) => prependOlder(current, older))
+      }
+    } catch {
+      if (ticket === loadGen.current) setNotice('更早的讨论没有取到。往上滚再试一次。')
+    } finally {
+      olderRef.current = false
+      setLoadingOlder(false)
+    }
   }
 
   async function remember(nextSessionId: string, list: DiscussSession[]) {
@@ -240,11 +480,38 @@ export default function CardDiscuss({
     if (nextSessionId) await loadMessages(nextSessionId)
   }
 
+  async function refreshSessions() {
+    try {
+      const response = await fetch(api(`/api/discuss/session?cardId=${encodeURIComponent(cardId)}`), { cache: 'no-store' })
+      const payload = (await response.json().catch(() => ({}))) as { sessions?: DiscussSession[] }
+      if (response.ok && Array.isArray(payload.sessions)) setSessions(payload.sessions)
+    } catch {
+      // 下拉里的首问晚一点出现不影响讨论。
+    }
+  }
+
+  async function followBackground(run: ReplyRun, isCancelled: () => boolean) {
+    const waiting = '上一条回复还在后台接收，收完会自动显示。'
+    runRef.current = run
+    busyRef.current = true
+    setBusy(true)
+    setNotice(waiting)
+    await run.done.catch(() => {})
+    if (isCancelled()) return
+    if (runRef.current === run) runRef.current = null
+    busyRef.current = false
+    setBusy(false)
+    setNotice((current) => (current === waiting ? '' : current))
+    await loadMessages(run.sessionId)
+  }
+
   useEffect(() => {
     let cancelled = false
+    const isCancelled = () => cancelled
     void (async () => {
       setNotice('')
       setMessages([])
+      setMore(false)
       const response = await fetch(api(`/api/discuss/session?cardId=${encodeURIComponent(cardId)}`), { cache: 'no-store' })
       const payload = (await response.json().catch(() => ({}))) as {
         sessionId?: string
@@ -257,7 +524,8 @@ export default function CardDiscuss({
         return
       }
       const list = Array.isArray(payload.sessions) ? payload.sessions : []
-      const remembered = sessionStorage.getItem(storageKey(cardId)) || ''
+      const running = liveRunFor(cardId)
+      const remembered = running?.sessionId || sessionStorage.getItem(storageKey(cardId)) || ''
       const picked = list.some((item) => item.sessionId === remembered) ? remembered : payload.sessionId
       if (picked !== payload.sessionId) {
         const selected = await fetch(api('/api/discuss/session'), {
@@ -277,9 +545,10 @@ export default function CardDiscuss({
           return
         }
         await remember(selectedPayload.sessionId, selectedPayload.sessions || list)
-        return
+      } else {
+        await remember(picked, list)
       }
-      await remember(picked, list)
+      if (!cancelled && running && running.sessionId === picked) await followBackground(running, isCancelled)
     })().catch(() => {
       if (!cancelled) setNotice('画布会话没有连上。检查本机服务后再试。')
     })
@@ -358,7 +627,7 @@ export default function CardDiscuss({
           return next
         }
       }
-      return [...next, { role: 'assistant', content: recipe(''), at: new Date().toISOString() }]
+      return [...next, { key: localKey(), role: 'assistant', content: recipe(''), at: new Date().toISOString() }]
     })
   }
 
@@ -369,15 +638,13 @@ export default function CardDiscuss({
       const next = current.slice()
       const last = next[next.length - 1]
       if (last && last.role === 'assistant' && !last.content.trim()) next.pop()
-      next.push({ role: 'error', content: note, retryText: text, at: new Date().toISOString() })
+      next.push({ key: localKey(), role: 'error', content: note, retryText: text, at: new Date().toISOString() })
       return next
     })
   }
 
-  async function stream(text: string) {
-    const gen = genRef.current
-    const controller = new AbortController()
-    abortRef.current = controller
+  async function pump(run: ReplyRun, gen: number, text: string) {
+    const controller = run.controller
     setNotice('')
     let waitMs = 2000
     try {
@@ -386,7 +653,7 @@ export default function CardDiscuss({
         const response = await fetch(api('/api/discuss/stream'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-          body: JSON.stringify({ cardId, sessionId, message: text }),
+          body: JSON.stringify({ cardId: run.cardId, sessionId: run.sessionId, message: text }),
           signal: controller.signal,
         })
         if (response.status === 429) {
@@ -416,16 +683,19 @@ export default function CardDiscuss({
         let buffer = ''
         const append = (chunk: string) => patchAssistant(gen, (current) => current + chunk)
         const replace = (full: string) => patchAssistant(gen, () => full)
+        const onRun = (runId: string) => {
+          run.runId = runId
+        }
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
           buffer += decoder.decode(value, { stream: true })
           const blocks = buffer.split('\n\n')
           buffer = blocks.pop() || ''
-          for (const block of blocks) applySse(block, append, replace, () => {})
+          for (const block of blocks) applySse(block, append, replace, onRun)
         }
-        if (buffer.trim()) applySse(buffer, append, replace, () => {})
-        sessionStorage.setItem(storageKey(cardId), sessionId)
+        if (buffer.trim()) applySse(buffer, append, replace, onRun)
+        sessionStorage.setItem(storageKey(run.cardId), run.sessionId)
         return
       }
       attachError(gen, BUSY, text)
@@ -433,13 +703,20 @@ export default function CardDiscuss({
       if (isAbort(error) || controller.signal.aborted) return
       attachError(gen, '讨论连接断了', text)
     } finally {
-      if (abortRef.current === controller) abortRef.current = null
+      if (runRef.current === run) runRef.current = null
       if (genRef.current === gen) {
         busyRef.current = false
         setBusy(false)
         draftRef.current?.focus()
       }
     }
+  }
+
+  async function stream(text: string) {
+    const gen = genRef.current
+    const run = startRun(cardId, sessionId, (next) => pump(next, gen, text))
+    runRef.current = run
+    await run.done
   }
 
   async function sendText(text: string) {
@@ -449,13 +726,15 @@ export default function CardDiscuss({
     setBusy(true)
     stickRef.current = true
     const at = new Date().toISOString()
+    const askMissing = !sessions.some((item) => item.sessionId === sessionId && item.firstAsk)
     setDraft('')
     setMessages((current) => [
       ...current.filter((item) => item.role !== 'error'),
-      { role: 'user', content: message, at },
-      { role: 'assistant', content: '', at },
+      { key: localKey(), role: 'user', content: message, at },
+      { key: localKey(), role: 'assistant', content: '', at },
     ])
     await stream(message)
+    if (askMissing) void refreshSessions()
   }
 
   async function retry(text: string) {
@@ -466,13 +745,16 @@ export default function CardDiscuss({
     stickRef.current = true
     setMessages((current) => [
       ...current.filter((item) => item.role !== 'error'),
-      { role: 'assistant', content: '', at: new Date().toISOString() },
+      { key: localKey(), role: 'assistant', content: '', at: new Date().toISOString() },
     ])
     await stream(message)
   }
 
-  function stop() {
-    abortRef.current?.abort()
+  async function stop() {
+    const run = runRef.current
+    if (!run) return
+    const outcome = await stopRun(run)
+    if (outcome === 'failed') setNotice(STOP_FAILED)
   }
 
   function onDraftKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -482,26 +764,68 @@ export default function CardDiscuss({
     void sendText(draft)
   }
 
-  async function copyText(text: string, index: number) {
+  async function copyText(text: string, key: string) {
     try {
       await navigator.clipboard.writeText(text)
-      setCopiedAt(index)
+      setCopiedAt(key)
     } catch {
       setNotice('没有复制上。再点一次「复制」。')
     }
   }
 
-  async function adopt(index: number, text: string) {
-    const cleaned = text.trim()
+  async function adopt(item: ChatMessage) {
+    const cleaned = adoptionText(item.content)
     if (!cleaned) return
     const next = mergeBody(cardBody, cleaned)
     setNotice('')
     try {
       await onCommitRef.current(cardId, next)
-      setMessages((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, adopted: true } : item)))
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       setNotice(message || '正文没有写上。再点一次「采纳进本念头」。')
+      return
+    }
+    const unsaved = '正文已写进卡片，但「已采纳」记录没存上，重开浮窗后不会显示已采纳。'
+    try {
+      const response = await fetch(api('/api/discuss/adoptions'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cardId, sessionId, messageId: item.id, role: item.role, at: item.at, content: item.content }),
+      })
+      const payload = (await response.json().catch(() => ({}))) as { key?: string; error?: string }
+      if (!response.ok || !payload.key) {
+        setNotice(unsaved)
+        return
+      }
+      setMessages((current) =>
+        current.map((entry) =>
+          entry.key === item.key ? { ...entry, adopted: true, serverKey: entry.serverKey ?? payload.key } : entry,
+        ),
+      )
+    } catch {
+      setNotice(unsaved)
+    }
+  }
+
+  async function writeBrain(item: ChatMessage) {
+    if (writingRef.current.has(item.key) || !sessionId) return
+    writingRef.current.add(item.key)
+    setWritingBrain((current) => ({ ...current, [item.key]: true }))
+    try {
+      const outcome = await captureToBrain(cardId, sessionId, item)
+      if (!outcome.ok) {
+        setNotice(brainFailure(outcome.error))
+        return
+      }
+      setNotice((current) => (current.startsWith(brainFailure('')) ? '' : current))
+      setMessages((current) => current.map((entry) => (entry.key === item.key ? { ...entry, brainSlug: outcome.slug } : entry)))
+    } finally {
+      writingRef.current.delete(item.key)
+      setWritingBrain((current) => {
+        const next = { ...current }
+        delete next[item.key]
+        return next
+      })
     }
   }
 
@@ -533,11 +857,16 @@ export default function CardDiscuss({
         </button>
       </div>
       <div className="discuss-chat" aria-label="讨论记录" ref={chatRef} onScroll={onChatScroll}>
+        {hasMore ? (
+          <button type="button" className="load-older" disabled={loadingOlder} onClick={() => void loadOlder()}>
+            {loadingOlder ? '正在取更早的讨论' : '看更早的讨论'}
+          </button>
+        ) : null}
         {messages.map((item, index) => {
           const time = clock(item.at)
           if (item.role === 'error') {
             return (
-              <div key={`error-${index}`} className="bubble-row error" data-role="error">
+              <div key={item.key} className="bubble-row error" data-role="error">
                 <span className="avatar">!</span>
                 <div className="bubble">
                   <p className="plain">{item.content}</p>
@@ -554,7 +883,7 @@ export default function CardDiscuss({
           }
           const mine = item.role === 'user'
           return (
-            <div key={`${item.role}-${index}`} className={`bubble-row ${item.role}`} data-role={item.role}>
+            <div key={item.key} className={`bubble-row ${item.role}`} data-role={item.role}>
               <span className="avatar">{mine ? '我' : 'AI'}</span>
               <div className="bubble">
                 <div className="bubble-meta">
@@ -576,16 +905,15 @@ export default function CardDiscuss({
                   <p className="plain" />
                 )}
                 {item.role === 'assistant' && item.adopted ? <p className="adopted-mark">已采纳</p> : null}
-                {item.role === 'assistant' && item.content.trim() ? (
-                  <div className="bubble-actions">
-                    <button type="button" onClick={() => void adopt(index, item.content)}>
-                      采纳进本念头
-                    </button>
-                    <button type="button" onClick={() => void copyText(item.content, index)}>
-                      {copiedAt === index ? '已复制' : '复制'}
-                    </button>
-                  </div>
-                ) : null}
+                <AssistantActions
+                  item={item}
+                  copied={copiedAt === item.key}
+                  writing={writingBrain[item.key] === true}
+                  finished={!(busy && index === messages.length - 1)}
+                  onAdopt={() => void adopt(item)}
+                  onCopy={() => void copyText(item.content, item.key)}
+                  onWriteBrain={() => void writeBrain(item)}
+                />
               </div>
             </div>
           )
@@ -610,7 +938,7 @@ export default function CardDiscuss({
         />
         <div className="discuss-compose-bar">
           {busy ? (
-            <button type="button" onClick={stop}>
+            <button type="button" onClick={() => void stop()}>
               停止
             </button>
           ) : (

@@ -214,19 +214,16 @@ try {
     if (hexColor(line.color) !== '#5e574e') fail(`普通状态颜色是 ${line.color}：${line.text}`)
   }
 
+  // 「出错：」前缀和 is-error 由 App.tsx 按写入控制器给的状态类型渲染（tests/narrow-batch5.test.ts 覆盖），
+  // 这里只核对出错样式的颜色。
   await page.evaluate(() => {
     const line = document.createElement('p')
-    line.className = 'status-line'
-    line.setAttribute('role', 'status')
+    line.className = 'status-line is-error'
+    line.setAttribute('role', 'alert')
     line.dataset.ui10 = 'err'
-    line.textContent = '文件没写上'
+    line.textContent = '出错：文件没写上'
     document.querySelector('.topbar')?.appendChild(line)
   })
-  await page.waitForFunction(() => {
-    const line = document.querySelector('[data-ui10="err"]')
-    if (!(line instanceof HTMLElement)) return false
-    return line.textContent === '出错：文件没写上' && line.classList.contains('is-error')
-  }, { timeout: 3000 }).catch(() => fail('构造的「文件没写上」没有加上「出错：」'))
   const errorColor = await page.evaluate(() => getComputedStyle(document.querySelector('[data-ui10="err"]')).color)
   if (hexColor(errorColor) !== '#9b2c2c') fail(`出错状态颜色是 ${errorColor}`)
   await page.evaluate(() => document.querySelector('[data-ui10="err"]')?.remove())

@@ -616,6 +616,20 @@ def cleanup_cards():
     CARD_ADDED = False
     print("收尾：验收卡已从画布拿走，原来的正文还在")
 
+def drop_accept_sessions():
+    # 验收卡拿走之后，把它在 session.json 里的会话也删掉，不留给作者的历史讨论。
+    import subprocess
+    done = subprocess.run(
+        ["python3", os.path.join(ROOT, "scripts", "drop_accept_sessions.py"), TEST_CARD_ID],
+        capture_output=True,
+        text=True,
+    )
+    print(done.stdout.strip())
+    if done.returncode != 0:
+        print(f"FAIL {CURRENT}")
+        print("验收会话没有删干净：" + (done.stderr.strip() or done.stdout.strip()))
+        raise SystemExit(1)
+
 def main():
     global CARD_ADDED, USER_BODIES, USER_FILE_ID
     health()
@@ -682,6 +696,8 @@ except Exception as error:
     print(f"FAIL {CURRENT}")
     print(redact(repr(error)))
     raise SystemExit(1)
+finally:
+    drop_accept_sessions()
 PY
 py_status=$?
 if [ "$py_status" -ne 0 ]; then

@@ -3,6 +3,12 @@ import { editorText, frontText, type AppState, type Card } from './document.ts'
 export const EXPAND_MODEL = 'deepseek-flash'
 export const DEFAULT_EXPAND_URL = 'http://127.0.0.1:18100/v1/chat/completions'
 export const MSG_CANDIDATE_MISS = '候选没取到'
+export const MSG_EXPAND_UNREACHABLE = '连不上扩写服务'
+export const MSG_EXPAND_TIMEOUT = '扩写请求超时，没等到回复'
+export const MSG_EXPAND_TARGET = '扩写地址不是本机 127.0.0.1:18100，请求没有发出'
+export const MSG_EXPAND_UNUSABLE = '扩写返回的内容不可用'
+export const MSG_EXPAND_NO_CARD = '这张卡片已经不在，没有扩写'
+export const EXPAND_TIMEOUT_MS = 70_000
 
 export interface ExpandRequest {
   cardId: string
@@ -28,7 +34,10 @@ export interface ExpandClientOptions {
   fetch?: typeof fetch
   connect?: () => void
   maxTokens?: number
+  timeoutMs?: number
 }
+
+export type ExpandResult = { ok: true; candidates: ExpandCandidate[] } | { ok: false; reason: string }
 
 const EXPAND_SYSTEM = [
   '你只根据用户消息里的这一张卡片写候选。',
@@ -196,17 +205,45 @@ export function candidatesFromProxyPayload(payload: unknown): ExpandCandidate[] 
   return shapeModelText(content)
 }
 
+function isTimeout(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('name' in error)) return false
+  const name = (error as { name: unknown }).name
+  return name === 'TimeoutError' || name === 'AbortError'
+}
+
+function errorText(payload: unknown): string {
+  if (!isRecord(payload)) return ''
+  const error = payload.error
+  if (typeof error === 'string') return error.trim()
+  if (isRecord(error) && typeof error.message === 'string') return error.message.trim()
+  return ''
+}
+
+async function statusReason(response: Response): Promise<string> {
+  let detail = ''
+  try {
+    const text = await response.text()
+    detail = errorText(tryParse(text))
+  } catch {
+    detail = ''
+  }
+  const head = `扩写服务返回 HTTP ${response.status}`
+  return detail ? `${head}：${[...detail].slice(0, 200).join('')}` : head
+}
+
 export async function requestExpandCandidates(
   input: ExpandRequest,
   options: ExpandClientOptions = {},
-): Promise<{ ok: true; candidates: ExpandCandidate[] } | { ok: false }> {
+): Promise<ExpandResult> {
   const baseURL = options.baseURL ?? DEFAULT_EXPAND_URL
-  if (!expandTargetAllowed(baseURL)) return { ok: false }
+  if (!expandTargetAllowed(baseURL)) return { ok: false, reason: MSG_EXPAND_TARGET }
   options.connect?.()
   const fetchImpl = options.fetch ?? globalThis.fetch
   const apiKey = options.apiKey ? options.apiKey() : readCpaApiKey()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  const timeoutMs = options.timeoutMs ?? EXPAND_TIMEOUT_MS
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined
   let response: Response
   try {
     response = await fetchImpl(baseURL, {
@@ -214,18 +251,21 @@ export async function requestExpandCandidates(
       headers,
       body: JSON.stringify(expandChatBody(input, options.maxTokens ?? 800)),
       redirect: 'manual',
+      signal,
     })
-  } catch {
-    return { ok: false }
+  } catch (error) {
+    return { ok: false, reason: isTimeout(error) ? MSG_EXPAND_TIMEOUT : MSG_EXPAND_UNREACHABLE }
   }
-  if (!response.ok) return { ok: false }
-  let payload: unknown
+  if (!response.ok) return { ok: false, reason: await statusReason(response) }
+  let text: string
   try {
-    payload = await response.json()
-  } catch {
-    return { ok: false }
+    text = await response.text()
+  } catch (error) {
+    return { ok: false, reason: isTimeout(error) ? MSG_EXPAND_TIMEOUT : MSG_EXPAND_UNREACHABLE }
   }
+  const payload = tryParse(text)
+  if (payload === undefined) return { ok: false, reason: MSG_EXPAND_UNUSABLE }
   const candidates = candidatesFromProxyPayload(payload)
-  if (!candidates) return { ok: false }
+  if (!candidates) return { ok: false, reason: MSG_CANDIDATE_MISS }
   return { ok: true, candidates }
 }

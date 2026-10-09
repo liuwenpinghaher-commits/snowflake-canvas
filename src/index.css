@@ -234,22 +234,31 @@ button.on {
   overflow: auto;
 }
 
+/* 窄屏：顶栏、画布、右侧栏上下排，整页滚动。画布跟着窗口高度走，至少占半屏。 */
 @media (max-width: 760px) {
+  .app {
+    height: auto;
+    min-height: 100%;
+  }
+
   .workspace {
+    flex: none;
     flex-direction: column;
   }
 
   .canvas-wrap {
     flex: none;
     width: 100%;
-    height: 160px;
-    min-height: 160px;
+    height: 55vh;
+    height: 55dvh;
+    min-height: 260px;
   }
 
   .side {
     width: 100%;
     max-width: 100%;
-    flex: 1 1 auto;
+    flex: none;
+    min-height: 50vh;
     border-left: none;
     border-top: 1px solid #ddd4c6;
   }
@@ -452,23 +461,48 @@ button.on {
   max-width: 240px;
 }
 
+/* 浮窗挂在 body 上，按卡片的屏幕位置摆放，不跟画布缩放。 */
 .discuss-dock {
   position: absolute;
-  top: calc(100% + 8px);
+  top: 0;
   left: 0;
   width: min(380px, calc(100vw - 16px));
-  z-index: 6;
+  z-index: 40;
+  font-size: 16px;
   user-select: text;
   pointer-events: auto;
 }
 
-.discuss-dock.discuss-up {
-  top: auto;
-  bottom: calc(100% + 8px);
+.discuss-dock.discuss-clamp::before {
+  display: none;
 }
 
-.discuss-dock.discuss-clamp {
-  bottom: auto;
+.discuss-dock.discuss-sheet {
+  position: fixed;
+  top: auto;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: 100vw;
+  height: 50vh;
+  height: 50dvh;
+  min-height: 280px;
+}
+
+.discuss-dock.discuss-sheet::before {
+  display: none;
+}
+
+.discuss-dock.discuss-sheet .discuss-popover {
+  height: 100%;
+  max-height: 100%;
+  border-radius: 16px 16px 0 0;
+  border-bottom: none;
+}
+
+.discuss-dock.discuss-sheet .discuss-chat {
+  min-height: 0;
 }
 
 .discuss-dock::before {
@@ -680,10 +714,15 @@ button.on {
   margin-top: 8px;
 }
 
-.adopted-mark {
+.adopted-mark,
+.brain-mark {
   margin: 6px 0 0;
   color: #2f6f4e;
   font-size: 12px;
+}
+
+.brain-mark {
+  overflow-wrap: anywhere;
 }
 
 .jump-latest {
@@ -779,4 +818,89 @@ button.on {
   color: #3f3830;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.snow-card.is-conflict,
+.snow-group.is-conflict {
+  position: relative;
+  outline: 2px solid #b4462e;
+  outline-offset: 2px;
+}
+
+.conflict-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #b4462e;
+  color: #fffdf8;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.side-stack {
+  width: min(380px, 100%);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.side-stack > .side {
+  width: 100%;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 760px) {
+  .side-stack {
+    width: 100%;
+    max-width: 100%;
+    flex: 1 1 auto;
+  }
+}
+
+.conflict-choice {
+  border-left: 1px solid #ddd4c6;
+  border-bottom: 1px solid #ddd4c6;
+  background: #fbf1ec;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conflict-choice p {
+  margin: 0;
+}
+
+.conflict-choice-head {
+  font-weight: 650;
+  color: #8a3520;
+}
+
+.conflict-choice-line {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conflict-choice-side {
+  display: inline-block;
+  min-width: 3.5em;
+  margin-right: 6px;
+  color: #5e574e;
+}
+
+.conflict-choice-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .conflict-choice {
+    border-left: none;
+  }
 }

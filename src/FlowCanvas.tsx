@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Background,
   Controls,
@@ -6,7 +7,9 @@ import {
   Panel,
   Position,
   ReactFlow,
+  getViewportForBounds,
   useReactFlow,
+  useStore,
   type Node,
   type NodeChange,
   type NodeProps,
@@ -25,130 +28,143 @@ type CardData = {
   color: string
   canGrow: boolean
   flash: boolean
-  discuss: DiscussBind | null
+  conflict: boolean
   title: string
   body: string
   meta: string
 }
-type GroupData = { text: string }
+type GroupData = { text: string; conflict: boolean }
 
+export const NARROW_QUERY = '(max-width: 760px)'
+
+type DockPlace = { dir: 'down' | 'up' | 'clamp'; top: number; left: number; maxH: number | null }
+
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY)
+    const update = () => setNarrow(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return narrow
+}
+
+// 浮窗挂在 document.body 上，不在卡片节点里，所以画布缩放不改它的字号和宽度。
+// 宽屏按卡片的屏幕位置贴在卡片下方（放不下就上方，再不行就夹在视口内）；窄屏贴在视口下半屏。
 function DiscussDock({ cardId, bind }: { cardId: string; bind: DiscussBind }) {
   const dockRef = useRef<HTMLDivElement>(null)
-  const { getViewport, setViewport } = useReactFlow()
-  const flowRef = useRef({ getViewport, setViewport })
-  flowRef.current = { getViewport, setViewport }
-  const [dir, setDir] = useState<'down' | 'up' | 'clamp'>('down')
-  const [maxH, setMaxH] = useState<number | null>(null)
-  const [clampTop, setClampTop] = useState<number | null>(null)
-  const panned = useRef(false)
+  const narrow = useNarrow()
+  const transform = useStore((state) => state.transform)
+  const cardAt = useStore((state) => {
+    const at = state.nodeLookup.get(cardId)?.internals.positionAbsolute
+    return at ? `${at.x},${at.y}` : ''
+  })
+  const [place, setPlace] = useState<DockPlace | null>(null)
 
   useLayoutEffect(() => {
-    panned.current = false
-    const dock = dockRef.current
-    if (!dock) return
+    if (narrow) return
     let dead = false
-    const place = () => {
+    const measure = () => {
       if (dead) return
-      const node = dock.closest('.react-flow__node')
-      if (!(node instanceof HTMLElement)) return
+      const node = document.querySelector<HTMLElement>(`.react-flow__node-snowCard[data-id="${CSS.escape(cardId)}"]`)
+      const dock = dockRef.current
+      if (!node || !dock) return
+      const card = node.getBoundingClientRect()
+      if (card.width < 1 || card.height < 1) return
+      const vw = document.documentElement.clientWidth || window.innerWidth
       const vh = window.innerHeight
       const margin = 8
       const gap = 8
       const desired = 460
-      const card = node.getBoundingClientRect()
-      if (card.width < 1 || card.height < 1) return
-      const spaceBelow = vh - card.bottom - gap
-      const spaceAbove = card.top - gap
-      const zoom = flowRef.current.getViewport().zoom || 1
-      let nextDir: 'down' | 'up' | 'clamp' = 'down'
-      let nextMax: number | null = null
-      let nextTop: number | null = null
+      const width = dock.offsetWidth || Math.min(380, vw - margin * 2)
+      const spaceBelow = vh - card.bottom - gap - margin
+      const spaceAbove = card.top - gap - margin
+      let next: DockPlace
       if (spaceBelow >= desired) {
-        nextDir = 'down'
+        next = { dir: 'down', top: card.bottom + gap, left: card.left, maxH: null }
       } else if (spaceAbove >= desired) {
-        nextDir = 'up'
+        next = { dir: 'up', top: 0, left: card.left, maxH: null }
       } else if (spaceBelow >= spaceAbove && spaceBelow >= 220) {
-        nextDir = 'down'
-        nextMax = Math.floor(spaceBelow)
+        next = { dir: 'down', top: card.bottom + gap, left: card.left, maxH: Math.floor(spaceBelow) }
       } else if (spaceAbove >= 220) {
-        nextDir = 'up'
-        nextMax = Math.floor(spaceAbove)
+        next = { dir: 'up', top: 0, left: card.left, maxH: Math.floor(spaceAbove) }
       } else {
         const height = Math.min(desired, Math.max(180, vh - margin * 2))
-        let screenTop = card.bottom + gap
-        if (screenTop + height > vh - margin) screenTop = vh - margin - height
-        if (screenTop < margin) screenTop = margin
-        nextDir = 'clamp'
-        nextMax = Math.floor(height)
-        nextTop = (screenTop - card.top) / zoom
+        let top = card.bottom + gap
+        if (top + height > vh - margin) top = vh - margin - height
+        if (top < margin) top = margin
+        next = { dir: 'clamp', top, left: card.left, maxH: Math.floor(height) }
       }
-      setDir((prev) => (prev === nextDir ? prev : nextDir))
-      setMaxH((prev) => (prev === nextMax ? prev : nextMax))
-      setClampTop((prev) => (prev === nextTop ? prev : nextTop))
+      next.left = Math.min(Math.max(margin, next.left), Math.max(margin, vw - width - margin))
+      if (next.dir === 'up') {
+        // 浮窗实际高度可能小于上限，往上展开时按实际高度让底边贴着卡片顶边。
+        const popover = dock.querySelector<HTMLElement>('.discuss-popover')
+        const height = Math.min(popover?.offsetHeight || desired, next.maxH ?? desired)
+        next.top = card.top - gap - height
+      }
+      next.top += window.scrollY
+      next.left += window.scrollX
+      setPlace((prev) =>
+        prev && prev.dir === next.dir && prev.top === next.top && prev.left === next.left && prev.maxH === next.maxH
+          ? prev
+          : next,
+      )
     }
-    // 父级把卡片平移写进页面之后再量，避免用摆正前的位置决定展开方向。
-    queueMicrotask(place)
-    const frame = window.requestAnimationFrame(() => place())
-    window.addEventListener('resize', place)
+    measure()
+    const frame = window.requestAnimationFrame(measure)
+    const observer = new ResizeObserver(measure)
+    if (dockRef.current) observer.observe(dockRef.current)
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
     return () => {
       dead = true
       window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', place)
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
     }
-  }, [cardId])
-
-  useLayoutEffect(() => {
-    if (panned.current) return
-    if (dir !== 'clamp' && maxH == null) return
-    const dock = dockRef.current
-    if (!dock) return
-    const button = dock.querySelector<HTMLElement>('.discuss-compose-bar button')
-    if (!button) return
-    const rect = button.getBoundingClientRect()
-    const vh = window.innerHeight
-    const margin = 8
-    const tooLow = rect.bottom > vh - margin + 1
-    const tooHigh = rect.top < margin - 1
-    if (!tooLow && !tooHigh) return
-    const { getViewport: readViewport, setViewport: moveViewport } = flowRef.current
-    const zoom = readViewport().zoom || 1
-    const vp = readViewport()
-    let shift = 0
-    if (tooLow) shift -= rect.bottom - (vh - margin)
-    if (rect.top + shift < margin) shift += margin - (rect.top + shift)
-    if (Math.abs(shift) < 1) return
-    panned.current = true
-    void moveViewport({ x: vp.x, y: vp.y + shift / zoom, zoom: vp.zoom })
-  }, [dir, maxH, clampTop])
+  }, [cardId, narrow, transform, cardAt])
 
   const style: CSSProperties & Record<string, string | number> = {}
-  if (dir === 'clamp' && clampTop != null) {
-    style.top = clampTop
-    style.bottom = 'auto'
+  if (!narrow) {
+    if (place) {
+      style.top = place.top
+      style.left = place.left
+      if (place.maxH != null) style['--discuss-max'] = `${place.maxH}px`
+    } else {
+      style.visibility = 'hidden'
+    }
   }
-  if (maxH != null) style['--discuss-max'] = `${maxH}px`
   const className = [
-    'discuss-dock nodrag nopan nowheel',
-    dir === 'up' ? 'discuss-up' : '',
-    dir === 'clamp' ? 'discuss-clamp' : '',
-    maxH != null ? 'discuss-fit' : '',
+    'discuss-dock',
+    narrow ? 'discuss-sheet' : '',
+    !narrow && place?.dir === 'up' ? 'discuss-up' : '',
+    !narrow && place?.dir === 'clamp' ? 'discuss-clamp' : '',
+    !narrow && place?.maxH != null ? 'discuss-fit' : '',
   ]
     .filter(Boolean)
     .join(' ')
 
-  return (
+  return createPortal(
     <div ref={dockRef} className={className} style={style} data-discuss-dock="">
       <CardDiscuss cardId={cardId} cardBody={bind.cardBody} onClose={bind.onClose} onCommitBody={bind.onCommitBody} />
-    </div>
+    </div>,
+    document.body,
   )
 }
 
-function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
+function SnowCard({ data }: NodeProps<Node<CardData, 'snowCard'>>) {
   const title = data.title.trim()
   const body = data.body.trim()
   return (
     <div className="snow-node">
-      <div className={data.flash ? 'snow-card adopt-flash' : 'snow-card'} data-color={data.color}>
+      <div
+        className={['snow-card', data.flash ? 'adopt-flash' : '', data.conflict ? 'is-conflict' : ''].filter(Boolean).join(' ')}
+        data-color={data.color}
+      >
+        {data.conflict ? <div className="conflict-badge">待选</div> : null}
         <div className="snow-kicker">
           <div className="snow-layer">{data.layerLabel}</div>
           {data.meta ? <div className="snow-meta">{data.meta}</div> : null}
@@ -160,13 +176,17 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         <Handle type="target" position={Position.Left} />
         {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
       </div>
-      {data.discuss ? <DiscussDock cardId={id} bind={data.discuss} /> : null}
     </div>
   )
 }
 
 function SnowGroup({ data }: NodeProps<Node<GroupData, 'snowGroup'>>) {
-  return <div className="snow-group">{data.text || '分组'}</div>
+  return (
+    <div className={data.conflict ? 'snow-group is-conflict' : 'snow-group'}>
+      {data.conflict ? <div className="conflict-badge">待选</div> : null}
+      {data.text || '分组'}
+    </div>
+  )
 }
 
 const nodeTypes = { snowCard: SnowCard, snowGroup: SnowGroup }
@@ -175,8 +195,9 @@ function toFlowNode(
   node: CanvasNode,
   card: Card | undefined,
   activeId: string | null,
-  discuss: { cardId: string; bind: DiscussBind } | null,
+  discussId: string | null,
   flashId: string | null,
+  conflict: boolean,
 ): Node {
   if (node.type === 'group') {
     return {
@@ -187,7 +208,7 @@ function toFlowNode(
       height: node.height,
       selected: node.id === activeId,
       zIndex: 0,
-      data: { text: node.text ?? '分组' },
+      data: { text: node.text ?? '分组', conflict },
       style: { width: node.width, height: node.height },
     }
   }
@@ -201,13 +222,13 @@ function toFlowNode(
     width: node.width,
     height,
     selected: node.id === activeId,
-    zIndex: discuss?.cardId === node.id ? 20 : 1,
+    zIndex: discussId === node.id ? 20 : 1,
     data: {
       layerLabel: card ? layerLabel(card.layer) : '',
       color: node.color ?? '1',
       canGrow: card ? laterLayers(card.layer).length > 0 : false,
       flash: flashId === node.id,
-      discuss: discuss?.cardId === node.id ? discuss.bind : null,
+      conflict,
       title: face.title,
       body: face.body,
       meta: face.meta,
@@ -221,6 +242,7 @@ export default function FlowCanvas({
   edges,
   cards,
   activeId,
+  conflictIds,
   onMove,
   onSelect,
   onSpawn,
@@ -236,6 +258,7 @@ export default function FlowCanvas({
   edges: CanvasEdge[]
   cards: Record<string, Card>
   activeId: string | null
+  conflictIds?: ReadonlySet<string>
   onMove: (id: string, x: number, y: number) => void
   onSelect: (id: string) => void
   onSpawn: (fromId: string, x: number, y: number) => void
@@ -247,8 +270,23 @@ export default function FlowCanvas({
   onCloseDiscuss: () => void
   onCommitBody: (cardId: string, body: string) => Promise<void>
 }) {
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodesBounds, setViewport } = useReactFlow()
   const lastPaneClick = useRef(0)
+  const flowCount = useStore((state) => state.nodeLookup.size)
+  const paneWidth = useStore((state) => state.width)
+  const paneHeight = useStore((state) => state.height)
+  const fittedOnce = useRef(false)
+
+  // 打开页面、画布拿到卡片后看一次全稿；之后打字、拖动都不再自动缩放。
+  // 受控节点下 fitView 和 nodesInitialized 都要等下一次节点变化才更新，页面静止时不会触发，
+  // 所以按卡片自带的宽高算外框，直接设视口。
+  const nodesReady = flowCount > 0 && flowCount >= nodes.length
+  useEffect(() => {
+    if (fittedOnce.current || !nodesReady || nodes.length === 0 || paneWidth < 1 || paneHeight < 1) return
+    fittedOnce.current = true
+    const bounds = getNodesBounds(nodes.map((node) => node.id))
+    void setViewport(getViewportForBounds(bounds, paneWidth, paneHeight, 0.1, 1, 0.2))
+  }, [nodesReady, nodes, paneWidth, paneHeight, getNodesBounds, setViewport])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -274,7 +312,14 @@ export default function FlowCanvas({
           bind: { cardBody: cards[discussCardId].body, onClose: onCloseDiscuss, onCommitBody },
         }
       : null
-  const flowNodes = nodes.map((node) => toFlowNode(node, cards[node.id], activeId, discuss, flashCardId))
+  const [dragged, setDragged] = useState<Record<string, { x: number; y: number }>>({})
+  const draggedRef = useRef(dragged)
+  draggedRef.current = dragged
+  const flowNodes = nodes.map((node) => {
+    const flow = toFlowNode(node, cards[node.id], activeId, discuss?.cardId ?? null, flashCardId, conflictIds?.has(node.id) ?? false)
+    const held = dragged[node.id]
+    return held ? { ...flow, position: held } : flow
+  })
   const flowEdges = edges.map((edge) => ({
     id: edge.id,
     source: edge.fromNode,
@@ -282,12 +327,27 @@ export default function FlowCanvas({
     label: edge.label,
   }))
 
+  // 拖动途中只挪页面上的位置；松手那一次（dragging 为 false）才写进画布。
   const onNodesChange = (changes: NodeChange[]) => {
+    const moving: Record<string, { x: number; y: number }> = {}
+    const released: { id: string; x: number; y: number }[] = []
     for (const change of changes) {
-      if (change.type === 'position' && change.position) {
-        onMove(change.id, change.position.x, change.position.y)
+      if (change.type !== 'position') continue
+      if (change.dragging) {
+        if (change.position) moving[change.id] = { x: change.position.x, y: change.position.y }
+        continue
       }
+      const at = change.position ?? draggedRef.current[change.id]
+      if (at) released.push({ id: change.id, x: at.x, y: at.y })
     }
+    const done = new Set(released.map((item) => item.id))
+    if (Object.keys(moving).length > 0 || done.size > 0) {
+      const next = { ...draggedRef.current, ...moving }
+      for (const id of done) delete next[id]
+      draggedRef.current = next
+      setDragged(next)
+    }
+    for (const item of released) onMove(item.id, item.x, item.y)
   }
 
   const focusActive = () => {
@@ -365,6 +425,7 @@ export default function FlowCanvas({
           </div>
         </Panel>
       </ReactFlow>
+      {discuss ? <DiscussDock key={discuss.cardId} cardId={discuss.cardId} bind={discuss.bind} /> : null}
     </div>
   )
 }

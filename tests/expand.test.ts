@@ -6,6 +6,10 @@ import {
   DEFAULT_EXPAND_URL,
   EXPAND_MODEL,
   MSG_CANDIDATE_MISS,
+  MSG_EXPAND_TARGET,
+  MSG_EXPAND_TIMEOUT,
+  MSG_EXPAND_UNREACHABLE,
+  MSG_EXPAND_UNUSABLE,
   buildExpandRequest,
   expandTargetAllowed,
   readCpaApiKey,
@@ -27,6 +31,7 @@ import {
   type PersistPorts,
   type RecoveryLog,
 } from '../src/persist.ts'
+import { EXPAND_PROXY_PATH, browserExpandFetch } from '../src/persist-browser.ts'
 import { snapshotFileName } from '../src/snapshot.ts'
 
 const encoder = new TextEncoder()
@@ -340,7 +345,7 @@ describe('AI 扩写候选和本地快照回退', () => {
           connectCount += 1
         },
       })
-      expect(result.ok).toBe(false)
+      expect(result).toEqual({ ok: false, reason: MSG_EXPAND_TARGET })
       expect(fetchCount).toBe(0)
       expect(connectCount).toBe(0)
     }
@@ -364,29 +369,66 @@ describe('AI 扩写候选和本地快照回退', () => {
     expect(fetchCount).toBe(0)
     expect(connectCount).toBe(0)
     expect(bytesEqual(h.mem.files.get(CANONICAL_NAME)!, before)).toBe(true)
-    expect(h.ctl.snapshot().view.expandNotice).toBe(MSG_CANDIDATE_MISS)
+    expect(h.ctl.snapshot().view.expandNotice).toBe(MSG_EXPAND_TARGET)
     expect(expandTargetAllowed(DEFAULT_EXPAND_URL)).toBe(true)
     expect(DEFAULT_EXPAND_URL).toBe('http://127.0.0.1:18100/v1/chat/completions')
   })
 
-  it('模拟 5xx 或连接失败时卡片字节不变，界面文案是「候选没取到」', async () => {
-    const failures: ExpandClientOptions['fetch'][] = [
-      async () => new Response('no', { status: 503 }),
-      async () => {
-        throw new TypeError('connect failed')
+  it('网络失败、超时、非 2xx 时卡片字节不变，界面说出具体原因而不是「候选没取到」', async () => {
+    const cases: { fetch: NonNullable<ExpandClientOptions['fetch']>; notice: (text: string) => void }[] = [
+      {
+        fetch: async () => new Response('no', { status: 503 }),
+        notice: (text) => expect(text).toBe('扩写服务返回 HTTP 503'),
       },
-      async () => jsonResponse({ error: 'not-candidates' }),
+      {
+        fetch: async () => jsonResponse({ error: '连不上扩写服务（127.0.0.1:18100，ECONNREFUSED）' }, 502),
+        notice: (text) => {
+          expect(text).toContain('HTTP 502')
+          expect(text).toContain('连不上扩写服务')
+        },
+      },
+      {
+        fetch: async () => jsonResponse({ error: '扩写服务 60 秒没有回复，超时' }, 504),
+        notice: (text) => {
+          expect(text).toContain('HTTP 504')
+          expect(text).toContain('超时')
+        },
+      },
+      {
+        fetch: async () => jsonResponse({ error: { message: 'invalid api key' } }, 401),
+        notice: (text) => expect(text).toBe('扩写服务返回 HTTP 401：invalid api key'),
+      },
+      {
+        fetch: async () => {
+          throw new TypeError('connect failed')
+        },
+        notice: (text) => expect(text).toBe(MSG_EXPAND_UNREACHABLE),
+      },
+      {
+        fetch: async () => {
+          throw new DOMException('The operation timed out.', 'TimeoutError')
+        },
+        notice: (text) => expect(text).toBe(MSG_EXPAND_TIMEOUT),
+      },
+      {
+        fetch: async () => {
+          throw new DOMException('This operation was aborted', 'AbortError')
+        },
+        notice: (text) => expect(text).toBe(MSG_EXPAND_TIMEOUT),
+      },
     ]
-    for (const fetchImpl of failures) {
-      const h = harness({ expand: { fetch: fetchImpl } })
+    for (const item of cases) {
+      const h = harness({ expand: { fetch: item.fetch } })
       await boot(h.ctl)
       const beforeCard = cardText(h.ctl)
       const beforeFile = h.mem.files.get(CANONICAL_NAME)!.slice()
       await h.ctl.requestCandidates('c1', null)
       expect(cardText(h.ctl)).toBe(beforeCard)
       expect(bytesEqual(h.mem.files.get(CANONICAL_NAME)!, beforeFile)).toBe(true)
-      expect(h.ctl.snapshot().view.expandNotice).toBe('候选没取到')
-      expect(h.ctl.snapshot().view.expandNotice).toBe(MSG_CANDIDATE_MISS)
+      const notice = h.ctl.snapshot().view.expandNotice ?? ''
+      item.notice(notice)
+      expect(notice).not.toBe(MSG_CANDIDATE_MISS)
+      expect(notice).not.toBe(MSG_EXPAND_UNUSABLE)
       expect(h.ctl.snapshot().view.messages.join('\n')).not.toContain('503')
       expect(h.ctl.snapshot().view.messages.join('\n')).not.toContain('连接')
       expect(h.ctl.snapshot().view.candidates).toEqual([])
@@ -397,6 +439,63 @@ describe('AI 扩写候选和本地快照回退', () => {
     expect(panel).toContain('{notice}')
     expect(panel).not.toContain('扩写失败')
     expect(panel).not.toContain('网络错误')
+  })
+
+  it('返回不是候选 JSON 或候选为空时，才说内容不可用或候选没取到', async () => {
+    const cases: { fetch: NonNullable<ExpandClientOptions['fetch']>; notice: string }[] = [
+      { fetch: async () => jsonResponse({ error: 'not-candidates' }), notice: MSG_CANDIDATE_MISS },
+      { fetch: async () => jsonResponse(completion(JSON.stringify({ candidates: [] }))), notice: MSG_CANDIDATE_MISS },
+      { fetch: async () => new Response('<html>不是 JSON</html>', { status: 200 }), notice: MSG_EXPAND_UNUSABLE },
+    ]
+    for (const item of cases) {
+      const h = harness({ expand: { fetch: item.fetch } })
+      await boot(h.ctl)
+      const beforeCard = cardText(h.ctl)
+      await h.ctl.requestCandidates('c1', null)
+      expect(cardText(h.ctl)).toBe(beforeCard)
+      expect(h.ctl.snapshot().view.expandNotice).toBe(item.notice)
+      expect(h.ctl.snapshot().view.candidates).toEqual([])
+    }
+  })
+
+  it('页面主机是 10.144.144.1 时，扩写请求发往同源 /__snowflake/expand 而不是 127.0.0.1:18100', async () => {
+    const globals = globalThis as unknown as { window?: unknown; fetch: typeof fetch }
+    const previousWindow = globals.window
+    const previousFetch = globals.fetch
+    const sent: { url: string; auth: string | null; method: string; body: string }[] = []
+    globals.window = { location: new URL('http://10.144.144.1:8093/xuehua/') }
+    globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({
+        url: String(input),
+        auth: new Headers(init?.headers).get('Authorization'),
+        method: init?.method ?? 'GET',
+        body: String(init?.body ?? ''),
+      })
+      return jsonResponse(completion(JSON.stringify({ candidates: [{ id: 'lan-1', text: '局域网候选' }] })))
+    }) as typeof fetch
+    try {
+      const result = await requestExpandCandidates(sampleRequest(), {
+        apiKey: () => 'must-not-leave-browser',
+        fetch: browserExpandFetch,
+      })
+      expect(result).toEqual({ ok: true, candidates: [{ id: 'lan-1', text: '局域网候选' }] })
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.url).toBe(`http://10.144.144.1:8093${EXPAND_PROXY_PATH}`)
+      expect(sent[0]!.url).toBe('http://10.144.144.1:8093/__snowflake/expand')
+      expect(sent[0]!.url).not.toContain('127.0.0.1')
+      expect(sent[0]!.url).not.toContain('18100')
+      expect(sent[0]!.method).toBe('POST')
+      expect(sent[0]!.auth).toBeNull()
+      expect(JSON.parse(sent[0]!.body).model).toBe(EXPAND_MODEL)
+      await expect(browserExpandFetch('http://10.144.144.1:18100/v1/chat/completions', { method: 'POST' })).rejects.toThrow(
+        TypeError,
+      )
+      expect(sent).toHaveLength(1)
+    } finally {
+      if (previousWindow === undefined) delete globals.window
+      else globals.window = previousWindow
+      globals.fetch = previousFetch
+    }
   })
 
   it('快照文件名匹配正本主名 + YYYYMMDDTHHmmss + .snapshot.json；同秒冲突加毫秒且不覆盖', async () => {

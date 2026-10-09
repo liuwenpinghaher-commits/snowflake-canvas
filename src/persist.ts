@@ -6,13 +6,14 @@ import {
   loadCards,
   serializeDocument,
   type AppState,
+  type Card,
   type CanvasEdge,
   type CanvasNode,
   type ComposeSession,
   type CompositionEvent,
   type LooseCard,
 } from './document.ts'
-import { MSG_CANDIDATE_MISS, buildExpandRequest, requestExpandCandidates } from './expand.ts'
+import { MSG_EXPAND_NO_CARD, buildExpandRequest, requestExpandCandidates } from './expand.ts'
 import type { ExpandClientOptions, ShownCandidate } from './expand.ts'
 import { isSnapshotFileName, snapshotFileName } from './snapshot.ts'
 
@@ -20,6 +21,9 @@ export const CANONICAL_NAME = 'snowflake.json'
 
 export const MSG_WRITE_FAILED = '文件没写上'
 export const MSG_VERSION_MOVED = '版本已更新，请再试'
+export const MSG_CARD_CONFLICT = '有卡片两边都改过，请先选择用哪一边'
+export const MSG_CANON_MISMATCH = '正本对不上，已停下'
+export const CONFLICT_SUMMARY_LIMIT = 80
 export const MSG_WRITING = '正在写入正本'
 export const MSG_LOG_DOWN = '恢复日志不可用'
 export const MSG_OTHER_TAB = '另一个标签正在写这份正本，本页只读'
@@ -31,6 +35,25 @@ export const MSG_KEEP_SNAPSHOT = '留下这一版'
 export const SNAPSHOT_SAVE_HINT = '这是正本旁边的一份快照。打开应用时仍读正本，不读这份快照。'
 export const MSG_NEED_PERMISSION = '还没有读写授权。点一下才能继续自动保存。'
 export const SAVE_AS_WARNING = '下载开始后不要在浏览器里取消；若取消了，必须停止编辑，下次打开会看到上一份正本。'
+export const MSG_SNAPSHOT_FAILED = '留下这一版失败'
+export const MSG_SAVE_AS_LATER = '还没另存，稍后再提示'
+export const MSG_USE_LOOPBACK = '这个地址只能下载另存，不能自动保存。请改用 http://127.0.0.1:8093 打开以获得自动保存。'
+// 另存模式下，自动保存两次弹下载之间至少隔这么久；间隔内的改动先记进恢复日志。
+export const SAVE_AS_INTERVAL_MS = 60_000
+
+export type StatusKind = 'error' | 'info'
+
+export interface StatusNotice {
+  text: string
+  kind: StatusKind
+}
+
+const ERROR_TEXTS = new Set([MSG_WRITE_FAILED, MSG_VERSION_MOVED, MSG_SNAPSHOT_FAILED, MSG_CANON_MISMATCH])
+
+export function statusKind(text: string): StatusKind {
+  if (ERROR_TEXTS.has(text)) return 'error'
+  return /失败|没写上|不可用/.test(text) ? 'error' : 'info'
+}
 
 export function tempNameFor(canonicalName: string): string {
   return `.${canonicalName}.tmp`
@@ -85,8 +108,30 @@ export interface RemoteCanonical {
     | { ok: false; conflict: true; etag: string; bytes?: Uint8Array }
     | { ok: false; conflict: false }
   >
-  keep(etag: string): Promise<{ ok: true; etag: string; snapshotCount: number } | { ok: false; message: string }>
+  keep(
+    etag: string,
+  ): Promise<
+    | { ok: true; etag: string; snapshotCount: number; snapshotName?: string; timeline?: 'ok' | 'skipped' }
+    | { ok: false; message: string }
+  >
+  listSnapshots?: () => Promise<Array<{ name: string; savedAt: string }> | null>
+  rollback?: (
+    name: string,
+    etag: string,
+  ) => Promise<
+    | { ok: true; etag: string; bytes: Uint8Array }
+    | { ok: false; conflict: true; etag: string; bytes?: Uint8Array }
+    | { ok: false; conflict: false; message: string }
+  >
 }
+
+export interface SnapshotOption {
+  name: string
+  label: string
+}
+
+export const UNDO_LIMIT = 20
+export const MSG_TIMELINE_SKIPPED = '时间线没记上'
 
 export interface PersistPorts {
   protocol: string
@@ -122,13 +167,25 @@ export interface PersistView {
   downloadMode: boolean
   fileName: string
   messages: string[]
+  notices: StatusNotice[]
   otherStartedAt: string | null
   logUnavailable: boolean
   restoredNotice: boolean
   expandNotice: string | null
   candidates: ShownCandidate[]
   snapshotNames: string[]
+  snapshotOptions: SnapshotOption[]
+  canUndo: boolean
   remoteVersion: string
+  conflicts: CardConflictView[]
+}
+
+export type ConflictPick = 'mine' | 'server'
+
+export interface CardConflictView {
+  cardId: string
+  serverText: string
+  mineText: string
 }
 
 export interface PersistSnapshot {
@@ -144,7 +201,8 @@ export interface PersistController {
   claimWrite(): Promise<void>
   openLocalFile(bytes: Uint8Array, name: string): Promise<void>
   commitText(cardId: string, fieldKey: string | null, text: string): Promise<void>
-  mutate(recipe: (state: AppState) => AppState): Promise<void>
+  mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void>
+  undo(): Promise<void>
   select(id: string | null): void
   editorComposition(
     session: ComposeSession,
@@ -157,12 +215,33 @@ export interface PersistController {
   keepVersion(): Promise<void>
   rollbackTo(name: string): Promise<void>
   rollbackToBytes(bytes: Uint8Array): Promise<void>
+  resolveCardConflict(cardId: string, pick: ConflictPick): Promise<void>
   snapshot(): PersistSnapshot
   readRecoveryLog(): Promise<Uint8Array | null>
   dispose(): void
 }
 
 type OpenReason = 'refresh' | 'pick' | 'claim-button' | 'download' | 'open-file'
+
+type WriteResult =
+  | { ok: true; logged: boolean; bytes: Uint8Array; merged?: boolean }
+  | { ok: false; conflict?: false; mismatch?: boolean }
+  | { ok: false; conflict: true; pending: CardConflict[]; provisional: Uint8Array | null }
+
+// 一次写入里，合并后又遇到 412 时最多再合并重发几轮。
+const REMOTE_MERGE_ROUNDS = 3
+
+let writeSeq = 0
+const writeSeqByState = new WeakMap<AppState, number>()
+
+// 编辑器自己写回产生的画布状态带一个递增编号；采纳、扩写确认、合并、拖动等产生的状态没有编号。
+export function writeSeqOf(state: AppState): number {
+  return writeSeqByState.get(state) ?? 0
+}
+
+export function latestWriteSeq(): number {
+  return writeSeq
+}
 
 export function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false
@@ -226,11 +305,9 @@ function edgeJson(edge: CanvasEdge): string {
   })
 }
 
-function mergeScalar(base: string, remote: string, local: string): string | null {
-  if (remote === base) return local
-  if (local === base) return remote
-  if (remote === local) return local
-  return null
+interface ListMerge<T> {
+  kept: Map<string, T>
+  conflicts: Map<string, { remote: T | undefined; local: T | undefined }>
 }
 
 function mergeList<T>(
@@ -239,12 +316,13 @@ function mergeList<T>(
   local: readonly T[],
   idOf: (item: T) => string,
   jsonOf: (item: T) => string,
-): T[] | null {
+): ListMerge<T> {
   const baseMap = new Map(base.map((item) => [idOf(item), item]))
   const remoteMap = new Map(remote.map((item) => [idOf(item), item]))
   const localMap = new Map(local.map((item) => [idOf(item), item]))
   const ids = new Set([...baseMap.keys(), ...remoteMap.keys(), ...localMap.keys()])
   const kept = new Map<string, T>()
+  const conflicts = new Map<string, { remote: T | undefined; local: T | undefined }>()
   for (const id of ids) {
     const previous = baseMap.get(id)
     const incoming = remoteMap.get(id)
@@ -271,8 +349,18 @@ function mergeList<T>(
       else if (incoming) kept.set(id, incoming)
       continue
     }
-    return null
+    conflicts.set(id, { remote: incoming, local: mine })
   }
+  return { kept, conflicts }
+}
+
+function orderList<T>(
+  kept: Map<string, T>,
+  base: readonly T[],
+  remote: readonly T[],
+  local: readonly T[],
+  idOf: (item: T) => string,
+): T[] {
   const seen = new Set<string>()
   const ordered: T[] = []
   const push = (id: string) => {
@@ -288,48 +376,163 @@ function mergeList<T>(
   return ordered
 }
 
-function mergeRemoteDocuments(baseBytes: Uint8Array, remoteBytes: Uint8Array, localBytes: Uint8Array): Uint8Array | null {
+function setOrDelete<T>(map: Map<string, T>, id: string, item: T | null | undefined): void {
+  if (item) map.set(id, item)
+  else map.delete(id)
+}
+
+// 连线两端都必须是还在的卡片；节点 id 与卡片 id 相同。
+export function dropDanglingEdges(edges: readonly CanvasEdge[], cards: Readonly<Record<string, unknown>>): CanvasEdge[] {
+  const has = (id: string) => Object.prototype.hasOwnProperty.call(cards, id)
+  return edges.filter((edge) => has(edge.fromNode) && has(edge.toNode))
+}
+
+// 一张卡在服务器那边的样子：卡片、同 id 的节点、从这张卡连出且两边改得不一样的连线。null 表示服务器上没有。
+export interface ConflictSide {
+  card: Card | null
+  node: CanvasNode | null
+  edges: Array<{ id: string; edge: CanvasEdge | null }>
+}
+
+export interface CardConflict {
+  cardId: string
+  serverKey: string
+  server: ConflictSide
+}
+
+export interface ConflictChoiceRecord {
+  pick: ConflictPick
+  serverKey: string
+}
+
+export type MergeOutcome =
+  | { kind: 'merged'; bytes: Uint8Array; conflicts: CardConflict[] }
+  | { kind: 'mismatch' }
+
+function sideKey(side: ConflictSide): string {
+  return JSON.stringify({
+    card: side.card ? cardJson(side.card) : null,
+    node: side.node ? nodeJson(side.node) : null,
+    edges: side.edges.map((item) => [item.id, item.edge ? edgeJson(item.edge) : null]),
+  })
+}
+
+// 三方合并：base 是本页上次成功写入的正本，remote 是服务器当前正本，local 是本页画布。
+// 两边都改过的卡按 choices 里作者的选择取一边；选择时看到的服务器版本已经变了，或还没选，就先留本页的，并列进 conflicts。
+export function mergeDocuments(
+  baseBytes: Uint8Array,
+  remoteBytes: Uint8Array,
+  localBytes: Uint8Array,
+  choices: ReadonlyMap<string, ConflictChoiceRecord> = new Map(),
+): MergeOutcome {
   const base = parseCompleteDocument(baseBytes)
   const remote = parseCompleteDocument(remoteBytes)
   const local = parseCompleteDocument(localBytes)
-  if (!base || !remote || !local) return null
-  const fileId = mergeScalar(
-    base.state.snowflake.fileId,
-    remote.state.snowflake.fileId,
-    local.state.snowflake.fileId,
-  )
-  if (fileId === null) return null
-  const cards = mergeList(
-    Object.entries(base.state.snowflake.cards).map(([id, card]) => ({ id, card })),
-    Object.entries(remote.state.snowflake.cards).map(([id, card]) => ({ id, card })),
-    Object.entries(local.state.snowflake.cards).map(([id, card]) => ({ id, card })),
-    (item) => item.id,
-    (item) => cardJson(item.card),
-  )
-  if (!cards) return null
-  const nodes = mergeList(
-    base.state.canvas.nodes,
-    remote.state.canvas.nodes,
-    local.state.canvas.nodes,
-    (node) => node.id,
-    nodeJson,
-  )
-  if (!nodes) return null
-  const edges = mergeList(
-    base.state.canvas.edges,
-    remote.state.canvas.edges,
-    local.state.canvas.edges,
-    (edge) => edge.id,
-    edgeJson,
-  )
-  if (!edges) return null
+  if (!base || !remote || !local) return { kind: 'mismatch' }
+  const fileId = base.state.snowflake.fileId
+  if (remote.state.snowflake.fileId !== fileId || local.state.snowflake.fileId !== fileId) return { kind: 'mismatch' }
+  const cardItems = (state: AppState) => Object.entries(state.snowflake.cards).map(([id, card]) => ({ id, card }))
+  const cardBase = cardItems(base.state)
+  const cardRemote = cardItems(remote.state)
+  const cardLocal = cardItems(local.state)
+  const cards = mergeList(cardBase, cardRemote, cardLocal, (item) => item.id, (item) => cardJson(item.card))
+  const nodes = mergeList(base.state.canvas.nodes, remote.state.canvas.nodes, local.state.canvas.nodes, (node) => node.id, nodeJson)
+  const edges = mergeList(base.state.canvas.edges, remote.state.canvas.edges, local.state.canvas.edges, (edge) => edge.id, edgeJson)
+
+  const edgeUnit = new Map<string, string>()
+  for (const [id, item] of edges.conflicts) {
+    const edge = item.remote ?? item.local
+    if (edge) edgeUnit.set(id, edge.fromNode)
+  }
+  const units = new Set<string>([...cards.conflicts.keys(), ...nodes.conflicts.keys(), ...edgeUnit.values()])
+  const remoteNodes = new Map(remote.state.canvas.nodes.map((node) => [node.id, node]))
+  const localNodes = new Map(local.state.canvas.nodes.map((node) => [node.id, node]))
+  const conflicts: CardConflict[] = []
+  for (const unit of [...units].sort()) {
+    const edgeIds = [...edgeUnit.entries()]
+      .filter(([, owner]) => owner === unit)
+      .map(([id]) => id)
+      .sort()
+    const server: ConflictSide = {
+      card: remote.state.snowflake.cards[unit] ?? null,
+      node: remoteNodes.get(unit) ?? null,
+      edges: edgeIds.map((id) => ({ id, edge: edges.conflicts.get(id)?.remote ?? null })),
+    }
+    const serverKey = sideKey(server)
+    const choice = choices.get(unit)
+    const pick = choice && choice.serverKey === serverKey ? choice.pick : null
+    const takeServer = pick === 'server'
+    const card = takeServer ? server.card : (local.state.snowflake.cards[unit] ?? null)
+    setOrDelete(cards.kept, unit, card ? { id: unit, card } : null)
+    setOrDelete(nodes.kept, unit, takeServer ? server.node : localNodes.get(unit))
+    for (const id of edgeIds) {
+      const item = edges.conflicts.get(id)
+      setOrDelete(edges.kept, id, takeServer ? item?.remote : item?.local)
+    }
+    if (!pick) conflicts.push({ cardId: unit, serverKey, server })
+  }
+
   const mergedCards: AppState['snowflake']['cards'] = {}
-  for (const item of cards) mergedCards[item.id] = item.card
-  return documentToBytes({
-    canvas: { nodes, edges },
-    snowflake: { fileId, cards: mergedCards },
-    activeId: local.state.activeId,
-  })
+  for (const item of orderList(cards.kept, cardBase, cardRemote, cardLocal, (item) => item.id)) {
+    mergedCards[item.id] = item.card
+  }
+  const mergedNodes = orderList(nodes.kept, base.state.canvas.nodes, remote.state.canvas.nodes, local.state.canvas.nodes, (node) => node.id)
+  const mergedEdges = dropDanglingEdges(
+    orderList(edges.kept, base.state.canvas.edges, remote.state.canvas.edges, local.state.canvas.edges, (edge) => edge.id),
+    mergedCards,
+  )
+  return {
+    kind: 'merged',
+    bytes: documentToBytes({
+      canvas: { nodes: mergedNodes, edges: mergedEdges },
+      snowflake: { fileId, cards: mergedCards },
+      activeId: local.state.activeId,
+    }),
+    conflicts,
+  }
+}
+
+function applyConflictSide(state: AppState, cardId: string, side: ConflictSide): AppState {
+  const cards = { ...state.snowflake.cards }
+  if (side.card) cards[cardId] = side.card
+  else delete cards[cardId]
+  let nodes = state.canvas.nodes.filter((node) => node.id !== cardId)
+  if (side.node) {
+    const at = state.canvas.nodes.findIndex((node) => node.id === cardId)
+    nodes = [...nodes]
+    nodes.splice(at < 0 ? nodes.length : at, 0, side.node)
+  }
+  let edges = [...state.canvas.edges]
+  for (const item of side.edges) {
+    const at = edges.findIndex((edge) => edge.id === item.id)
+    if (item.edge) {
+      if (at < 0) edges.push(item.edge)
+      else edges[at] = item.edge
+    } else if (at >= 0) {
+      edges.splice(at, 1)
+    }
+  }
+  edges = dropDanglingEdges(edges, cards)
+  return { ...state, canvas: { nodes, edges }, snowflake: { ...state.snowflake, cards } }
+}
+
+function conflictSummary(card: Card | null | undefined, node: CanvasNode | null | undefined): string {
+  if (!card && !node) return '（已删除）'
+  const parts = card ? [card.body, ...Object.keys(card.fields).sort().map((key) => card.fields[key] ?? '')] : [node?.text ?? '']
+  const text = parts.join(' ').replace(/\s+/g, ' ').trim()
+  if (!text) return '（空）'
+  const chars = Array.from(text)
+  return chars.length > CONFLICT_SUMMARY_LIMIT ? `${chars.slice(0, CONFLICT_SUMMARY_LIMIT).join('')}…` : text
+}
+
+function nodePlace(node: CanvasNode | null | undefined): string {
+  return node ? `位置 ${Math.round(node.x)},${Math.round(node.y)}` : '无位置'
+}
+
+// 只接受不用作者选边就能合并的结果；有两边都改过的卡或正本对不上时返回 null。
+function mergeRemoteDocuments(baseBytes: Uint8Array, remoteBytes: Uint8Array, localBytes: Uint8Array): Uint8Array | null {
+  const outcome = mergeDocuments(baseBytes, remoteBytes, localBytes)
+  return outcome.kind === 'merged' && outcome.conflicts.length === 0 ? outcome.bytes : null
 }
 
 export function createMemoryChannel(): ChannelBus {
@@ -361,13 +564,17 @@ export function idleSnapshot(): PersistSnapshot {
       downloadMode: false,
       fileName: CANONICAL_NAME,
       messages: [],
+      notices: [],
       otherStartedAt: null,
       logUnavailable: false,
       restoredNotice: false,
       expandNotice: null,
       candidates: [],
       snapshotNames: [],
+      snapshotOptions: [],
+      canUndo: false,
       remoteVersion: '',
+      conflicts: [],
     },
   }
 }
@@ -377,6 +584,14 @@ function versionFromEtag(etag: string): string {
   if (text.startsWith('W/')) text = text.slice(2).trim()
   if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) text = text.slice(1, -1)
   return text
+}
+
+export function snapshotLabel(savedAt: string, name: string): string {
+  const date = new Date(savedAt)
+  if (!savedAt || Number.isNaN(date.getTime())) return name
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const shown = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `保存于 ${shown}`
 }
 
 export function openDefaultRecoveryLog(): Promise<RecoveryLog> {
@@ -537,6 +752,9 @@ class Controller implements PersistController {
   private otherStartedAt: string | null = null
   private lastBytes: Uint8Array | null = null
   private downloadMode = false
+  private lastSaveAsAt: number | null = null
+  private saveAsHeld = false
+  private saveAsTimer: ReturnType<typeof setTimeout> | null = null
   private fileProtocol = false
   private needChoice = false
   private needPermission = false
@@ -545,7 +763,9 @@ class Controller implements PersistController {
   private showWritingMessage = false
   private writing = false
   private canEdit = false
-  private queuedText: { cardId: string; fieldKey: string | null; text: string } | null = null
+  private queueRun: Promise<void> | null = null
+  private queueDirty = false
+  private queueWaiters: Array<() => void> = []
   private stopped = false
   private failed = false
   private logUnavailable = false
@@ -553,8 +773,15 @@ class Controller implements PersistController {
   private expandNotice: string | null = null
   private candidates: ShownCandidate[] = []
   private snapshotNames: string[] = []
+  private remoteSnapshots: Array<{ name: string; savedAt: string }> = []
+  private undoStack: AppState[] = []
   private remoteMode = false
   private remoteEtag = ''
+  // 两边都改过、还等作者选边的卡。非空时本页只改内存，不发写请求。
+  private readonly pendingConflicts = new Map<string, CardConflict>()
+  // 作者已经选过的边，带着选择时看到的服务器版本；下一次写成功后清空。
+  private readonly conflictChoices = new Map<string, ConflictChoiceRecord>()
+  private canonMismatch = false
   private actionNotice: string | null = null
   private readonly issuedSnapshotNames = new Set<string>()
   private disposed = false
@@ -584,6 +811,8 @@ class Controller implements PersistController {
 
   dispose(): void {
     this.disposed = true
+    if (this.saveAsTimer !== null) clearTimeout(this.saveAsTimer)
+    this.saveAsTimer = null
     this.unsub?.()
     this.unsub = null
     this.lock?.release()
@@ -736,6 +965,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(parsed.state.snowflake.fileId, 'open-file')
+    this.undoStack = []
     this.state = { ...parsed.state, activeId: this.state.activeId }
     this.lastBytes = parsed.bytes
     this.needChoice = false
@@ -753,26 +983,47 @@ class Controller implements PersistController {
   }
 
   async commitText(cardId: string, fieldKey: string | null, text: string): Promise<void> {
-    if (this.writing) {
-      if (!this.canEdit || this.stopped || this.failed || this.fileProtocol || this.readonlyOther || this.needPermission) {
-        return
-      }
-      this.queuedText = { cardId, fieldKey, text }
-      return
-    }
-    if (!this.editingAllowed()) return
-    this.queuedText = null
-    const next = commitCardText(this.state, cardId, text, fieldKey, false)
-    if (next === this.state) return
-    await this.persistState(next)
-    await this.flushQueuedText()
+    await this.applyText(cardId, fieldKey, text, true)
   }
 
-  async mutate(recipe: (state: AppState) => AppState): Promise<void> {
+  private async applyText(cardId: string, fieldKey: string | null, text: string, fromEditor: boolean): Promise<void> {
     if (!this.editingAllowed()) return
-    const next = recipe(this.state)
+    const next = commitCardText(this.state, cardId, text, fieldKey, false)
     if (next === this.state) return
+    if (fromEditor) {
+      writeSeq += 1
+      writeSeqByState.set(next, writeSeq)
+    }
     await this.persistState(next)
+  }
+
+  async mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void> {
+    if (!this.editingAllowed()) return
+    const before = this.state
+    const next = recipe(before)
+    if (next === before) return
+    if (options?.undoable) {
+      this.undoStack.push(before)
+      if (this.undoStack.length > UNDO_LIMIT) this.undoStack.splice(0, this.undoStack.length - UNDO_LIMIT)
+    }
+    await this.persistState(next)
+  }
+
+  // 撤销只换内存里的画布，再走同一条写入队列；没有重做。
+  async undo(): Promise<void> {
+    if (!this.editingAllowed()) return
+    const previous = this.undoStack.pop()
+    if (!previous) return
+    if (previous.snowflake.fileId !== this.state.snowflake.fileId) {
+      this.undoStack = []
+      this.emit()
+      return
+    }
+    const active = this.state.activeId
+    await this.persistState({
+      ...previous,
+      activeId: active && previous.canvas.nodes.some((node) => node.id === active) ? active : previous.activeId,
+    })
   }
 
   select(id: string | null): void {
@@ -800,23 +1051,29 @@ class Controller implements PersistController {
       !this.failed &&
       !this.fileProtocol &&
       !this.readonlyOther &&
-      !this.needPermission
+      !this.needPermission &&
+      !this.canonMismatch
     )
+  }
+
+  async resolveCardConflict(cardId: string, pick: ConflictPick): Promise<void> {
+    const entry = this.pendingConflicts.get(cardId)
+    if (!entry || !this.editingAllowed()) return
+    this.conflictChoices.set(cardId, { pick, serverKey: entry.serverKey })
+    this.pendingConflicts.delete(cardId)
+    if (pick === 'server') {
+      this.undoStack = []
+      this.state = applyConflictSide(this.state, cardId, entry.server)
+    }
+    if (this.pendingConflicts.size > 0) {
+      this.emit()
+      return
+    }
+    await this.persistState(this.state)
   }
 
   private writerHeld(): boolean {
     return Boolean(this.lock) || this.lockUnsupported
-  }
-
-  private async flushQueuedText(): Promise<void> {
-    const queued = this.queuedText
-    if (!queued || this.writing || this.disposed) return
-    this.queuedText = null
-    if (!this.editingAllowed()) return
-    const next = commitCardText(this.state, queued.cardId, queued.text, queued.fieldKey, false)
-    if (next === this.state) return
-    await this.persistState(next)
-    await this.flushQueuedText()
   }
 
   private enterFileProtocol(): void {
@@ -1048,6 +1305,7 @@ class Controller implements PersistController {
     if (!parsed) return false
     this.remoteMode = true
     this.remoteEtag = loaded.etag
+    this.undoStack = []
     this.state = parsed.state
     this.lastBytes = parsed.bytes
     this.fileId = parsed.state.snowflake.fileId
@@ -1060,54 +1318,50 @@ class Controller implements PersistController {
     this.stopped = false
     this.canEdit = true
     this.emit()
+    await this.refreshRemoteSnapshots()
+    this.emit()
     return true
   }
 
-  private async writeRemote(
-    bytes: Uint8Array,
-  ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false; conflict?: boolean }> {
+  // remoteEtag 与 lastBytes 只在服务器接受写入时一起前进。412 之后两者都停在上次成功写入的那一版，
+  // 只把合并结果带着服务器刚给的版本号重发；合并不了就交给作者选边，不重发冲突前的旧画布。
+  private async writeRemote(bytes: Uint8Array): Promise<WriteResult> {
     const remote = this.ports.remote
     if (!remote) return { ok: false }
     try {
-      const saved = await remote.save(bytes, this.remoteEtag)
-      if (saved.ok) {
-        this.remoteEtag = saved.etag
-        this.lastBytes = bytes.slice()
-        return { ok: true, logged: true, bytes }
-      }
-      if (saved.conflict && saved.etag) {
-        const merged =
-          saved.bytes && this.lastBytes ? mergeRemoteDocuments(this.lastBytes, saved.bytes, bytes) : null
-        // 412 之后只允许再发合并结果。合并不了、或合并后再 412，都不得把冲突前的旧正文原样重发。
-        if (merged) {
-          const retried = await remote.save(merged, saved.etag)
-          if (retried.ok) {
-            this.remoteEtag = retried.etag
-            this.lastBytes = merged.slice()
-            const parsed = parseCompleteDocument(merged)
-            if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
-            return { ok: true, logged: true, bytes: merged }
-          }
-          if (retried.conflict && retried.etag) {
-            this.remoteEtag = retried.etag
-            return { ok: false, conflict: true }
-          }
-          return { ok: false }
+      let sending = bytes
+      let base = this.lastBytes
+      let saved = await remote.save(sending, this.remoteEtag)
+      for (let round = 0; ; round += 1) {
+        if (saved.ok) {
+          this.remoteEtag = saved.etag
+          this.lastBytes = sending.slice()
+          this.conflictChoices.clear()
+          return { ok: true, logged: true, bytes: sending, merged: sending !== bytes }
         }
-        this.remoteEtag = saved.etag
-        return { ok: false, conflict: true }
+        if (!saved.conflict || !saved.etag) return { ok: false }
+        if (!saved.bytes || !base || round >= REMOTE_MERGE_ROUNDS) {
+          return { ok: false, conflict: true, pending: [], provisional: null }
+        }
+        const outcome = mergeDocuments(base, saved.bytes, sending, this.conflictChoices)
+        if (outcome.kind === 'mismatch') return { ok: false, mismatch: true }
+        if (outcome.conflicts.length > 0) {
+          return { ok: false, conflict: true, pending: outcome.conflicts, provisional: outcome.bytes }
+        }
+        base = saved.bytes
+        sending = outcome.bytes
+        saved = await remote.save(sending, saved.etag)
       }
-      return { ok: false }
     } catch {
       return { ok: false }
     }
   }
 
-  private async writeExact(
-    bytes: Uint8Array,
-  ): Promise<{ ok: true; logged: boolean; bytes: Uint8Array } | { ok: false }> {
+  private async writeExact(bytes: Uint8Array): Promise<WriteResult> {
     if (this.remoteMode && this.ports.remote) return this.writeRemote(bytes)
     if (this.downloadMode || !this.directory) {
+      this.lastSaveAsAt = this.ports.now().getTime()
+      this.saveAsHeld = false
       const accepted = await this.ports.askSaveAs(this.fileName, bytes)
       if (!accepted) return { ok: false }
       const logged = await this.appendLog(bytes)
@@ -1136,35 +1390,162 @@ class Controller implements PersistController {
     return { ok: true, logged, bytes: verified }
   }
 
-  private async persistState(next: AppState): Promise<void> {
+  // 同一标签的所有写入走这一条队列：同一时间只有一个写请求在路上；
+  // 排队期间的多次改动只记在内存里，轮到时按最后一份画布发一次。
+  private persistState(next: AppState): Promise<void> {
     this.actionNotice = null
     this.state = next
+    if (this.pendingConflicts.size > 0) {
+      this.emit()
+      return Promise.resolve()
+    }
+    this.queueDirty = true
     this.writing = true
     this.emit()
-    const bytes = documentToBytes(next)
+    const done = new Promise<void>((resolve) => this.queueWaiters.push(resolve))
+    if (!this.queueRun) this.queueRun = this.runQueue()
+    return done
+  }
+
+  private async runQueue(): Promise<void> {
+    try {
+      while (this.queueDirty && !this.disposed) {
+        this.queueDirty = false
+        const waiters = this.queueWaiters
+        this.queueWaiters = []
+        const keepGoing =
+          this.editingAllowed() && this.pendingConflicts.size === 0 ? await this.writeOnce(this.state) : false
+        for (const resolve of waiters) resolve()
+        if (!keepGoing) {
+          this.queueDirty = false
+          break
+        }
+      }
+    } finally {
+      this.queueRun = null
+      this.writing = false
+      const rest = this.queueWaiters
+      this.queueWaiters = []
+      for (const resolve of rest) resolve()
+      this.emit()
+    }
+  }
+
+  private async drainQueue(): Promise<void> {
+    while (this.queueRun) await this.queueRun
+  }
+
+  private saveAsOnly(): boolean {
+    if (this.remoteMode && this.ports.remote) return false
+    return this.downloadMode || !this.directory
+  }
+
+  // 另存模式下自动保存不每次弹下载：距上次弹出不足 SAVE_AS_INTERVAL_MS 时只记恢复日志，
+  // 到点再按最新画布弹一次。作者主动的打开正本、回退、留下这一版不走这里。
+  private holdSaveAs(bytes: Uint8Array, last: number): Promise<boolean> {
+    this.saveAsHeld = true
+    if (this.saveAsTimer === null) {
+      const wait = Math.max(0, last + SAVE_AS_INTERVAL_MS - this.ports.now().getTime())
+      this.saveAsTimer = setTimeout(() => {
+        this.saveAsTimer = null
+        if (this.disposed || !this.saveAsHeld || !this.saveAsOnly()) return
+        this.queueDirty = true
+        this.writing = true
+        this.emit()
+        if (!this.queueRun) this.queueRun = this.runQueue()
+      }, wait)
+    }
+    return this.appendLog(bytes).then((logged) => {
+      this.lastBytes = bytes.slice()
+      if (!logged) this.logUnavailable = true
+      this.failed = false
+      this.stopped = false
+      this.canEdit = true
+      this.emit()
+      return true
+    })
+  }
+
+  private async writeOnce(sent: AppState): Promise<boolean> {
+    const bytes = documentToBytes(sent)
+    const last = this.lastSaveAsAt
+    if (this.saveAsOnly() && last !== null && this.ports.now().getTime() - last < SAVE_AS_INTERVAL_MS) {
+      return this.holdSaveAs(bytes, last)
+    }
     const result = await this.writeExact(bytes)
-    this.writing = false
-    if (this.disposed) return
+    if (this.disposed) return false
     if (!result.ok) {
+      if ('mismatch' in result && result.mismatch) {
+        this.canonMismatch = true
+        this.stopped = true
+        this.canEdit = false
+        this.emit()
+        return false
+      }
       if ('conflict' in result && result.conflict) {
-        this.actionNotice = MSG_VERSION_MOVED
+        this.takeConflict(sent, bytes, result.pending, result.provisional)
+        if (this.pendingConflicts.size === 0) this.actionNotice = MSG_VERSION_MOVED
         this.failed = false
         this.stopped = false
         this.canEdit = true
         this.emit()
-        return
+        return false
       }
       this.failed = true
       this.stopped = true
       this.canEdit = false
       this.emit()
-      return
+      return false
     }
+    if (result.merged) this.takeMerged(sent, bytes, result.bytes)
     this.failed = false
     this.stopped = false
     this.canEdit = true
     if (!result.logged) this.logUnavailable = true
     this.emit()
+    return true
+  }
+
+  private takeMerged(sent: AppState, sentBytes: Uint8Array, merged: Uint8Array): void {
+    // 合进了别处的改动，旧的撤销步骤会把它们一起抹掉。
+    this.undoStack = []
+    if (this.state === sent) {
+      const parsed = parseCompleteDocument(merged)
+      if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
+      return
+    }
+    // 请求在路上时本页又改了画布：把这些新改动叠到合并结果上，留给队列下一轮发出。
+    // 服务器那边也改过的卡交给作者选边。
+    const again = mergeDocuments(sentBytes, merged, documentToBytes(this.state))
+    if (again.kind !== 'merged') return
+    const parsed = parseCompleteDocument(again.bytes)
+    if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
+    for (const conflict of again.conflicts) this.pendingConflicts.set(conflict.cardId, conflict)
+  }
+
+  private takeConflict(
+    sent: AppState,
+    sentBytes: Uint8Array,
+    pending: CardConflict[],
+    provisional: Uint8Array | null,
+  ): void {
+    this.pendingConflicts.clear()
+    for (const conflict of pending) this.pendingConflicts.set(conflict.cardId, conflict)
+    if (!provisional) return
+    // 合进了别处的改动，旧的撤销步骤会把它们一起抹掉。
+    this.undoStack = []
+    let next = provisional
+    if (this.state !== sent) {
+      const again = mergeDocuments(sentBytes, provisional, documentToBytes(this.state))
+      if (again.kind === 'merged') {
+        next = again.bytes
+        for (const conflict of again.conflicts) {
+          if (!this.pendingConflicts.has(conflict.cardId)) this.pendingConflicts.set(conflict.cardId, conflict)
+        }
+      }
+    }
+    const parsed = parseCompleteDocument(next)
+    if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
   }
 
   private async openDirectory(reason: OpenReason): Promise<void> {
@@ -1195,6 +1576,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(parsed.state.snowflake.fileId, reason)
+    this.undoStack = []
     this.state = parsed.state
     this.lastBytes = parsed.bytes
     this.needChoice = false
@@ -1277,6 +1659,7 @@ class Controller implements PersistController {
       return
     }
     const result = await this.writeExact(logged.bytes)
+    this.undoStack = []
     this.state = logged.state
     this.fileId = logged.state.snowflake.fileId
     this.lastBytes = result.ok ? result.bytes : logged.bytes
@@ -1303,6 +1686,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(logged.state.snowflake.fileId, 'open-file')
+    this.undoStack = []
     this.state = logged.state
     if (!acquired) {
       await this.closeLog()
@@ -1371,7 +1755,7 @@ class Controller implements PersistController {
   async requestCandidates(cardId: string, fieldKey: string | null): Promise<void> {
     const request = buildExpandRequest(this.state, cardId, fieldKey)
     if (!request) {
-      this.expandNotice = MSG_CANDIDATE_MISS
+      this.expandNotice = MSG_EXPAND_NO_CARD
       this.candidates = []
       this.emit()
       return
@@ -1386,7 +1770,7 @@ class Controller implements PersistController {
     })
     if (this.disposed) return
     if (!result.ok || !this.state.snowflake.cards[cardId]) {
-      this.expandNotice = MSG_CANDIDATE_MISS
+      this.expandNotice = result.ok ? MSG_EXPAND_NO_CARD : result.reason
       this.candidates = []
       this.emit()
       return
@@ -1415,10 +1799,12 @@ class Controller implements PersistController {
     this.candidates = []
     this.expandNotice = null
     this.emit()
-    await this.commitText(cardId, fieldKey, text)
+    await this.applyText(cardId, fieldKey, text, false)
   }
 
   async keepVersion(): Promise<void> {
+    await this.drainQueue()
+    if (this.pendingConflicts.size > 0) return
     if (this.remoteMode && this.ports.remote) {
       if (!this.editingAllowed()) return
       const result = await this.ports.remote.keep(this.remoteEtag)
@@ -1428,7 +1814,11 @@ class Controller implements PersistController {
         return
       }
       this.remoteEtag = result.etag
-      this.actionNotice = `已留下这一版，快照 ${result.snapshotCount} 份`
+      this.actionNotice =
+        result.timeline === 'skipped'
+          ? `已留下这一版，快照 ${result.snapshotCount} 份。${MSG_TIMELINE_SKIPPED}`
+          : `已留下这一版，快照 ${result.snapshotCount} 份`
+      await this.refreshRemoteSnapshots()
       this.emit()
       return
     }
@@ -1441,7 +1831,81 @@ class Controller implements PersistController {
     this.emit()
   }
 
+  private async refreshRemoteSnapshots(): Promise<void> {
+    const list = this.ports.remote?.listSnapshots
+    if (!this.remoteMode || !list) {
+      this.remoteSnapshots = []
+      return
+    }
+    try {
+      this.remoteSnapshots = (await list()) ?? []
+    } catch {
+      this.remoteSnapshots = []
+    }
+  }
+
+  // 服务器先把当前画布另存一份快照，再换正本；这里只接回服务器给的结果。
+  private async rollbackRemote(name: string): Promise<void> {
+    const rollback = this.ports.remote?.rollback
+    if (!rollback || !this.editingAllowed()) return
+    await this.drainQueue()
+    if (!this.editingAllowed() || this.pendingConflicts.size > 0) return
+    this.writing = true
+    this.canEdit = false
+    this.actionNotice = null
+    this.emit()
+    let result: Awaited<ReturnType<typeof rollback>>
+    try {
+      result = await rollback(name, this.remoteEtag)
+    } catch {
+      result = { ok: false, conflict: false, message: '回退失败' }
+    }
+    this.writing = false
+    this.canEdit = true
+    if (this.disposed) return
+    if (result.ok) {
+      const parsed = parseCompleteDocument(result.bytes)
+      if (parsed) {
+        const active = this.state.activeId
+        this.undoStack = []
+        this.state = {
+          ...parsed.state,
+          activeId: active && parsed.state.canvas.nodes.some((node) => node.id === active) ? active : null,
+        }
+        this.lastBytes = parsed.bytes
+        this.fileId = parsed.state.snowflake.fileId
+        this.candidates = []
+        this.expandNotice = null
+        this.actionNotice = '已回退到所选快照，回退前的画布也留了一份快照'
+      } else {
+        this.actionNotice = '回退结果读不出来，请刷新页面'
+      }
+      this.remoteEtag = result.etag
+    } else if (result.conflict) {
+      const merged =
+        result.bytes && this.lastBytes
+          ? mergeRemoteDocuments(this.lastBytes, result.bytes, documentToBytes(this.state))
+          : null
+      const parsed = merged ? parseCompleteDocument(merged) : null
+      if (parsed && result.bytes) {
+        this.undoStack = []
+        this.state = { ...parsed.state, activeId: this.state.activeId }
+        this.lastBytes = result.bytes.slice()
+        this.remoteEtag = result.etag
+      }
+      this.actionNotice = MSG_VERSION_MOVED
+    } else {
+      this.actionNotice = result.message
+    }
+    await this.refreshRemoteSnapshots()
+    this.emit()
+  }
+
   async rollbackTo(name: string): Promise<void> {
+    if (this.remoteMode) {
+      await this.rollbackRemote(name)
+      return
+    }
     if (!this.writerHeld() || !this.editingAllowed() || !this.directory) return
     if (!isSnapshotFileName(name, this.fileName)) return
     const selected = await this.directory.read(name)
@@ -1455,6 +1919,8 @@ class Controller implements PersistController {
   }
 
   private async rollbackWithBytes(selected: Uint8Array): Promise<void> {
+    await this.drainQueue()
+    if (this.pendingConflicts.size > 0) return
     const parsed = parseCompleteDocument(selected)
     if (!parsed) return
     const current = await this.currentCanonicalBytes()
@@ -1592,11 +2058,15 @@ class Controller implements PersistController {
     if (this.lockUnsupported && this.editingAllowed()) messages.push(MSG_NO_LOCK)
     if (this.restoredNotice) messages.push(MSG_RESTORED)
     if (this.needPermission) messages.push(MSG_NEED_PERMISSION)
+    if (this.downloadMode && !this.fileProtocol && !this.remoteMode) messages.push(MSG_USE_LOOPBACK)
+    if (this.saveAsHeld && this.saveAsOnly()) messages.push(MSG_SAVE_AS_LATER)
     if (this.remoteMode) {
       messages.push('正本在服务器')
       const version = versionFromEtag(this.remoteEtag)
       if (version) messages.push(`版本 ${version}`)
     }
+    if (this.canonMismatch) messages.push(MSG_CANON_MISMATCH)
+    if (this.pendingConflicts.size > 0) messages.push(MSG_CARD_CONFLICT)
     if (this.actionNotice) messages.push(this.actionNotice)
     return {
       canEdit: this.editingAllowed(),
@@ -1609,13 +2079,35 @@ class Controller implements PersistController {
       downloadMode: this.downloadMode,
       fileName: this.fileName,
       messages,
+      notices: messages.map((text) => ({ text, kind: statusKind(text) })),
       otherStartedAt: this.readonlyOther ? this.otherStartedAt : null,
       logUnavailable: this.logUnavailable,
       restoredNotice: this.restoredNotice,
       expandNotice: this.expandNotice,
       candidates: this.candidates,
       snapshotNames: this.snapshotNames,
+      snapshotOptions: this.remoteMode
+        ? this.remoteSnapshots.map((item) => ({ name: item.name, label: snapshotLabel(item.savedAt, item.name) }))
+        : this.snapshotNames.map((name) => ({ name, label: name })),
+      canUndo: this.editingAllowed() && this.undoStack.length > 0,
       remoteVersion: this.remoteMode ? versionFromEtag(this.remoteEtag) : '',
+      conflicts: this.conflictViews(),
     }
+  }
+
+  private conflictViews(): CardConflictView[] {
+    const views: CardConflictView[] = []
+    for (const conflict of this.pendingConflicts.values()) {
+      const mineCard = this.state.snowflake.cards[conflict.cardId]
+      const mineNode = this.state.canvas.nodes.find((node) => node.id === conflict.cardId)
+      let serverText = conflictSummary(conflict.server.card, conflict.server.node)
+      let mineText = conflictSummary(mineCard, mineNode)
+      if (serverText === mineText && (conflict.server.node || mineNode)) {
+        serverText = `${serverText} · ${nodePlace(conflict.server.node)}`
+        mineText = `${mineText} · ${nodePlace(mineNode)}`
+      }
+      views.push({ cardId: conflict.cardId, serverText, mineText })
+    }
+    return views
   }
 }

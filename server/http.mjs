@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { createReadStream } from 'node:fs'
-import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
+import { constants as fsConstants, createReadStream } from 'node:fs'
+import { access, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,22 +11,28 @@ import {
   activeSessionId,
   isLegacyRecord,
   knownSessionIds,
+  loadMessagePage,
   mergeStores,
   normalizeStore,
   publicSessions,
+  resolveAdoptionKey,
   sessionOwned,
   situationTarget,
   storeFromLegacy,
+  withAdoption,
+  withFirstAsk,
   withLast,
   withSession,
 } from './discuss-store.mjs'
+import { stripMarkdown } from '../src/strip-markdown.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
-const dataDir = '/home/chris/.local/share/snowflake-canvas'
+const dataDir = readEnv('SNOWFLAKE_DATA_DIR') || '/home/chris/.local/share/snowflake-canvas'
 const canonicalPath = join(dataDir, 'snowflake.json')
 const canonicalTempPath = join(dataDir, '.snowflake.json.tmp')
 const keepTempPath = join(dataDir, '.snowflake.keep.tmp')
+const SNAPSHOT_STEM = 'snowflake'
 const sessionPath = join(dataDir, 'session.json')
 const sessionBackupPath = join(dataDir, 'session.json.bak')
 const configPath = join(dataDir, 'config.json')
@@ -34,10 +40,10 @@ const gbrainFailFlag = join(dataDir, 'gbrain-force-fail')
 
 const gatewayOrigin = 'http://127.0.0.1:8642'
 const expandHost = '127.0.0.1'
-const expandPort = 18100
+const expandPort = Number(readEnv('SNOWFLAKE_EXPAND_PORT')) || 18100
 const expandPath = '/v1/chat/completions'
-const listenHost = '0.0.0.0'
-const listenPort = 8093
+const listenHost = readEnv('SNOWFLAKE_LISTEN_HOST') || '0.0.0.0'
+const listenPort = Number(readEnv('SNOWFLAKE_PORT')) || 8093
 
 const DISCUSS_TITLE = '画布讨论'
 const DISCUSS_INSTRUCTIONS = [
@@ -59,10 +65,6 @@ function readEnv(name) {
   if (typeof value !== 'string') return ''
   const trimmed = value.trim()
   return trimmed
-}
-
-function isLoopback(address) {
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
 function strongEtag(version) {
@@ -156,23 +158,193 @@ async function ensureDataDir() {
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   await rm(canonicalTempPath, { force: true })
   await rm(keepTempPath, { force: true })
+  for (const name of await readdir(dataDir)) {
+    if (name.startsWith(`.${SNAPSHOT_STEM}.`) && name.endsWith('.snapshot.json.tmp')) {
+      await rm(join(dataDir, name), { force: true })
+    }
+  }
 }
 
-async function readCanonical() {
+// 与 src/snapshot.ts 的 isSnapshotFileName 同一套规则。
+function isSnapshotName(name) {
+  if (typeof name !== 'string' || name.length > 200) return false
+  if (!name.startsWith(`${SNAPSHOT_STEM}.`) || !name.endsWith('.snapshot.json')) return false
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) return false
+  return true
+}
+
+function snapshotStamp(date) {
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+function snapshotNameFor(date, existing) {
+  const stamp = snapshotStamp(date)
+  const plain = `${SNAPSHOT_STEM}.${stamp}.snapshot.json`
+  if (!existing.has(plain)) return plain
+  const millis = date.getMilliseconds()
+  for (let step = 0; step <= 1000; step += 1) {
+    const suffix = String((millis + step) % 1000).padStart(3, '0')
+    const name = `${SNAPSHOT_STEM}.${stamp}${suffix}.snapshot.json`
+    if (!existing.has(name)) return name
+  }
+  for (let extra = 1; extra < 10000; extra += 1) {
+    const name = `${SNAPSHOT_STEM}.${stamp}${String(millis).padStart(3, '0')}-${extra}.snapshot.json`
+    if (!existing.has(name)) return name
+  }
+  throw new Error('快照文件名都已占用')
+}
+
+async function snapshotNames() {
+  const names = (await readdir(dataDir)).filter(isSnapshotName)
+  return names.sort((left, right) => (left < right ? 1 : left > right ? -1 : 0))
+}
+
+async function listSnapshots() {
+  const items = []
+  for (const name of await snapshotNames()) {
+    try {
+      const info = await stat(join(dataDir, name))
+      if (info.isFile()) items.push({ name, savedAt: info.mtime.toISOString() })
+    } catch {
+      // 列目录和取时间之间文件被移走，就不列它。
+    }
+  }
+  return items
+}
+
+async function snapshotCount() {
+  return (await snapshotNames()).length
+}
+
+// 快照只增不改：先写临时文件、读回比对，再改名成一个目录里还没有的名字。
+async function writeSnapshotFile(document, date) {
+  const existing = new Set(await readdir(dataDir))
+  const name = snapshotNameFor(date, existing)
+  const target = join(dataDir, name)
+  const temp = join(dataDir, `.${name}.tmp`)
+  const text = JSON.stringify(document)
+  await writeExact(temp, text)
+  let back
   try {
-    const value = await readJson(canonicalPath)
-    if (
-      value &&
+    back = await readFile(temp, 'utf8')
+  } catch (error) {
+    await rm(temp, { force: true })
+    throw error
+  }
+  if (back !== text || !isDocument(JSON.parse(back))) {
+    await rm(temp, { force: true })
+    throw new Error('快照临时文件校验失败')
+  }
+  const taken = await stat(target).then(
+    () => true,
+    () => false,
+  )
+  if (taken) {
+    await rm(temp, { force: true })
+    throw new Error('快照文件名已被占用')
+  }
+  await rename(temp, target)
+  return name
+}
+
+// 旧正本把快照正文放在 snapshots 数组里：逐份落成独立文件，全部成功后才清空数组。
+async function migrateEmbeddedSnapshots() {
+  const record = await readCanonical()
+  if (record.snapshots.length === 0) return
+  const valid = record.snapshots.every((item) => item && isDocument(item.document))
+  if (!valid) {
+    console.error('正本里的旧快照有一份不是完整画布，没有迁移，旧数组原样保留')
+    return
+  }
+  const before = new Set()
+  for (const name of await snapshotNames()) {
+    try {
+      before.add(await readFile(join(dataDir, name), 'utf8'))
+    } catch {
+      // 读不出的旧文件不参与去重。
+    }
+  }
+  for (const item of record.snapshots) {
+    const text = JSON.stringify(item.document)
+    if (before.has(text)) continue
+    const parsed = typeof item.savedAt === 'string' ? new Date(item.savedAt) : null
+    const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date()
+    const name = await writeSnapshotFile(item.document, when)
+    await utimes(join(dataDir, name), when, when)
+  }
+  await commitEnvelope(envelope(record.version, record.document, []), canonicalTempPath)
+  console.error(`正本里的 ${record.snapshots.length} 份旧快照已迁成独立文件`)
+}
+
+const MSG_CANONICAL_UNREADABLE = '正本读不出来，已停止编辑'
+const canonicalBackupPath = join(dataDir, 'snowflake.json.bak')
+let canonicalBroken = null
+
+function canonicalUnreadable() {
+  return httpError(503, MSG_CANONICAL_UNREADABLE)
+}
+
+function isCanonical(value) {
+  return Boolean(
+    value &&
       Number.isInteger(value.version) &&
       value.version > 0 &&
       isDocument(value.document) &&
-      Array.isArray(value.snapshots)
-    ) {
-      return value
-    }
-  } catch {
-    // 第一次打开，或文件还不是完整正本。
+      Array.isArray(value.snapshots),
+  )
+}
+
+// 正本存在却读不出：原文件改名留底后停止编辑，直到人工处理并重启。绝不写空画布。
+async function quarantineCanonical(reason) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const kept = join(dataDir, `snowflake.json.corrupt-${stamp}`)
+  await rename(canonicalPath, kept)
+  canonicalBroken = { kept, reason }
+  throw canonicalUnreadable()
+}
+
+function sendUnreadable(reply) {
+  reply.code(503)
+  reply.header('Cache-Control', 'no-store')
+  reply.type('text/plain; charset=utf-8')
+  return reply.send(MSG_CANONICAL_UNREADABLE)
+}
+
+function isUnreadable(error) {
+  return Boolean(error && error.statusCode === 503 && error.message === MSG_CANONICAL_UNREADABLE)
+}
+
+async function readCanonical() {
+  if (canonicalBroken) throw canonicalUnreadable()
+  let text
+  try {
+    text = await readFile(canonicalPath, 'utf8')
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') return quarantineCanonical(error)
+    return createCanonical()
   }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (error) {
+    return quarantineCanonical(error)
+  }
+  if (!isCanonical(value)) return quarantineCanonical(new Error('正本字段校验不过'))
+  return value
+}
+
+async function backupCanonical() {
+  try {
+    const value = await readJson(canonicalPath)
+    if (!isCanonical(value)) return
+  } catch {
+    return
+  }
+  await copyFile(canonicalPath, canonicalBackupPath)
+}
+
+async function createCanonical() {
   const created = envelope(1, emptyDocument(), [])
   await writeExact(canonicalTempPath, JSON.stringify(created))
   const back = await readJson(canonicalTempPath)
@@ -192,14 +364,16 @@ async function commitEnvelope(next, tempPath) {
     await rm(tempPath, { force: true })
     throw new Error('正本临时文件校验失败')
   }
+  await backupCanonical()
   await rename(tempPath, canonicalPath)
   return back
 }
 
-function sendCanvas(reply, record) {
+// 快照正文只在独立文件里，响应里的 snapshots 恒为空数组。
+function sendCanvas(reply, record, extra) {
   reply.header('ETag', strongEtag(record.version))
   reply.header('Cache-Control', 'no-store')
-  return reply.send(record)
+  return reply.send({ ...envelope(record.version, record.document, []), ...extra })
 }
 
 function gatewayHeaders(extra) {
@@ -367,7 +541,7 @@ async function createGatewaySession(cardId, store) {
     if (created.status === 201 && payload.session && typeof payload.session.id === 'string') {
       const sessionId = payload.session.id.trim()
       if (sessionId && !used.has(sessionId)) {
-        return { sessionId, title, createdAt, cardId }
+        return { sessionId, title, createdAt, cardId, firstAskOpen: true }
       }
     }
   }
@@ -407,6 +581,22 @@ async function selectCardSession(cardId, sessionId) {
   })
 }
 
+async function recordFirstAsk(cardId, sessionId, message) {
+  return exclusiveSession(async () => {
+    const store = await loadDiscussStoreInner()
+    const { store: next, changed } = withFirstAsk(store, cardId, sessionId, message)
+    if (changed) await saveDiscussStore(next)
+  })
+}
+
+async function recordAdoption(cardId, sessionId, adoption) {
+  return exclusiveSession(async () => {
+    const store = await loadDiscussStoreInner()
+    if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
+    return saveDiscussStore(withAdoption(store, cardId, sessionId, adoption))
+  })
+}
+
 async function assertOwned(cardId, sessionId, touch) {
   if (!cardId) throw httpError(400, '缺少 cardId')
   if (!sessionId) throw httpError(400, 'cardId 对不上该会话')
@@ -416,30 +606,6 @@ async function assertOwned(cardId, sessionId, touch) {
     if (!touch) return store
     return saveDiscussStore(withLast(store, cardId, sessionId))
   })
-}
-
-function messageText(content) {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .map((part) => {
-      if (typeof part === 'string') return part
-      if (part && typeof part === 'object' && typeof part.text === 'string') return part.text
-      return ''
-    })
-    .join('')
-}
-
-function messageAt(item) {
-  const raw = item.timestamp ?? item.createdAt ?? item.at
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    const ms = raw > 1e12 ? raw : raw * 1000
-    const date = new Date(ms)
-    if (Number.isNaN(date.getTime())) return ''
-    return date.toISOString()
-  }
-  if (typeof raw === 'string' && raw.trim()) return raw.trim()
-  return ''
 }
 
 function discussFailure(reply, error, fallback) {
@@ -469,7 +635,7 @@ function runGbrainOnce(args, stdin) {
       'bash',
       [
         '-lc',
-        'set -a; source "$HOME/.gbrain/env"; set +a; export PATH="$HOME/.bun/bin:$PATH"; exec "$HOME/.bun/bin/gbrain" "$@"',
+        'set -a; source "$HOME/.gbrain/env"; set +a; export PATH="$HOME/.bun/bin:$PATH"; exec "${SNOWFLAKE_GBRAIN_BIN:-$HOME/.bun/bin/gbrain}" "$@"',
         'bash',
         ...args,
       ],
@@ -525,24 +691,89 @@ async function addTimeline(page, text, failMessage) {
   await runGbrain(['timeline-add', page, date, text])
 }
 
-function clientAddress(request) {
-  return request.ip || request.socket?.remoteAddress || ''
+function captureText(cardId, content) {
+  const plain = stripMarkdown(content)
+  if (!plain) return ''
+  return `来源：雪花画布卡片 ${cardId}\n\n${plain}\n`
+}
+
+// gbrain capture --json 只在真正落盘后给 slug；只收下请求（write_request 不是 committed）时也是退出码 0，要当没写进。
+function captureSlug(out) {
+  const start = out.indexOf('{')
+  const end = out.lastIndexOf('}')
+  if (start < 0 || end < start) return ''
+  let result
+  try {
+    result = JSON.parse(out.slice(start, end + 1))
+  } catch {
+    return ''
+  }
+  if (!result || typeof result !== 'object') return ''
+  const receipt = result.write_request
+  if (receipt && typeof receipt === 'object' && receipt.state !== 'committed') return ''
+  return typeof result.slug === 'string' ? result.slug.trim() : ''
+}
+
+// 只跑一次：写入脑是用户当场点的，失败要马上告诉他，不走 put 那套 storage_busy 退避。
+async function captureToBrain(text) {
+  if (await gbrainDisabled()) throw new Error('gbrain 不可用')
+  let out
+  try {
+    out = await runGbrainOnce(['capture', '--stdin', '--json'], text)
+  } catch (error) {
+    throw new Error(`gbrain 不可用：${error instanceof Error ? error.message : String(error)}`)
+  }
+  const slug = captureSlug(out)
+  if (!slug) throw new Error('gbrain 没有给回页名，可能还没写完')
+  return slug
+}
+
+function gbrainBinary() {
+  return readEnv('SNOWFLAKE_GBRAIN_BIN') || join(process.env.HOME || '', '.bun', 'bin', 'gbrain')
+}
+
+async function timelineReachable() {
+  if (await gbrainDisabled()) return false
+  return access(gbrainBinary(), fsConstants.X_OK).then(
+    () => true,
+    () => false,
+  )
+}
+
+// 时间线只是附带记录：不进写入队列，不等结果，失败只记日志。
+function recordKeepTimeline(version) {
+  void loadConfig()
+    .then((config) => addTimeline(config.gbrainPage, `留下这一版 version=${version}`, 'gbrain 不可用，时间线没记上'))
+    .catch((error) => {
+      console.error(`留下这一版 version=${version}：时间线没记上：${error instanceof Error ? error.message : String(error)}`)
+    })
+}
+
+const EXPAND_TIMEOUT_MS = 60_000
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EADDRNOTAVAIL', 'ECONNRESET'])
+
+function expandError(reply, status, error) {
+  reply.code(status)
+  reply.header('Content-Type', 'application/json; charset=utf-8')
+  return reply.send(JSON.stringify({ error }))
+}
+
+function upstreamReason(error) {
+  const code = error && typeof error.code === 'string' ? error.code : ''
+  const where = `${expandHost}:${expandPort}`
+  if (UNREACHABLE_CODES.has(code)) return `连不上扩写服务（${where}，${code}）`
+  return `扩写服务连接出错（${where}${code ? `，${code}` : ''}）`
 }
 
 function proxyExpand(request, reply) {
-  if (!isLoopback(clientAddress(request))) {
-    reply.code(403)
-    return reply.send()
-  }
   if (request.method !== 'POST') {
-    reply.code(405)
-    return reply.send()
+    reply.header('Allow', 'POST')
+    return expandError(reply, 405, '扩写只接受 POST 请求')
   }
   const body = request.body
   const raw = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body ?? {}))
   if (raw.length > 1_000_000) {
-    reply.code(413)
-    return reply.send()
+    return expandError(reply, 413, '扩写请求超过 1MB，没有转发')
   }
   return new Promise((resolve) => {
     const headers = {
@@ -567,17 +798,17 @@ function proxyExpand(request, reply) {
         resolve(reply.send(up))
       },
     )
-    upstream.setTimeout(60_000, () => {
+    let timedOut = false
+    upstream.setTimeout(EXPAND_TIMEOUT_MS, () => {
+      timedOut = true
       upstream.destroy()
       if (!reply.sent) {
-        reply.code(504)
-        resolve(reply.send())
+        resolve(expandError(reply, 504, `扩写服务 ${EXPAND_TIMEOUT_MS / 1000} 秒没有回复，超时`))
       }
     })
-    upstream.on('error', () => {
-      if (!reply.sent) {
-        reply.code(502)
-        resolve(reply.send())
+    upstream.on('error', (error) => {
+      if (!reply.sent && !timedOut) {
+        resolve(expandError(reply, 502, upstreamReason(error)))
       }
     })
     upstream.end(raw)
@@ -642,8 +873,20 @@ async function proxyGatewayStream(raw, upstream) {
 
 function registerApi(app, prefix) {
   app.get(`${prefix}/api/canvas`, async (_request, reply) => {
-    const record = await exclusive(() => readCanonical())
+    let record
+    try {
+      record = await exclusive(() => readCanonical())
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.header('X-Snapshot-Count', String(await snapshotCount()))
     return sendCanvas(reply, record)
+  })
+
+  app.get(`${prefix}/api/canvas/snapshots`, async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(await listSnapshots())
   })
 
   app.put(`${prefix}/api/canvas`, async (request, reply) => {
@@ -654,15 +897,21 @@ function registerApi(app, prefix) {
     }
     const header = request.headers['if-match']
     const ifMatch = Array.isArray(header) ? header.join(',') : header
-    const outcome = await exclusive(async () => {
-      const current = await readCanonical()
-      if (!ifMatchSatisfied(ifMatch, current.version)) {
-        return { status: 412, record: current }
-      }
-      const next = envelope(current.version + 1, document, current.snapshots)
-      const saved = await commitEnvelope(next, canonicalTempPath)
-      return { status: 200, record: saved }
-    })
+    let outcome
+    try {
+      outcome = await exclusive(async () => {
+        const current = await readCanonical()
+        if (!ifMatchSatisfied(ifMatch, current.version)) {
+          return { status: 412, record: current }
+        }
+        const next = envelope(current.version + 1, document, current.snapshots)
+        const saved = await commitEnvelope(next, canonicalTempPath)
+        return { status: 200, record: saved }
+      })
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
     reply.code(outcome.status)
     return sendCanvas(reply, outcome.record)
   })
@@ -670,52 +919,83 @@ function registerApi(app, prefix) {
   app.post(`${prefix}/api/canvas/keep`, async (request, reply) => {
     const header = request.headers['if-match']
     const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
     try {
-      const saved = await exclusive(async () => {
+      outcome = await exclusive(async () => {
         const current = await readCanonical()
-        if (!ifMatchSatisfied(ifMatch, current.version)) {
-          const error = new Error('版本对不上')
-          error.statusCode = 412
-          error.record = current
-          throw error
-        }
-        const snapshot = {
-          version: current.version,
-          savedAt: new Date().toISOString(),
-          document: JSON.parse(JSON.stringify(current.document)),
-        }
-        const next = envelope(current.version + 1, current.document, [...current.snapshots, snapshot])
-        const text = JSON.stringify(next)
-        await writeExact(keepTempPath, text)
-        const back = await readJson(keepTempPath)
-        if (back.snapshots.length !== current.snapshots.length + 1) {
-          await rm(keepTempPath, { force: true })
-          throw new Error('快照临时副本长度不对')
-        }
-        const page = (await loadConfig()).gbrainPage
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        const snapshotName = await writeSnapshotFile(current.document, new Date())
         try {
-          await addTimeline(page, `留下这一版 version=${current.version}`, 'gbrain 不可用，这一版没有留下')
-        } catch (error) {
-          await rm(keepTempPath, { force: true })
-          const still = await readCanonical()
-          if (still.snapshots.length !== current.snapshots.length) {
-            throw new Error('gbrain 失败，而且快照数没有回到动作前')
-          }
-          throw error
+          const saved = await commitEnvelope(
+            envelope(current.version + 1, current.document, current.snapshots),
+            canonicalTempPath,
+          )
+          return { status: 200, record: saved, snapshotName, keptVersion: current.version }
+        } catch {
+          return { status: 500, snapshotName }
         }
-        await rename(keepTempPath, canonicalPath)
-        return back
       })
-      reply.code(200)
-      return sendCanvas(reply, saved)
     } catch (error) {
-      if (error && error.statusCode === 412 && error.record) {
-        reply.code(412)
-        return sendCanvas(reply, error.record)
-      }
-      reply.code(502)
-      return reply.send({ error: error instanceof Error ? error.message : '留下这一版失败' })
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      reply.code(500)
+      return reply.send({ error: error instanceof Error ? `快照没有存下：${error.message}` : '快照没有存下' })
     }
+    if (outcome.status === 412) {
+      reply.code(412)
+      return sendCanvas(reply, outcome.record)
+    }
+    if (outcome.status === 500) {
+      reply.code(500)
+      return reply.send({ error: `快照已存下（${outcome.snapshotName}），但正本版本号没有更新`, snapshotName: outcome.snapshotName })
+    }
+    let timeline = 'skipped'
+    if (await timelineReachable()) {
+      recordKeepTimeline(outcome.keptVersion)
+      timeline = 'ok'
+    }
+    const count = await snapshotCount()
+    reply.code(200)
+    reply.header('X-Snapshot-Count', String(count))
+    return sendCanvas(reply, outcome.record, { snapshotCount: count, snapshotName: outcome.snapshotName, timeline })
+  })
+
+  app.post(`${prefix}/api/canvas/rollback`, async (request, reply) => {
+    const name = request.body && typeof request.body === 'object' ? request.body.name : undefined
+    if (!isSnapshotName(name)) {
+      reply.code(400)
+      return reply.send({ error: '快照名不对' })
+    }
+    const header = request.headers['if-match']
+    const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
+    try {
+      outcome = await exclusive(async () => {
+        const current = await readCanonical()
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        let selected
+        try {
+          selected = JSON.parse(await readFile(join(dataDir, name), 'utf8'))
+        } catch (error) {
+          if (error && error.code === 'ENOENT') return { status: 404, error: '没有这份快照' }
+          return { status: 422, error: '这份快照读不出来' }
+        }
+        if (!isDocument(selected)) return { status: 422, error: '这份快照不是完整画布' }
+        await writeSnapshotFile(current.document, new Date())
+        const saved = await commitEnvelope(envelope(current.version + 1, selected, current.snapshots), canonicalTempPath)
+        return { status: 200, record: saved }
+      })
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      reply.code(500)
+      return reply.send({ error: error instanceof Error ? `没有回退：${error.message}` : '没有回退' })
+    }
+    if (outcome.status === 404 || outcome.status === 422) {
+      reply.code(outcome.status)
+      return reply.send({ error: outcome.error })
+    }
+    reply.code(outcome.status)
+    reply.header('X-Snapshot-Count', String(await snapshotCount()))
+    return sendCanvas(reply, outcome.record)
   })
 
   app.get(`${prefix}/api/health`, async () => ({ ok: true }))
@@ -756,33 +1036,41 @@ function registerApi(app, prefix) {
     const cardId = textField(request.query?.cardId)
     const sessionId = textField(request.query?.sessionId)
     try {
-      await assertOwned(cardId, sessionId, false)
-      const upstream = await gatewayFetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=80&order=oldest`,
-        { method: 'GET', headers: { Accept: 'application/json' } },
-      )
-      const payload = await upstream.json().catch(() => ({}))
-      if (!upstream.ok) {
-        reply.code(502)
-        return reply.send({ error: '讨论记录没有取到' })
-      }
-      const list = Array.isArray(payload.messages)
-        ? payload.messages
-        : Array.isArray(payload.data)
-          ? payload.data
-          : []
-      const messages = []
-      for (const item of list) {
-        if (!item || (item.role !== 'user' && item.role !== 'assistant')) continue
-        const content = messageText(item.content).trim()
-        if (!content) continue
-        const at = messageAt(item)
-        messages.push(at ? { role: item.role, content, at } : { role: item.role, content })
-      }
+      const store = await assertOwned(cardId, sessionId, false)
+      const page = await loadMessagePage(gatewayFetch, store, cardId, sessionId, {
+        limit: request.query?.limit,
+        offset: request.query?.offset,
+      })
       reply.header('Cache-Control', 'no-store')
-      return reply.send({ cardId, sessionId, messages })
+      return reply.send(page)
     } catch (error) {
       return discussFailure(reply, error, '讨论记录没有取到')
+    }
+  })
+
+  app.post(`${prefix}/api/discuss/adoptions`, async (request, reply) => {
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const cardId = textField(body.cardId)
+    const sessionId = textField(body.sessionId)
+    const content = textField(body.content)
+    if (!content) {
+      reply.code(400)
+      return reply.send({ error: '缺少采纳内容' })
+    }
+    try {
+      await assertOwned(cardId, sessionId, false)
+      const resolved = await resolveAdoptionKey(gatewayFetch, sessionId, {
+        messageId: textField(body.messageId),
+        role: textField(body.role) || 'assistant',
+        at: textField(body.at),
+        content,
+      })
+      const adoptedAt = new Date().toISOString()
+      await recordAdoption(cardId, sessionId, { ...resolved, adoptedAt })
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ cardId, sessionId, key: resolved.key, adoptedAt })
+    } catch (error) {
+      return discussFailure(reply, error, '采纳记录没有存上')
     }
   })
 
@@ -810,6 +1098,7 @@ function registerApi(app, prefix) {
       failRaw(raw, error && error.statusCode ? error.statusCode : 400, error instanceof Error ? error.message : 'cardId 对不上该会话')
       return
     }
+    void recordFirstAsk(cardId, sessionId, message).catch(() => {})
     let upstream
     try {
       upstream = await gatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/chat/stream`, {
@@ -907,6 +1196,37 @@ function registerApi(app, prefix) {
       return reply.send({ error: error instanceof Error ? error.message : '写入脑失败' })
     }
   })
+
+  // 讨论里单条 AI 回复追加进 gbrain：capture 新建一页，slug 由 gbrain 生成；不碰 projects/snowflake-canvas，也不改讨论记录。
+  app.post(`${prefix}/api/brain/capture`, async (request, reply) => {
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const cardId = textField(body.cardId)
+    const sessionId = textField(body.sessionId)
+    const role = textField(body.role) || 'assistant'
+    const content = typeof body.content === 'string' ? body.content : ''
+    if (role !== 'assistant') {
+      reply.code(400)
+      return reply.send({ error: '只能把 AI 回复写入脑' })
+    }
+    try {
+      await assertOwned(cardId, sessionId, false)
+    } catch (error) {
+      return discussFailure(reply, error, 'cardId 对不上该会话')
+    }
+    const text = captureText(cardId, content)
+    if (!text) {
+      reply.code(400)
+      return reply.send({ error: '这条结论是空的，没有写入' })
+    }
+    reply.header('Cache-Control', 'no-store')
+    try {
+      const slug = await captureToBrain(text)
+      return reply.send({ ok: true, slug })
+    } catch (error) {
+      reply.code(502)
+      return reply.send({ error: error instanceof Error ? error.message : 'gbrain 不可用' })
+    }
+  })
 }
 
 const app = Fastify({
@@ -948,7 +1268,19 @@ app.route({
 })
 
 await ensureDataDir()
-await exclusive(() => readCanonical())
+try {
+  await exclusive(() => readCanonical())
+} catch (error) {
+  if (!isUnreadable(error)) throw error
+  console.error(`${MSG_CANONICAL_UNREADABLE}：原文件已改名为 ${canonicalBroken?.kept ?? ''}`)
+}
+if (!canonicalBroken) {
+  try {
+    await exclusive(() => migrateEmbeddedSnapshots())
+  } catch (error) {
+    console.error(`旧快照迁移失败，正本里的旧数组原样保留：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 
 await app.register(fastifyStatic, {
   root: distDir,

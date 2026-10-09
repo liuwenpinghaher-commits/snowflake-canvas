@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder } from '@codemirror/view'
@@ -6,6 +6,7 @@ import {
   cardFace,
   choiceFields,
   defaultFieldKey,
+  describeLayerChange,
   editorText,
   extraFieldKeys,
   fieldControlLabel,
@@ -22,6 +23,7 @@ import {
 import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
 import FoldPanel from './FoldPanel.tsx'
+import { latestWriteSeq, writeSeqOf } from './persist.ts'
 
 function FieldButtons({
   card,
@@ -72,33 +74,28 @@ function FieldButtons({
   )
 }
 
-function eventData(event: Event): string {
-  if (!('data' in event)) return ''
-  const data = (event as CompositionEvent).data
-  return typeof data === 'string' ? data : ''
+function changedSpan(before: string, after: string): { from: number; to: number; insert: string } {
+  const max = Math.min(before.length, after.length)
+  let head = 0
+  while (head < max && before.charCodeAt(head) === after.charCodeAt(head)) head += 1
+  let tail = 0
+  while (tail < max - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) {
+    tail += 1
+  }
+  return { from: head, to: before.length - tail, insert: after.slice(head, after.length - tail) }
 }
 
-function hasHan(text: string): boolean {
-  return /[\u3400-\u9fff]/.test(text)
-}
-
-function confirmedField(doc: string, pinyin: string, confirmed: string): string | null {
-  if (!hasHan(confirmed)) return null
-  if (pinyin && confirmed.includes(pinyin)) return null
-  // Chrome 先把选好的字写进编辑器，再发组合结束。这时全文里已经没有拼音。
-  if (!pinyin) {
-    if (hasHan(doc) && !/^[A-Za-z]*$/.test(doc)) return doc
-    if (doc.length === 0 || /^[A-Za-z]*$/.test(doc)) return confirmed
-    return null
+// 组合期间卡片被外部改了：两边改的位置不重叠时，把本次组合的字叠到外部改动上。
+function rebaseEdit(base: string, mine: string, theirs: string): string | null {
+  const own = changedSpan(base, mine)
+  const other = changedSpan(base, theirs)
+  if (other.to <= own.from) {
+    return base.slice(0, other.from) + other.insert + base.slice(other.to, own.from) + own.insert + base.slice(own.to)
   }
-  const at = doc.indexOf(pinyin)
-  if (at < 0) {
-    if (hasHan(doc)) return doc
-    return null
+  if (other.from >= own.to) {
+    return base.slice(0, own.from) + own.insert + base.slice(own.to, other.from) + other.insert + base.slice(other.to)
   }
-  const next = doc.slice(0, at) + confirmed + doc.slice(at + pinyin.length)
-  if (next.includes(pinyin) || !hasHan(next)) return null
-  return next
+  return null
 }
 
 export default function SideEditor({
@@ -134,13 +131,11 @@ export default function SideEditor({
   const viewRef = useRef<EditorView | null>(null)
   const editableRef = useRef<Compartment | null>(null)
   const composingRef = useRef(false)
-  const pendingConfirmRef = useRef(false)
-  const pinyinRef = useRef('')
+  const externalHeldRef = useRef(false)
   const lastCommitRef = useRef<string | null>(null)
   const applyingRef = useRef(false)
-  const appliedRef = useRef<{ text: string; editable: boolean; cardId: string | null } | null>(null)
-  const cardIdRef = useRef(cardId)
-  const fieldKeyRef = useRef<string | null>(null)
+  const appliedRef = useRef<{ editable: boolean; cardId: string | null; fieldKey: string | null } | null>(null)
+  const cardTextRef = useRef('')
   const onCommitRef = useRef(onCommit)
   const canTypeRef = useRef(canType)
   const [fieldOverride, setFieldOverride] = useState<{
@@ -154,27 +149,6 @@ export default function SideEditor({
     setFaceOpen(false)
   }, [cardId])
 
-  useLayoutEffect(() => {
-    const errors = new Set(['文件没写上', '版本已更新，请再试'])
-    const paint = () => {
-      for (const node of document.querySelectorAll<HTMLElement>('.status-line')) {
-        const text = node.textContent ?? ''
-        const raw = text.startsWith('出错：') ? text.slice('出错：'.length) : text
-        if (errors.has(raw)) {
-          if (text !== `出错：${raw}`) node.textContent = `出错：${raw}`
-          node.classList.add('is-error')
-        } else if (node.classList.contains('is-error')) {
-          node.classList.remove('is-error')
-        }
-      }
-    }
-    paint()
-    const observer = new MutationObserver(() => paint())
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true })
-    return () => observer.disconnect()
-  }, [])
-
-  cardIdRef.current = cardId
   onCommitRef.current = onCommit
   canTypeRef.current = canType
 
@@ -184,7 +158,6 @@ export default function SideEditor({
         ? fieldOverride.key
         : defaultFieldKey(card)
       : null
-  fieldKeyRef.current = fieldKey
 
   useEffect(() => {
     onAdoptField(fieldKey)
@@ -196,25 +169,34 @@ export default function SideEditor({
     const editable = new Compartment()
     editableRef.current = editable
 
+    // 编辑器里的全文属于 appliedRef 记下的那张卡、那个字段，写回只往那里写。
     const emitCommit = (text: string) => {
       if (!canTypeRef.current || applyingRef.current) return
       if (lastCommitRef.current === text) return
-      const currentId = cardIdRef.current
-      if (!currentId) return
+      const target = appliedRef.current
+      if (!target?.cardId) return
       lastCommitRef.current = text
-      pendingConfirmRef.current = false
-      pinyinRef.current = ''
-      onCommitRef.current(currentId, fieldKeyRef.current, text)
+      onCommitRef.current(target.cardId, target.fieldKey, text)
     }
 
-    const noteDraft = (update: { state: EditorState; changes: { iterChanges: (f: (fromA: number, toA: number, fromB: number, toB: number, inserted: { toString(): string }) => void) => void } }) => {
-      let inserted = ''
-      update.changes.iterChanges((_fromA, _toA, _fromB, _toB, insertedText) => {
-        inserted += insertedText.toString()
-      })
-      if (/^[A-Za-z]+$/.test(inserted)) pinyinRef.current = inserted
-      const full = update.state.doc.toString()
-      if (!pinyinRef.current && /^[A-Za-z]+$/.test(full)) pinyinRef.current = full
+    const writeBackFull = (editor: EditorView) => {
+      if (composingRef.current || editor.composing || applyingRef.current) return
+      const doc = editor.state.doc.toString()
+      if (!externalHeldRef.current) {
+        emitCommit(doc)
+        return
+      }
+      externalHeldRef.current = false
+      const base = lastCommitRef.current ?? ''
+      const theirs = cardTextRef.current
+      const merged = theirs === base ? doc : (rebaseEdit(base, doc, theirs) ?? doc)
+      if (merged !== doc) {
+        applyingRef.current = true
+        editor.dispatch({ changes: changedSpan(doc, merged) })
+        applyingRef.current = false
+      }
+      lastCommitRef.current = theirs
+      emitCommit(merged)
     }
 
     const view = new EditorView({
@@ -229,55 +211,22 @@ export default function SideEditor({
           keymap.of([...historyKeymap, ...defaultKeymap]),
           editable.of(EditorView.editable.of(false)),
           EditorView.updateListener.of((update) => {
-            if (!update.docChanged || applyingRef.current) return
-            if (!canTypeRef.current) return
-            if (composingRef.current || update.view.composing) {
-              noteDraft(update)
-              return
-            }
-            if (pendingConfirmRef.current) {
-              const text = update.state.doc.toString()
-              const pinyin = pinyinRef.current
-              if (pinyin && text.includes(pinyin)) return
-              if (!hasHan(text)) return
-              emitCommit(text)
-              return
-            }
-            emitCommit(update.state.doc.toString())
+            if (applyingRef.current || !canTypeRef.current) return
+            if (composingRef.current || update.view.composing) return
+            if (!update.docChanged && update.state.doc.toString() === lastCommitRef.current) return
+            writeBackFull(update.view)
           }),
           EditorView.domEventHandlers({
             compositionstart() {
               composingRef.current = true
-              pendingConfirmRef.current = false
-              pinyinRef.current = ''
               return false
             },
-            compositionupdate(event) {
-              composingRef.current = true
-              const data = eventData(event)
-              if (/^[A-Za-z]+$/.test(data)) pinyinRef.current = data
-              return false
-            },
-            compositionend(event, editor) {
+            compositionend(_event, editor) {
               composingRef.current = false
-              const data = eventData(event)
-              const doc = editor.state.doc.toString()
-              const next = confirmedField(doc, pinyinRef.current, data)
-              if (!next) {
-                pendingConfirmRef.current = true
-                return false
-              }
-              if (doc !== next) {
-                applyingRef.current = true
-                editor.dispatch({ changes: { from: 0, to: doc.length, insert: next } })
-                applyingRef.current = false
-              }
-              if (editor.composing || editor.state.doc.toString() !== next) {
-                pendingConfirmRef.current = true
-                return false
-              }
-              pendingConfirmRef.current = false
-              emitCommit(next)
+              // 上屏的字可能在组合结束之后才进编辑器；等这一轮更新落定再按全文写回。
+              queueMicrotask(() => writeBackFull(editor))
+              window.setTimeout(() => writeBackFull(editor), 0)
+              window.setTimeout(() => writeBackFull(editor), 80)
               return false
             },
           }),
@@ -323,41 +272,53 @@ export default function SideEditor({
   )
   const editable = Boolean(card) && canType
 
+  cardTextRef.current = text
+  const stateSeq = writeSeqOf(documentState)
+
   useEffect(() => {
     const view = viewRef.current
     const compartment = editableRef.current
     if (!view || !compartment) return
     const applied = appliedRef.current
-    const cardSame = applied?.cardId === cardId
-    if (!cardSame) {
-      pendingConfirmRef.current = false
-      composingRef.current = false
-      pinyinRef.current = ''
-      lastCommitRef.current = null
-    }
-    // 挂起只挡住同一张卡的回写。切卡后挂起已清，必须把编辑器换成这张卡的正文。
-    if (cardSame && (composingRef.current || view.composing || pendingConfirmRef.current)) return
+    const composing = composingRef.current || view.composing
     const current = view.state.doc.toString()
-    const textSame = current === text
-    const editableSame = applied?.editable === editable
-    if (textSame && editableSame && cardSame) return
-    if (!textSame && cardSame && lastCommitRef.current !== null && lastCommitRef.current !== text) return
-    applyingRef.current = true
-    const effects = compartment.reconfigure(EditorView.editable.of(editable))
-    if (!textSame && !editableSame) {
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: text },
-        effects,
-      })
-    } else if (!textSame) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: text } })
-    } else {
-      view.dispatch({ effects })
+    const sameTarget = applied !== null && applied.cardId === cardId && applied.fieldKey === fieldKey
+    const effects = applied?.editable === editable ? [] : [compartment.reconfigure(EditorView.editable.of(editable))]
+    if (!sameTarget) {
+      // 换卡或换字段前，上一处还没写回的字先写回上一处。
+      if (applied?.cardId && !composing && lastCommitRef.current !== null && current !== lastCommitRef.current) {
+        if (canTypeRef.current) onCommitRef.current(applied.cardId, applied.fieldKey, current)
+      }
+      composingRef.current = false
+      externalHeldRef.current = false
+      applyingRef.current = true
+      view.dispatch({ changes: { from: 0, to: current.length, insert: text }, effects })
+      applyingRef.current = false
+      appliedRef.current = { editable, cardId, fieldKey }
+      lastCommitRef.current = text
+      return
     }
-    applyingRef.current = false
-    appliedRef.current = { text, editable, cardId }
-    lastCommitRef.current = text
-  }, [text, editable, cardId])
+    let changes: ReturnType<typeof changedSpan> | null = null
+    if (current !== text) {
+      // 编号对得上：卡片文字就是本编辑器刚写回的那一份，编辑器不重刷。
+      const own = stateSeq !== 0 && stateSeq === latestWriteSeq()
+      if (composing) {
+        if (!own) externalHeldRef.current = true
+      } else if (!own) {
+        changes = changedSpan(current, text)
+      }
+    }
+    if (changes || effects.length > 0) {
+      applyingRef.current = true
+      view.dispatch(changes ? { changes, effects } : { effects })
+      applyingRef.current = false
+    }
+    if (changes) {
+      externalHeldRef.current = false
+      lastCommitRef.current = text
+    }
+    appliedRef.current = { editable, cardId, fieldKey }
+  }, [text, editable, cardId, fieldKey, stateSeq, documentState])
 
   const later = card ? laterLayers(card.layer) : []
   const upcoming = card ? nextLayer(card.layer) : null
@@ -411,6 +372,7 @@ export default function SideEditor({
                   type="button"
                   onClick={() => {
                     if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
+                    if (!window.confirm(describeLayerChange(card, layer))) return
                     onChangeLayer(cardId, layer)
                   }}
                 >

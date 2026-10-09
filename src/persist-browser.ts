@@ -8,7 +8,7 @@ import {
   type PersistPorts,
   type RecoveryLog,
 } from './persist.ts'
-import { keepRemote, loadRemote, saveRemote } from './remote-canvas.ts'
+import { keepRemote, listRemoteSnapshots, loadRemote, rollbackRemote, saveRemote } from './remote-canvas.ts'
 
 const HANDLE_DB = 'snowflake-canvas'
 const HANDLE_STORE = 'handles'
@@ -240,20 +240,18 @@ function killAt(point: 'before-move' | 'after-move'): Promise<void> {
   return new Promise(() => {})
 }
 
-const EXPAND_PROXY_PATH = '/__snowflake/expand'
+export const EXPAND_PROXY_PATH = '/__snowflake/expand'
 
-function browserExpandFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if (window.location.hostname !== '127.0.0.1') {
-    return Promise.reject(new TypeError('扩写只允许本机'))
-  }
+// 页面可能从局域网地址打开，浏览器连不到开发机的 127.0.0.1:18100，一律交给同源代理转发。
+export function browserExpandFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let target: URL
   try {
     target = new URL(String(input), window.location.origin)
   } catch {
-    return Promise.reject(new TypeError('扩写只允许本机'))
+    return Promise.reject(new TypeError('扩写地址不是本机 127.0.0.1:18100'))
   }
   if (target.hostname !== '127.0.0.1' || target.port !== '18100') {
-    return Promise.reject(new TypeError('扩写只允许本机'))
+    return Promise.reject(new TypeError('扩写地址不是本机 127.0.0.1:18100'))
   }
   const headers = new Headers(init?.headers)
   headers.delete('Authorization')
@@ -262,6 +260,7 @@ function browserExpandFetch(input: RequestInfo | URL, init?: RequestInit): Promi
     headers,
     body: init?.body ?? null,
     redirect: 'manual',
+    signal: init?.signal ?? null,
   })
 }
 
@@ -336,6 +335,8 @@ export function createBrowserPorts(ui: {
       load: loadRemote,
       save: saveRemote,
       keep: keepRemote,
+      listSnapshots: listRemoteSnapshots,
+      rollback: rollbackRemote,
     },
     expand: {
       apiKey: () => undefined,

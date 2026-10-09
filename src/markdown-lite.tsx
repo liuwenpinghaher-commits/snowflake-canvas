@@ -35,6 +35,8 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
   return nodes
 }
 
+export { stripMarkdown } from './strip-markdown.mjs'
+
 function paragraph(text: string, key: string): ReactNode {
   const lines = text.split('\n')
   const children: ReactNode[] = []

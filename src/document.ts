@@ -766,11 +766,82 @@ export function spawnChild(
   }
 }
 
+interface LayerMove {
+  from: string
+  to: string
+}
+
+interface LayerPlan {
+  card: Card
+  moves: LayerMove[]
+}
+
+function freeTextOf(card: Card): string {
+  if (card.layer === 'situation' || card.layer === '正文草稿') return card.body.trim()
+  if (card.layer === '一句话') {
+    const body = card.body.trim()
+    return body && body !== (card.fields.sentence ?? '').trim() ? body : ''
+  }
+  if (card.body === bodyFor(card.layer, card.fields, '')) return ''
+  return proseWithoutEmptyLabels(card.body)
+}
+
+function planLayerChange(current: Card, layer: Layer): LayerPlan {
+  const targetLabel = layerLabel(layer)
+  const targetKeys = fieldKeys(layer)
+  const hasAdopted = targetKeys.length > 0 && layer !== '一句话'
+  const leftoverPlace = hasAdopted ? `${targetLabel}的「${FIELD_LABEL.adopted}」栏` : `${targetLabel}的正文`
+  const same: Record<string, string> = {}
+  const leftovers: string[] = []
+  const moves: LayerMove[] = []
+  const sourceKeys = [
+    ...fieldKeys(current.layer),
+    ...Object.keys(current.fields).filter((key) => !fieldKeys(current.layer).includes(key)),
+  ]
+  for (const key of sourceKeys) {
+    const value = (current.fields[key] ?? '').trim()
+    if (!value) continue
+    const label = fieldControlLabel(current.layer, key)
+    if (targetKeys.includes(key)) {
+      same[key] = value
+      moves.push({ from: label, to: `${targetLabel}的「${fieldControlLabel(layer, key)}」` })
+      continue
+    }
+    if (key === 'adopted' && hasAdopted) {
+      leftovers.unshift(value)
+    } else {
+      leftovers.push(`${label}：${shownFieldValue(key, value)}`)
+    }
+    moves.push({ from: label, to: leftoverPlace })
+  }
+  const free = freeTextOf(current)
+  if (free) {
+    leftovers.push(free)
+    moves.push({ from: '正文', to: leftoverPlace })
+  }
+  const rest = leftovers.join('\n')
+  if (layer === '一句话') {
+    const sentence = [same.sentence ?? '', rest].filter((part) => part.length > 0).join('\n')
+    return { card: blankCard(layer, { sentence }), moves }
+  }
+  if (!hasAdopted) return { card: blankCard(layer, undefined, rest), moves }
+  const fields = fieldsFor(layer, rest ? { ...same, adopted: rest } : same)
+  return { card: { layer, body: bodyFor(layer, fields, ''), fields }, moves }
+}
+
+export function describeLayerChange(current: Card, layer: Layer): string {
+  const { moves } = planLayerChange(current, layer)
+  const head = `要把这张${layerLabel(current.layer)}卡改成「${layerLabel(layer)}」。`
+  if (moves.length === 0) return `${head}\n这张卡没有写下内容，改完是一张空白的${layerLabel(layer)}卡。`
+  const lines = moves.map((move) => `· ${move.from} → ${move.to}`)
+  return `${head}\n下面这些内容会挪过去：\n${lines.join('\n')}\n空着的栏目不保留。`
+}
+
 export function changeToLaterLayer(state: AppState, cardId: string, layer: Layer): AppState {
   const current = state.snowflake.cards[cardId]
   if (!current) return state
   if (LAYERS.indexOf(layer) <= LAYERS.indexOf(current.layer)) return state
-  const card = blankCard(layer)
+  const card = planLayerChange(current, layer).card
   const nodes = state.canvas.nodes.map((node) => {
     if (node.id !== cardId) return node
     return { ...node, text: frontText(card), color: LAYER_COLOR[layer] }

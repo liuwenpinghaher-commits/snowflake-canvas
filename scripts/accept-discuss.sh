@@ -517,6 +517,20 @@ def cleanup_cards():
     mutate_document(strip_test_cards)
     CARDS_ADDED = False
 
+def drop_accept_sessions():
+    # 验收卡拿走之后，把它们在 session.json 里的会话也删掉，不留给作者的历史讨论。
+    import subprocess
+    done = subprocess.run(
+        ["python3", str(ROOT / "scripts" / "drop_accept_sessions.py"), *TEST_IDS],
+        capture_output=True,
+        text=True,
+    )
+    print(done.stdout.strip())
+    if done.returncode != 0:
+        print("FAIL")
+        print("验收会话没有删干净：" + (done.stderr.strip() or done.stdout.strip()))
+        raise SystemExit(1)
+
 try:
     main()
 except Fail as error:
@@ -541,6 +555,8 @@ except Exception as error:
     print("FAIL")
     print(repr(error))
     raise SystemExit(1)
+finally:
+    drop_accept_sessions()
 PY
 py_status=$?
 if [ "$py_status" -ne 0 ]; then

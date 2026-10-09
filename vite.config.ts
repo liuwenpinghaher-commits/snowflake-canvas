@@ -9,10 +9,8 @@ const EXPAND_UPSTREAM_HOST = '127.0.0.1'
 const EXPAND_UPSTREAM_PORT = 18100
 const EXPAND_UPSTREAM_PATH = '/v1/chat/completions'
 const EXPAND_BODY_LIMIT = 1_000_000
-
-function isLoopback(address: string | undefined): boolean {
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
-}
+const EXPAND_TIMEOUT_MS = 60_000
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EADDRNOTAVAIL', 'ECONNRESET'])
 
 function readExpandKey(): string | undefined {
   const value = process.env.CPA_API_KEY
@@ -20,19 +18,30 @@ function readExpandKey(): string | undefined {
   return value
 }
 
-function finish(res: ServerResponse, status: number): void {
+function finish(res: ServerResponse, status: number, error: string): void {
   if (res.writableEnded) return
-  if (!res.headersSent) res.statusCode = status
+  if (!res.headersSent) {
+    const body = JSON.stringify({ error })
+    res.statusCode = status
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Content-Length', Buffer.byteLength(body))
+    res.end(body)
+    return
+  }
   res.end()
 }
 
+function upstreamReason(error: NodeJS.ErrnoException): string {
+  const code = typeof error.code === 'string' ? error.code : ''
+  const where = `${EXPAND_UPSTREAM_HOST}:${EXPAND_UPSTREAM_PORT}`
+  if (UNREACHABLE_CODES.has(code)) return `连不上扩写服务（${where}，${code}）`
+  return `扩写服务连接出错（${where}${code ? `，${code}` : ''}）`
+}
+
 function proxyExpand(req: IncomingMessage, res: ServerResponse): void {
-  if (!isLoopback(req.socket.remoteAddress)) {
-    finish(res, 403)
-    return
-  }
   if (req.method !== 'POST') {
-    finish(res, 405)
+    res.setHeader('Allow', 'POST')
+    finish(res, 405, '扩写只接受 POST 请求')
     return
   }
   const chunks: Buffer[] = []
@@ -44,14 +53,14 @@ function proxyExpand(req: IncomingMessage, res: ServerResponse): void {
     size += buf.length
     if (size > EXPAND_BODY_LIMIT) {
       rejected = true
-      finish(res, 413)
+      finish(res, 413, '扩写请求超过 1MB，没有转发')
       req.destroy()
       return
     }
     chunks.push(buf)
   })
   req.on('error', () => {
-    finish(res, 400)
+    finish(res, 400, '扩写请求没有读完')
   })
   req.on('end', () => {
     if (rejected || res.writableEnded) return
@@ -82,12 +91,14 @@ function proxyExpand(req: IncomingMessage, res: ServerResponse): void {
         up.pipe(res)
       },
     )
-    upstream.setTimeout(60_000, () => {
+    let timedOut = false
+    upstream.setTimeout(EXPAND_TIMEOUT_MS, () => {
+      timedOut = true
       upstream.destroy()
-      finish(res, 504)
+      finish(res, 504, `扩写服务 ${EXPAND_TIMEOUT_MS / 1000} 秒没有回复，超时`)
     })
-    upstream.on('error', () => {
-      finish(res, 502)
+    upstream.on('error', (error: NodeJS.ErrnoException) => {
+      if (!timedOut) finish(res, 502, upstreamReason(error))
     })
     upstream.end(body)
   })

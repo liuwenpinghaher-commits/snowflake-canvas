@@ -105,7 +105,29 @@ await page.route('**/*', async (route) => {
 
 await page.goto(base, { waitUntil: 'networkidle' })
 const card = page.locator('.react-flow__node').first()
-if ((await card.count()) < 1) fail('没有场景表卡')
+// 页面返回之后画布还要再画场景表卡。立刻数会把「还没画出来」误判成没有卡。
+const nodeWaitMs = 15000
+const nodeWaitStart = Date.now()
+let sceneCardReady = false
+try {
+  await card.waitFor({ state: 'visible', timeout: nodeWaitMs })
+  sceneCardReady = (await card.count()) >= 1
+} catch {
+  sceneCardReady = false
+}
+if (!sceneCardReady) {
+  const waited = Date.now() - nodeWaitStart
+  let title = ''
+  let preview = ''
+  try { title = await page.title() } catch { title = '' }
+  try {
+    preview = (await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 80)
+  } catch {
+    preview = ''
+  }
+  try { await browser.close() } catch { /* 超时后关掉浏览器，避免残留 */ }
+  fail(`没有场景表卡 等了${waited}ms 标题=${JSON.stringify(title)} 正文前80=${JSON.stringify(preview)}`)
+}
 await card.dblclick()
 const adopt = page.getByRole('button', { name: '采纳进本念头' }).last()
 await adopt.waitFor({ timeout: 4000 })

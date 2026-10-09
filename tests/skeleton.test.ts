@@ -15,6 +15,7 @@ import {
   createCard,
   createDocument,
   deleteSelection,
+  describeLayerChange,
   frontText,
   linkCards,
   moveNode,
@@ -214,9 +215,35 @@ describe('雪花画布骨架', () => {
 
     const changed = changeToLaterLayer(state, 'a', '场景表')
     expect(cardOf(changed, 'a').layer).toBe('场景表')
-    expect(Object.keys(cardOf(changed, 'a').fields)).toEqual([...SCENE_KEYS])
+    expect(Object.keys(cardOf(changed, 'a').fields).slice(0, SCENE_KEYS.length)).toEqual([...SCENE_KEYS])
     const same = changeToLaterLayer(changed, 'a', 'situation')
     expect(cardOf(same, 'a').layer).toBe('场景表')
+  })
+
+  it('改成更后面的层：层名变了，非空内容还在目标卡里', () => {
+    let state = createDocument('file-6')
+    state = createCard(state, {
+      id: 's',
+      layer: '场景表',
+      x: 0,
+      y: 0,
+      fields: { pov: '林晚', what: '她在门口停了三秒', conflict: '弟弟不肯进门', words: '' },
+    })
+    const changed = changeToLaterLayer(state, 's', 'changci')
+    const card = cardOf(changed, 's')
+    expect(card.layer).toBe('changci')
+    expect(card.fields.conflict).toBe('弟弟不肯进门')
+    expect(card.fields.adopted).toContain('林晚')
+    expect(card.fields.adopted).toContain('她在门口停了三秒')
+    expect(card.fields.adopted).not.toContain('预计字数')
+    expect(card.body).toContain('林晚')
+    expect(card.body).toContain('她在门口停了三秒')
+    expect(describeLayerChange(cardOf(state, 's'), 'changci')).toContain('场次')
+
+    let idea = createCard(createDocument('file-7'), { id: 'i', layer: 'situation', x: 0, y: 0, body: '门口那个人是弟弟' })
+    idea = changeToLaterLayer(idea, 'i', '正文草稿')
+    expect(cardOf(idea, 'i').layer).toBe('正文草稿')
+    expect(cardOf(idea, 'i').body).toContain('门口那个人是弟弟')
   })
 
   it('删卡片连边一起删，删分组只删分组', () => {

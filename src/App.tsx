@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
+import ConflictChoice from './ConflictChoice.tsx'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
 import {
+  MSG_CARD_CONFLICT,
   MSG_KEEP_SNAPSHOT,
   MSG_SAVE_AS,
   MSG_VERSION_MOVED,
@@ -27,6 +29,9 @@ import {
   spawnChild,
   type Layer,
 } from './document.ts'
+
+const UNDOABLE = { undoable: true }
+const CONFIRM_DELETE = '删除这张卡片？删错了可以点撤销。服务器模式下也可以用回退到这一版找回。'
 
 type SaveDialog = {
   title: string
@@ -92,6 +97,8 @@ export default function App() {
   const activeNode = state.canvas.nodes.find((node) => node.id === state.activeId) ?? null
   const activeCard = state.activeId ? (state.snowflake.cards[state.activeId] ?? null) : null
   const canEdit = view.canEdit
+  const conflictIds = new Set(view.conflicts.map((item) => item.cardId))
+  const activeConflict = view.conflicts.find((item) => item.cardId === state.activeId) ?? null
 
   const closeDialog = (accepted: boolean) => {
     if (!dialog) return
@@ -146,7 +153,7 @@ export default function App() {
               void ctlRef.current?.mutate((current) => {
                 const shift = current.canvas.nodes.length * 28
                 return createCard(current, { layer: 'situation', x: 80 + shift, y: 80 + shift, body: '' })
-              })
+              }, UNDOABLE)
             }}
           >
             新建念头
@@ -158,7 +165,7 @@ export default function App() {
               void ctlRef.current?.mutate((current) => {
                 const shift = current.canvas.nodes.length * 24
                 return addGroup(current, { x: 40 + shift, y: 40 + shift })
-              })
+              }, UNDOABLE)
             }}
           >
             新建分组
@@ -167,12 +174,17 @@ export default function App() {
             type="button"
             disabled={!canEdit || !state.activeId}
             onClick={() => {
-              void ctlRef.current?.mutate((current) =>
-                current.activeId ? deleteSelection(current, current.activeId) : current,
+              if (!window.confirm(CONFIRM_DELETE)) return
+              void ctlRef.current?.mutate(
+                (current) => (current.activeId ? deleteSelection(current, current.activeId) : current),
+                UNDOABLE,
               )
             }}
           >
             删除
+          </button>
+          <button type="button" disabled={!canEdit || !view.canUndo} onClick={() => void ctlRef.current?.undo()}>
+            撤销
           </button>
           <button type="button" disabled={!canEdit} onClick={() => void ctlRef.current?.keepVersion()}>
             {MSG_KEEP_SNAPSHOT}
@@ -202,9 +214,9 @@ export default function App() {
                 onChange={(event) => setSnapName(event.currentTarget.value)}
               >
                 <option value="">选择一份快照</option>
-                {view.snapshotNames.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {view.snapshotOptions.map((option) => (
+                  <option key={option.name} value={option.name}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -218,11 +230,17 @@ export default function App() {
             </>
           )}
         </div>
-        {view.messages.map((message) => (
-          <p key={message} className="status-line" role="status">
-            {message}
-          </p>
-        ))}
+        {view.notices.map((notice) =>
+          notice.kind === 'error' ? (
+            <p key={notice.text} className="status-line is-error" role="alert">
+              出错：{notice.text}
+            </p>
+          ) : (
+            <p key={notice.text} className="status-line" role="status">
+              {notice.text}
+            </p>
+          ),
+        )}
       </header>
       <div className="workspace">
         <ReactFlowProvider>
@@ -231,22 +249,26 @@ export default function App() {
             edges={state.canvas.edges}
             cards={state.snowflake.cards}
             activeId={state.activeId}
+            conflictIds={conflictIds}
             onMove={(id, x, y) => {
               if (!canEdit) return
-              void ctlRef.current?.mutate((current) => moveNode(current, id, x, y))
+              void ctlRef.current?.mutate((current) => moveNode(current, id, x, y), UNDOABLE)
             }}
             onSelect={(id) => ctlRef.current?.select(id)}
             onSpawn={(fromId, x, y) => {
               if (!canEdit) return
-              void ctlRef.current?.mutate((current) => spawnChild(current, fromId, undefined, x, y))
+              void ctlRef.current?.mutate((current) => spawnChild(current, fromId, undefined, x, y), UNDOABLE)
             }}
             onLink={(fromId, toId) => {
               if (!canEdit) return
-              void ctlRef.current?.mutate((current) => linkCards(current, fromId, toId))
+              void ctlRef.current?.mutate((current) => linkCards(current, fromId, toId), UNDOABLE)
             }}
             onCreateAt={(x, y) => {
               if (!canEdit) return
-              void ctlRef.current?.mutate((current) => createCard(current, { layer: 'situation', x, y, body: '' }))
+              void ctlRef.current?.mutate(
+                (current) => createCard(current, { layer: 'situation', x, y, body: '' }),
+                UNDOABLE,
+              )
             }}
             onOpenDiscuss={(cardId) => setDiscussCardId(cardId)}
             discussCardId={discussCardId && state.snowflake.cards[discussCardId] ? discussCardId : null}
@@ -259,6 +281,7 @@ export default function App() {
               })
               const messages = ctlRef.current?.snapshot().view.messages ?? []
               if (messages.includes(MSG_VERSION_MOVED)) throw new Error(MSG_VERSION_MOVED)
+              if (messages.includes(MSG_CARD_CONFLICT)) throw new Error(MSG_CARD_CONFLICT)
               if (messages.includes(MSG_WRITE_FAILED)) throw new Error(MSG_WRITE_FAILED)
               setFlashCardId(cardId)
               if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
@@ -269,31 +292,39 @@ export default function App() {
             }}
           />
         </ReactFlowProvider>
-        <SideEditor
-          cardId={activeCard ? state.activeId : null}
-          card={activeCard}
-          documentState={state}
-          groupSelected={activeNode?.type === 'group'}
-          canType={canEdit}
-          onCommit={(cardId, fieldKey, text) => {
-            void ctlRef.current?.commitText(cardId, fieldKey, text)
-          }}
-          onAdoptField={(key) => {
-            adoptFieldRef.current = key
-          }}
-          onChangeLayer={(cardId, layer: Layer) => {
-            void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer))
-          }}
-          expandNotice={view.expandNotice}
-          candidates={view.candidates}
-          onExpand={(cardId, fieldKey) => {
-            void ctlRef.current?.requestCandidates(cardId, fieldKey)
-          }}
-          onConfirmCandidate={(id) => {
-            void ctlRef.current?.confirmCandidate(id)
-          }}
-          onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
-        />
+        <div className="side-stack">
+          {activeConflict ? (
+            <ConflictChoice
+              conflict={activeConflict}
+              onPick={(pick) => void ctlRef.current?.resolveCardConflict(activeConflict.cardId, pick)}
+            />
+          ) : null}
+          <SideEditor
+            cardId={activeCard ? state.activeId : null}
+            card={activeCard}
+            documentState={state}
+            groupSelected={activeNode?.type === 'group'}
+            canType={canEdit}
+            onCommit={(cardId, fieldKey, text) => {
+              void ctlRef.current?.commitText(cardId, fieldKey, text)
+            }}
+            onAdoptField={(key) => {
+              adoptFieldRef.current = key
+            }}
+            onChangeLayer={(cardId, layer: Layer) => {
+              void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer), UNDOABLE)
+            }}
+            expandNotice={view.expandNotice}
+            candidates={view.candidates}
+            onExpand={(cardId, fieldKey) => {
+              void ctlRef.current?.requestCandidates(cardId, fieldKey)
+            }}
+            onConfirmCandidate={(id) => {
+              void ctlRef.current?.confirmCandidate(id)
+            }}
+            onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
+          />
+        </div>
       </div>
       {dialog ? (
         <div className="modal-back" role="presentation">
