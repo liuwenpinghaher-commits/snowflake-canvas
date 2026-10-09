@@ -118,3 +118,19 @@ describe('书籍页统计和导入预览', () => {
     expect(page).toContain("['设定导入', '默认值', '名称和题材', '建书']")
   })
 })
+
+describe('卡面默认折叠到 160px，展开后不限高', () => {
+  it('.side-face 限高可滚动，.side-face.is-open 取消限高', () => {
+    const css = read('src/index.css')
+    const rule = (selector: string) => {
+      const escaped = selector.replace(/\./g, '\\.')
+      const match = css.match(new RegExp('(?:^|[\\n}])\\s*' + escaped + '\\s*\\{([^}]*)\\}'))
+      return match ? match[1] : null
+    }
+    const face = rule('.side-face')
+    const open = rule('.side-face.is-open')
+    expect(face).toMatch(/max-height:\s*160px/)
+    expect(face).toMatch(/overflow:\s*auto/)
+    expect(open).toMatch(/max-height:\s*none/)
+  })
+})

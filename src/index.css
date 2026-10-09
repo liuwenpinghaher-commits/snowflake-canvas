@@ -1174,7 +1174,8 @@ button.on {
 }
 
 .side-face {
-  overflow: visible;
+  max-height: 160px;
+  overflow: auto;
   padding: 10px 12px;
   border: 1px solid #d9d0c3;
   border-radius: 8px;
@@ -1182,6 +1183,10 @@ button.on {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.side-face.is-open {
+  max-height: none;
 }
 
 .side-face-title {
