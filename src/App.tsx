@@ -28,6 +28,7 @@ import {
   MSG_SAVE_AS,
   MSG_VERSION_MOVED,
   MSG_WRITE_FAILED,
+  MSG_WRITE_FAILED_SERVER,
   MSG_WRITING,
   SAVE_AS_WARNING,
   SNAPSHOT_SAVE_HINT,
@@ -215,6 +216,13 @@ function DrawerResizer({ width, onWidth }: { width: number; onWidth: (next: numb
       aria-valuemin={DRAWER_WIDTH_MIN}
       aria-valuemax={DRAWER_WIDTH_MAX}
       aria-valuenow={width}
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+        event.preventDefault()
+        const next = clampDrawerWidth(width + (event.key === 'ArrowRight' ? 10 : -10))
+        onWidth(next)
+      }}
       onPointerDown={(event) => {
         if (event.button !== 0) return
         event.preventDefault()
@@ -250,7 +258,7 @@ function countChars(text: string): number {
 }
 
 function syncLabel(view: PersistSnapshot['view']): { text: string; tone: 'ok' | 'busy' | 'bad' | 'muted' } {
-  if (view.stopped || view.messages.includes(MSG_WRITE_FAILED)) return { text: '没保存上', tone: 'bad' }
+  if (view.stopped || view.messages.includes(MSG_WRITE_FAILED) || view.messages.includes(MSG_WRITE_FAILED_SERVER)) return { text: '没保存上', tone: 'bad' }
   if (view.writing) return { text: '正在保存', tone: 'busy' }
   if (view.readonlyOther) return { text: '只读', tone: 'muted' }
   if (view.downloadMode) return { text: '要手动另存', tone: 'muted' }
@@ -309,7 +317,6 @@ function MoreMenu({ children }: { children: ReactNode }) {
       <button
         ref={buttonRef}
         type="button"
-        aria-haspopup="menu"
         aria-expanded={open}
         aria-controls="more-menu-pop"
         onClick={() => setOpen((value) => !value)}
@@ -322,7 +329,7 @@ function MoreMenu({ children }: { children: ReactNode }) {
         更多
       </button>
       {open ? (
-        <div id="more-menu-pop" className="more-menu-pop" role="menu">
+        <div id="more-menu-pop" className="more-menu-pop">
           {children}
         </div>
       ) : null}
@@ -550,12 +557,20 @@ export default function App() {
   const activeAdopted = Boolean(activeCard && (activeCard.fields.adopted ?? '').trim())
   const bookWords = Object.values(state.snowflake.cards).reduce((sum, card) => sum + countChars(card.body), 0)
   const currentBook = books.find((book) => book.id === bookId) ?? null
+  const noCards = Object.keys(state.snowflake.cards).length === 0
   const sync = syncLabel(view)
   const version = versionOf(view)
 
   const closeHint = () => {
     setHintOpen(false)
     store(HINT_SEEN_KEY, '1')
+  }
+
+  const createThought = () => {
+    void ctlRef.current?.mutate((current) => {
+      const shift = current.canvas.nodes.length * 28
+      return createCard(current, { layer: 'situation', x: 80 + shift, y: 80 + shift, body: '' })
+    }, UNDOABLE)
   }
 
   const closeDialog = (accepted: boolean) => {
@@ -625,12 +640,7 @@ export default function App() {
             type="button"
             className="primary"
             disabled={!canEdit}
-            onClick={() => {
-              void ctlRef.current?.mutate((current) => {
-                const shift = current.canvas.nodes.length * 28
-                return createCard(current, { layer: 'situation', x: 80 + shift, y: 80 + shift, body: '' })
-              }, UNDOABLE)
-            }}
+            onClick={createThought}
           >
             新建念头
           </button>
@@ -780,6 +790,11 @@ export default function App() {
           notice.kind === 'error' ? (
             <p key={notice.text} className="status-line is-error" role="alert">
               出错：{notice.text}
+              {view.stopped && (notice.text === MSG_WRITE_FAILED || notice.text === MSG_WRITE_FAILED_SERVER) ? (
+                <button type="button" onClick={() => void ctlRef.current?.retryWrite()}>
+                  重试保存
+                </button>
+              ) : null}
             </p>
           ) : inChip(notice.text) ? null : (
             <p key={notice.text} className="status-line" role="status">
@@ -793,13 +808,20 @@ export default function App() {
           </p>
         ) : null}
       </div>
-      <div className="workspace">
-        {hintOpen ? (
+      <main className="workspace">
+        <h1 className="sr-only">{currentBook?.name || '未命名书'}</h1>
+        {noCards || hintOpen ? (
           <div className="canvas-hint" role="note">
             <p>空白处双击放一张念头。点一张卡片，右侧打开这张卡的字段和讨论。从卡片右边拖出去，长出后面的层。</p>
-            <button type="button" onClick={closeHint}>
-              知道了
-            </button>
+            {noCards ? (
+              <button type="button" disabled={!canEdit} onClick={createThought}>
+                新建念头
+              </button>
+            ) : (
+              <button type="button" onClick={closeHint}>
+                知道了
+              </button>
+            )}
           </div>
         ) : null}
         <ReactFlowProvider>
@@ -912,7 +934,8 @@ export default function App() {
                     const messages = ctlRef.current?.snapshot().view.messages ?? []
                     if (messages.includes(MSG_VERSION_MOVED)) throw new Error(MSG_VERSION_MOVED)
                     if (messages.includes(MSG_CARD_CONFLICT)) throw new Error(MSG_CARD_CONFLICT)
-                    if (messages.includes(MSG_WRITE_FAILED)) throw new Error(MSG_WRITE_FAILED)
+                    const failedWrite = [MSG_WRITE_FAILED, MSG_WRITE_FAILED_SERVER].find((item) => messages.includes(item))
+                    if (failedWrite) throw new Error(failedWrite)
                     setFlashCardId(cardId)
                     if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
                     flashTimer.current = window.setTimeout(() => {
@@ -926,7 +949,7 @@ export default function App() {
             </aside>
           </div>
         ) : null}
-      </div>
+      </main>
       {page === 'books' ? (
         <BooksPage
           books={books}

@@ -363,24 +363,6 @@ export default function SideEditor({
               ? `从这张卡片右边拖到空白处，默认长成${layerLabel(upcoming)}。`
               : '已经是最后一层，不能再往外长出新卡片。'}
           </p>
-          {later.length > 0 ? (
-            <div className="field-row">
-              <span>改成更后面的层</span>
-              {later.map((layer) => (
-                <button
-                  key={layer}
-                  type="button"
-                  onClick={() => {
-                    if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
-                    if (!window.confirm(describeLayerChange(card, layer))) return
-                    onChangeLayer(cardId, layer)
-                  }}
-                >
-                  {layerLabel(layer)}
-                </button>
-              ))}
-            </div>
-          ) : null}
           {choiceFields(card.layer).map((choice) => {
             const current = card.fields[choice.key] ?? ''
             const options = choice.options.some((option) => option.value === current)
@@ -423,6 +405,37 @@ export default function SideEditor({
           ) : (
             <p className="hint">全文</p>
           )}
+        </>
+      ) : (
+        <p className="hint">
+          {groupSelected
+            ? '这是分组，没有雪花卡片。删分组不会带走圈里的卡片。'
+            : '点一张卡片，在这里改。空白处双击，或点「新建念头」，放一张念头。'}
+        </p>
+      )}
+
+      <div className="cm-host" ref={hostRef} aria-label="卡片编辑器" />
+
+      {card ? (
+        <>
+          {later.length > 0 ? (
+            <div className="field-row">
+              <span>改成更后面的层</span>
+              {later.map((layer) => (
+                <button
+                  key={layer}
+                  type="button"
+                  onClick={() => {
+                    if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
+                    if (!window.confirm(describeLayerChange(card, layer))) return
+                    onChangeLayer(cardId, layer)
+                  }}
+                >
+                  {layerLabel(layer)}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {cardId ? (
             <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} />
           ) : null}
@@ -443,15 +456,7 @@ export default function SideEditor({
             />
           ) : null}
         </>
-      ) : (
-        <p className="hint">
-          {groupSelected
-            ? '这是分组，没有雪花卡片。删分组不会带走圈里的卡片。'
-            : '点一张卡片，在这里改。空白处双击，或点「新建念头」，放一张念头。'}
-        </p>
-      )}
-
-      <div className="cm-host" ref={hostRef} aria-label="卡片编辑器" />
+      ) : null}
     </aside>
   )
 }

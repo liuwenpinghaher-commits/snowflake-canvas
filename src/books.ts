@@ -105,6 +105,15 @@ export const BOOK_GENRES = ['未定', '玄幻', '仙侠', '武侠', '都市', '�
 
 export const COVER_COLORS = ['#8c4a32', '#3f6b5a', '#35557a', '#7a4a6b', '#a0782c', '#5e574e'] as const
 
+export const COVER_COLOR_NAMES: Record<(typeof COVER_COLORS)[number], string> = {
+  '#8c4a32': '赭红',
+  '#3f6b5a': '墨绿',
+  '#35557a': '靛蓝',
+  '#7a4a6b': '绛紫',
+  '#a0782c': '琥珀',
+  '#5e574e': '岩灰',
+}
+
 export const POV_CHOICES = ['未定', '第一人称', '第二人称', '第三人称'] as const
 
 export interface BookMeta {

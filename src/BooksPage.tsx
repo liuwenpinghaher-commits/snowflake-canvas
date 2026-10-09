@@ -3,6 +3,7 @@ import {
   BOOK_GENRES,
   BOOK_STATUSES,
   COVER_COLORS,
+  COVER_COLOR_NAMES,
   DEFAULT_BOOK_NAME,
   POV_CHOICES,
   fetchBookStats,
@@ -215,7 +216,7 @@ function NewBookWizard({
                     type="button"
                     role="radio"
                     aria-checked={cover === color}
-                    aria-label={color}
+                    aria-label={COVER_COLOR_NAMES[color]}
                     className={cover === color ? 'swatch on' : 'swatch'}
                     style={{ background: color }}
                     onClick={() => setCover(color)}
@@ -424,7 +425,7 @@ function BookProfile({
                 type="button"
                 role="radio"
                 aria-checked={meta.cover === color}
-                aria-label={color}
+                aria-label={COVER_COLOR_NAMES[color]}
                 className={meta.cover === color ? 'swatch on' : 'swatch'}
                 style={{ background: color }}
                 onClick={() => patch({ cover: color })}

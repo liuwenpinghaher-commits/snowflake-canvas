@@ -19,7 +19,8 @@ import { isSnapshotFileName, snapshotFileName } from './snapshot.ts'
 
 export const CANONICAL_NAME = 'snowflake.json'
 
-export const MSG_WRITE_FAILED = '文件没写上'
+export const MSG_WRITE_FAILED = '没保存到文件。刚才的改动还在这页里，先别关页面。'
+export const MSG_WRITE_FAILED_SERVER = '没保存到服务器。刚才的改动还在这页里，先别关页面。'
 export const MSG_VERSION_MOVED = '版本已更新，请再试'
 export const MSG_CARD_CONFLICT = '有卡片两边都改过，请先选择用哪一边'
 export const MSG_CANON_MISMATCH = '正本对不上，已停下'
@@ -48,7 +49,7 @@ export interface StatusNotice {
   kind: StatusKind
 }
 
-const ERROR_TEXTS = new Set([MSG_WRITE_FAILED, MSG_VERSION_MOVED, MSG_SNAPSHOT_FAILED, MSG_CANON_MISMATCH])
+const ERROR_TEXTS = new Set([MSG_WRITE_FAILED, MSG_WRITE_FAILED_SERVER, MSG_VERSION_MOVED, MSG_SNAPSHOT_FAILED, MSG_CANON_MISMATCH])
 
 export function statusKind(text: string): StatusKind {
   if (ERROR_TEXTS.has(text)) return 'error'
@@ -216,6 +217,7 @@ export interface PersistController {
   rollbackTo(name: string): Promise<void>
   rollbackToBytes(bytes: Uint8Array): Promise<void>
   resolveCardConflict(cardId: string, pick: ConflictPick): Promise<void>
+  retryWrite(): Promise<void>
   snapshot(): PersistSnapshot
   readRecoveryLog(): Promise<Uint8Array | null>
   dispose(): void
@@ -768,6 +770,7 @@ class Controller implements PersistController {
   private queueWaiters: Array<() => void> = []
   private stopped = false
   private failed = false
+  private retrying = false
   private logUnavailable = false
   private restoredNotice = false
   private expandNotice: string | null = null
@@ -2042,10 +2045,26 @@ class Controller implements PersistController {
     }
   }
 
+  async retryWrite(): Promise<void> {
+    if (this.disposed || !this.failed || this.retrying) return
+    this.retrying = true
+    this.writing = true
+    this.emit()
+    try {
+      await this.drainQueue()
+      if (this.disposed || !this.failed || this.pendingConflicts.size > 0) return
+      await this.writeOnce(this.state)
+    } finally {
+      this.retrying = false
+      this.writing = false
+      if (!this.disposed) this.emit()
+    }
+  }
+
   private view(): PersistView {
     const messages: string[] = []
     if (this.fileProtocol) messages.push(MSG_FILE_PROTOCOL)
-    if (this.failed) messages.push(MSG_WRITE_FAILED)
+    if (this.failed) messages.push(this.remoteMode ? MSG_WRITE_FAILED_SERVER : MSG_WRITE_FAILED)
     if (this.writing) messages.push(MSG_WRITING)
     if (this.logUnavailable) messages.push(MSG_LOG_DOWN)
     if (this.readonlyOther && this.showWritingMessage) {

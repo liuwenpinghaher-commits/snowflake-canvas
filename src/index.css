@@ -254,6 +254,19 @@ button.on {
   max-width: none;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .workspace {
   position: relative;
   flex: 1;
@@ -545,7 +558,9 @@ button.on {
     max-width: 100%;
     height: auto;
     z-index: 30;
-    animation: side-drawer-in 160ms ease-out;
+    @media (prefers-reduced-motion: no-preference) {
+      animation: side-drawer-in 160ms ease-out;
+    }
   }
 
   .side {
@@ -707,7 +722,7 @@ button.on {
 .fold-field select {
   font: inherit;
   color: inherit;
-  border: 1px solid #c8bfb0;
+  border: 1px solid #6b645b;
   border-radius: 6px;
   padding: 4px 8px;
   background: #fffdf8;
@@ -751,7 +766,7 @@ button.on {
   font: inherit;
   color: inherit;
   background: #fffdf8;
-  border: 1px solid #c8bfb0;
+  border: 1px solid #6b645b;
   border-radius: 6px;
   padding: 4px 8px;
   max-width: 240px;
@@ -846,7 +861,7 @@ button.on {
   box-sizing: border-box;
   font: inherit;
   color: inherit;
-  border: 1px solid #c8bfb0;
+  border: 1px solid #6b645b;
   border-radius: 6px;
   padding: 6px 8px;
   background: #fffdf8;
@@ -1291,6 +1306,10 @@ button.on {
   background: #8c4a32;
 }
 
+.drawer-resizer:focus-visible::after {
+  background: #8c4a32;
+}
+
 .side-stack > .side {
   width: 100%;
   flex: 1 1 auto;
@@ -1318,9 +1337,8 @@ button.on {
 .conflict-choice-line {
   font-size: 13px;
   line-height: 1.5;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-height: 6lh;
+  overflow: auto;
 }
 
 .conflict-choice-side {
@@ -1388,7 +1406,7 @@ button.on {
   font-size: 14px;
   color: inherit;
   padding: 4px 8px;
-  border: 1px solid #c8bfb0;
+  border: 1px solid #6b645b;
   border-radius: 6px;
   background: #fffdf8;
 }

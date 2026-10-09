@@ -832,7 +832,7 @@ export default function CardDiscuss({
   const selected = sessions.some((item) => item.sessionId === sessionId) ? sessionId : ''
 
   return (
-    <section className="discuss-popover" data-discuss-popover="" role="dialog" aria-label="念头讨论">
+    <section className="discuss-popover" data-discuss-popover="">
       <div className="discuss-history">
         <label>
           历史讨论
@@ -852,9 +852,7 @@ export default function CardDiscuss({
         <button type="button" disabled={busy} onClick={() => void createSession()}>
           新建讨论
         </button>
-        <button type="button" onClick={() => requestClose()}>
-          关闭
-        </button>
+        {/* 关闭只留在卡头，讨论区不再放第二个关闭。 */}
       </div>
       <div className="discuss-chat" aria-label="讨论记录" ref={chatRef} onScroll={onChatScroll}>
         {hasMore ? (
