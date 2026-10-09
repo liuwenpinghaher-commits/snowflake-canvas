@@ -269,8 +269,11 @@ export function createBrowserPorts(ui: {
   askSaveAs: (fileName: string, bytes: Uint8Array) => Promise<boolean>
   askFirstDownload: (fileName: string, bytes: Uint8Array) => Promise<boolean>
   askSnapshotDownload: (fileName: string, bytes: Uint8Array) => Promise<boolean>
+  bookId?: string | null
 }): PersistPorts {
   let handle: PermissionHandle | null = null
+  // 书 id 在建控制器时定死：切书时旧控制器剩下的写入只会落回旧书，不会写进新书。
+  const bookId = ui.bookId ?? null
 
   async function loadHandle(): Promise<PermissionHandle | null> {
     if (handle) return handle
@@ -332,11 +335,11 @@ export function createBrowserPorts(ui: {
     askFirstDownload: ui.askFirstDownload,
     askSnapshotDownload: ui.askSnapshotDownload,
     remote: {
-      load: loadRemote,
-      save: saveRemote,
-      keep: keepRemote,
-      listSnapshots: listRemoteSnapshots,
-      rollback: rollbackRemote,
+      load: () => loadRemote(bookId),
+      save: (bytes, etag) => saveRemote(bytes, etag, bookId),
+      keep: (etag) => keepRemote(etag, bookId),
+      listSnapshots: () => listRemoteSnapshots(bookId),
+      rollback: (name, etag) => rollbackRemote(name, etag, bookId),
     },
     expand: {
       apiKey: () => undefined,

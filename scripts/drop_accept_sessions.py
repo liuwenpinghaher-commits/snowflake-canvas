@@ -12,8 +12,23 @@ import shutil
 import sys
 from pathlib import Path
 
-DATA = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or "/home/chris/.local/share/snowflake-canvas")
+ROOT = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or "/home/chris/.local/share/snowflake-canvas")
 ACCEPT_PREFIXES = ("n-discuss-accept-", "n-mem-accept-")
+
+
+def active_book_dir(root):
+    """多书布局下正本和会话在 books/<活动书>/；还是旧的单书布局就用数据根。"""
+    try:
+        active = json.loads((root / "active.json").read_text(encoding="utf-8")).get("activeBookId")
+    except (OSError, ValueError, AttributeError):
+        return root
+    if not isinstance(active, str) or not active.isalnum() or active != active.lower():
+        return root
+    book = root / "books" / active
+    return book if book.is_dir() else root
+
+
+DATA = active_book_dir(ROOT)
 
 
 def canon_card_ids(data_dir):

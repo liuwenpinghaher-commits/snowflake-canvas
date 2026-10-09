@@ -220,6 +220,8 @@ export interface PersistController {
   retryWrite(): Promise<void>
   snapshot(): PersistSnapshot
   readRecoveryLog(): Promise<Uint8Array | null>
+  holdForSwitch(): Promise<boolean>
+  releaseHold(): void
   dispose(): void
 }
 
@@ -785,6 +787,7 @@ class Controller implements PersistController {
   // 作者已经选过的边，带着选择时看到的服务器版本；下一次写成功后清空。
   private readonly conflictChoices = new Map<string, ConflictChoiceRecord>()
   private canonMismatch = false
+  private switchHold = false
   private actionNotice: string | null = null
   private readonly issuedSnapshotNames = new Set<string>()
   private disposed = false
@@ -810,6 +813,29 @@ class Controller implements PersistController {
     } catch {
       return null
     }
+  }
+
+  // 切换书之前：先停收新改动，再等写入队列走完。内存里的画布和最后写进去的那份不一致
+  // （写失败、版本冲突没选边）就放开编辑并返回 false，不许切走。
+  async holdForSwitch(): Promise<boolean> {
+    this.switchHold = true
+    this.emit()
+    await this.drainQueue()
+    if (this.pendingConflicts.size === 0 && this.savedMatchesState()) return true
+    this.releaseHold()
+    return false
+  }
+
+  releaseHold(): void {
+    if (!this.switchHold) return
+    this.switchHold = false
+    this.emit()
+  }
+
+  private savedMatchesState(): boolean {
+    if (!this.lastBytes) return true
+    const saved = parseCompleteDocument(this.lastBytes)
+    return saved !== null && bytesEqual(documentToBytes(saved.state), documentToBytes(this.state))
   }
 
   dispose(): void {
@@ -990,7 +1016,7 @@ class Controller implements PersistController {
   }
 
   private async applyText(cardId: string, fieldKey: string | null, text: string, fromEditor: boolean): Promise<void> {
-    if (!this.editingAllowed()) return
+    if (!this.acceptsEdits()) return
     const next = commitCardText(this.state, cardId, text, fieldKey, false)
     if (next === this.state) return
     if (fromEditor) {
@@ -1001,7 +1027,7 @@ class Controller implements PersistController {
   }
 
   async mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void> {
-    if (!this.editingAllowed()) return
+    if (!this.acceptsEdits()) return
     const before = this.state
     const next = recipe(before)
     if (next === before) return
@@ -1014,7 +1040,7 @@ class Controller implements PersistController {
 
   // 撤销只换内存里的画布，再走同一条写入队列；没有重做。
   async undo(): Promise<void> {
-    if (!this.editingAllowed()) return
+    if (!this.acceptsEdits()) return
     const previous = this.undoStack.pop()
     if (!previous) return
     if (previous.snowflake.fileId !== this.state.snowflake.fileId) {
@@ -1040,7 +1066,7 @@ class Controller implements PersistController {
     event: CompositionEvent,
     fieldKey: string | null,
   ): Promise<ComposeSession> {
-    if (!this.editingAllowed()) return session
+    if (!this.acceptsEdits()) return session
     const next = applyComposition(this.state, session, event, fieldKey)
     if (event.type !== 'compositionend') return next.session
     await this.persistState(next.state)
@@ -1059,9 +1085,14 @@ class Controller implements PersistController {
     )
   }
 
+  // 切书等待期间不收新改动；已经排进写入队列的改动照常写完。
+  private acceptsEdits(): boolean {
+    return this.editingAllowed() && !this.switchHold
+  }
+
   async resolveCardConflict(cardId: string, pick: ConflictPick): Promise<void> {
     const entry = this.pendingConflicts.get(cardId)
-    if (!entry || !this.editingAllowed()) return
+    if (!entry || !this.acceptsEdits()) return
     this.conflictChoices.set(cardId, { pick, serverKey: entry.serverKey })
     this.pendingConflicts.delete(cardId)
     if (pick === 'server') {
@@ -1809,7 +1840,7 @@ class Controller implements PersistController {
     await this.drainQueue()
     if (this.pendingConflicts.size > 0) return
     if (this.remoteMode && this.ports.remote) {
-      if (!this.editingAllowed()) return
+      if (!this.acceptsEdits()) return
       const result = await this.ports.remote.keep(this.remoteEtag)
       if (!result.ok) {
         this.actionNotice = result.message
@@ -1825,7 +1856,7 @@ class Controller implements PersistController {
       this.emit()
       return
     }
-    if (!this.writerHeld() || !this.editingAllowed()) return
+    if (!this.writerHeld() || !this.acceptsEdits()) return
     const bytes = await this.currentCanonicalBytes()
     if (!bytes) return
     const kept = await this.copySnapshot(bytes)
@@ -1850,9 +1881,9 @@ class Controller implements PersistController {
   // 服务器先把当前画布另存一份快照，再换正本；这里只接回服务器给的结果。
   private async rollbackRemote(name: string): Promise<void> {
     const rollback = this.ports.remote?.rollback
-    if (!rollback || !this.editingAllowed()) return
+    if (!rollback || !this.acceptsEdits()) return
     await this.drainQueue()
-    if (!this.editingAllowed() || this.pendingConflicts.size > 0) return
+    if (!this.acceptsEdits() || this.pendingConflicts.size > 0) return
     this.writing = true
     this.canEdit = false
     this.actionNotice = null
@@ -1909,7 +1940,7 @@ class Controller implements PersistController {
       await this.rollbackRemote(name)
       return
     }
-    if (!this.writerHeld() || !this.editingAllowed() || !this.directory) return
+    if (!this.writerHeld() || !this.acceptsEdits() || !this.directory) return
     if (!isSnapshotFileName(name, this.fileName)) return
     const selected = await this.directory.read(name)
     if (!selected) return
@@ -1917,7 +1948,7 @@ class Controller implements PersistController {
   }
 
   async rollbackToBytes(bytes: Uint8Array): Promise<void> {
-    if (!this.writerHeld() || !this.editingAllowed()) return
+    if (!this.writerHeld() || !this.acceptsEdits()) return
     await this.rollbackWithBytes(bytes)
   }
 
@@ -2088,7 +2119,7 @@ class Controller implements PersistController {
     if (this.pendingConflicts.size > 0) messages.push(MSG_CARD_CONFLICT)
     if (this.actionNotice) messages.push(this.actionNotice)
     return {
-      canEdit: this.editingAllowed(),
+      canEdit: this.acceptsEdits(),
       writing: this.writing,
       stopped: this.stopped || this.failed,
       fileProtocol: this.fileProtocol,
@@ -2108,7 +2139,7 @@ class Controller implements PersistController {
       snapshotOptions: this.remoteMode
         ? this.remoteSnapshots.map((item) => ({ name: item.name, label: snapshotLabel(item.savedAt, item.name) }))
         : this.snapshotNames.map((name) => ({ name, label: name })),
-      canUndo: this.editingAllowed() && this.undoStack.length > 0,
+      canUndo: this.acceptsEdits() && this.undoStack.length > 0,
       remoteVersion: this.remoteMode ? versionFromEtag(this.remoteEtag) : '',
       conflicts: this.conflictViews(),
     }

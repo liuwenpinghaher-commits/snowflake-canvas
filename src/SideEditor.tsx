@@ -324,7 +324,7 @@ export default function SideEditor({
   const upcoming = card ? nextLayer(card.layer) : null
 
   return (
-    <aside className="side">
+    <div className="side-editor">
       <div className="side-head">
         {card ? (
           <>
@@ -457,6 +457,6 @@ export default function SideEditor({
           ) : null}
         </>
       ) : null}
-    </aside>
+    </div>
   )
 }

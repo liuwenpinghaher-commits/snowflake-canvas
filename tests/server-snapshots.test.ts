@@ -116,6 +116,12 @@ async function snapshotFiles(dataDir: string): Promise<string[]> {
   return (await readdir(dataDir)).filter((name) => SNAPSHOT_RE.test(name)).sort()
 }
 
+// 多书之后正本、快照、备份都在活动书目录里，数据根只留 active.json。
+async function bookDir(server: Running): Promise<string> {
+  const active = JSON.parse(await readFile(join(server.dataDir, 'active.json'), 'utf8')) as { activeBookId: string }
+  return join(server.dataDir, 'books', active.activeBookId)
+}
+
 async function getCanvas(server: Running) {
   const response = await fetch(`${server.base}/api/canvas`)
   const text = await response.text()
@@ -167,13 +173,13 @@ describe('服务器快照拆成独立文件', () => {
     expect(typeof body.snapshotName).toBe('string')
     expect(['ok', 'skipped']).toContain(body.timeline)
 
-    const files = await snapshotFiles(server.dataDir)
+    const files = await snapshotFiles(await bookDir(server))
     expect(files).toEqual([body.snapshotName])
-    const saved = JSON.parse(await readFile(join(server.dataDir, files[0]!), 'utf8'))
+    const saved = JSON.parse(await readFile(join(await bookDir(server), files[0]!), 'utf8'))
     expect(saved).toEqual(doc('keep-file', '要留下的这一版'))
     expect(saved.version).toBeUndefined()
 
-    const canonical = JSON.parse(await readFile(join(server.dataDir, 'snowflake.json'), 'utf8'))
+    const canonical = JSON.parse(await readFile(join(await bookDir(server), 'snowflake.json'), 'utf8'))
     expect(canonical.version).toBe(5)
     expect(canonical.snapshots).toEqual([])
 
@@ -181,7 +187,7 @@ describe('服务器快照拆成独立文件', () => {
     const logged = await waitFor(async () => server.logs().includes('时间线没记上'), 10_000)
     expect(logged).toBe(true)
     expect(await stat(join(server.home, 'gbrain-called')).then(() => true)).toBe(true)
-    expect(await snapshotFiles(server.dataDir)).toEqual(files)
+    expect(await snapshotFiles(await bookDir(server))).toEqual(files)
     const after = await getCanvas(server)
     expect(after.response.status).toBe(200)
     expect(after.body.version).toBe(5)
@@ -196,13 +202,13 @@ describe('服务器快照拆成独立文件', () => {
     expect(response.status).toBe(200)
     expect(body.timeline).toBe('skipped')
     expect(body.snapshotCount).toBe(1)
-    expect(await snapshotFiles(server.dataDir)).toHaveLength(1)
+    expect(await snapshotFiles(await bookDir(server))).toHaveLength(1)
 
     const stale = await keep(server, '"1"')
     expect(stale.response.status).toBe(412)
     expect(stale.body.version).toBe(2)
     expect(stale.body.snapshots).toEqual([])
-    expect(await snapshotFiles(server.dataDir)).toHaveLength(1)
+    expect(await snapshotFiles(await bookDir(server))).toHaveLength(1)
   }, 30_000)
 
   it('启动时把正本里的旧快照迁成独立文件；GET 不再下发快照正文', async () => {
@@ -217,19 +223,19 @@ describe('服务器快照拆成独立文件', () => {
         ],
       },
     })
-    const files = await snapshotFiles(server.dataDir)
+    const files = await snapshotFiles(await bookDir(server))
     expect(files).toHaveLength(2)
     const bodies = await Promise.all(
-      files.map(async (name) => JSON.parse(await readFile(join(server.dataDir, name), 'utf8')) as Doc),
+      files.map(async (name) => JSON.parse(await readFile(join(await bookDir(server), name), 'utf8')) as Doc),
     )
     expect(bodies.map((item) => (item.snowflake.cards.c1 as { body: string }).body).sort()).toEqual([
       `${marker}-一`,
       `${marker}-二`,
     ])
-    const canonical = JSON.parse(await readFile(join(server.dataDir, 'snowflake.json'), 'utf8'))
+    const canonical = JSON.parse(await readFile(join(await bookDir(server), 'snowflake.json'), 'utf8'))
     expect(canonical.snapshots).toEqual([])
     expect(canonical.version).toBe(7)
-    const backup = JSON.parse(await readFile(join(server.dataDir, 'snowflake.json.bak'), 'utf8'))
+    const backup = JSON.parse(await readFile(join(await bookDir(server), 'snowflake.json.bak'), 'utf8'))
     expect(backup.snapshots).toHaveLength(2)
 
     const { response, text, body } = await getCanvas(server)
@@ -267,7 +273,7 @@ describe('服务器快照拆成独立文件', () => {
     })
     expect(put.status).toBe(200)
     expect((await put.json()).snapshots).toEqual([])
-    expect(await snapshotFiles(server.dataDir)).toHaveLength(1)
+    expect(await snapshotFiles(await bookDir(server))).toHaveLength(1)
 
     const response = await rollback(server, chosen, '"3"')
     expect(response.status).toBe(200)
@@ -279,10 +285,10 @@ describe('服务器快照拆成独立文件', () => {
     expect(body.snapshots).toEqual([])
     expect(body.document).toEqual(doc('rollback-file', '第一版'))
 
-    const files = await snapshotFiles(server.dataDir)
+    const files = await snapshotFiles(await bookDir(server))
     expect(files).toHaveLength(2)
     const extra = files.find((name) => name !== chosen)!
-    expect(JSON.parse(await readFile(join(server.dataDir, extra), 'utf8'))).toEqual(
+    expect(JSON.parse(await readFile(join(await bookDir(server), extra), 'utf8'))).toEqual(
       doc('rollback-file', '第二版，后来改坏了'),
     )
 
@@ -295,7 +301,7 @@ describe('服务器快照拆成独立文件', () => {
     const staleBody = (await stale.json()) as { version: number; snapshots: unknown[] }
     expect(staleBody.version).toBe(4)
     expect(staleBody.snapshots).toEqual([])
-    expect(await snapshotFiles(server.dataDir)).toHaveLength(2)
+    expect(await snapshotFiles(await bookDir(server))).toHaveLength(2)
   }, 30_000)
 
   it('回退拒绝非法快照名，找不到的快照返回 404，都不改正本', async () => {
@@ -321,7 +327,7 @@ describe('服务器快照拆成独立文件', () => {
     }
     const missing = await rollback(server, 'snowflake.20200101T000000.snapshot.json', '"3"')
     expect(missing.status).toBe(404)
-    expect(await snapshotFiles(server.dataDir)).toEqual([])
+    expect(await snapshotFiles(await bookDir(server))).toEqual([])
     const after = await getCanvas(server)
     expect(after.body.version).toBe(3)
     expect(after.body.document).toEqual(doc('bad-name-file', '不能被换掉'))

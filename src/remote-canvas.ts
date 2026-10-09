@@ -1,3 +1,5 @@
+import { bookScopedPath } from './books.ts'
+
 async function readConflictBytes(response: Response): Promise<Uint8Array | null> {
   let payload: unknown
   try {
@@ -12,10 +14,10 @@ async function readConflictBytes(response: Response): Promise<Uint8Array | null>
   return new TextEncoder().encode(JSON.stringify(document))
 }
 
-function api(path: string): string {
+function api(path: string, bookId?: string | null): string {
   const base = import.meta.env.BASE_URL || '/'
   const prefix = base.endsWith('/') ? base.slice(0, -1) : base
-  return `${prefix}${path}`
+  return `${prefix}${bookScopedPath(path, bookId ?? null)}`
 }
 
 export interface RemoteLoad {
@@ -42,10 +44,10 @@ export type RemoteRollback =
   | { ok: false; conflict: true; etag: string; bytes?: Uint8Array }
   | { ok: false; conflict: false; message: string }
 
-export async function loadRemote(): Promise<RemoteLoad | null> {
+export async function loadRemote(bookId?: string | null): Promise<RemoteLoad | null> {
   let response: Response
   try {
-    response = await fetch(api('/api/canvas'), { cache: 'no-store' })
+    response = await fetch(api('/api/canvas', bookId), { cache: 'no-store' })
   } catch {
     return null
   }
@@ -64,10 +66,10 @@ export async function loadRemote(): Promise<RemoteLoad | null> {
   return { etag, bytes: new TextEncoder().encode(JSON.stringify(document)) }
 }
 
-export async function saveRemote(bytes: Uint8Array, etag: string): Promise<RemoteSave> {
+export async function saveRemote(bytes: Uint8Array, etag: string, bookId?: string | null): Promise<RemoteSave> {
   let response: Response
   try {
-    response = await fetch(api('/api/canvas'), {
+    response = await fetch(api('/api/canvas', bookId), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -82,7 +84,7 @@ export async function saveRemote(bytes: Uint8Array, etag: string): Promise<Remot
   if (response.status === 412) {
     const rejected = response.headers.get('etag') || ''
     try {
-      const again = await fetch(api('/api/canvas'), { cache: 'no-store' })
+      const again = await fetch(api('/api/canvas', bookId), { cache: 'no-store' })
       const fresh = again.ok ? again.headers.get('etag') || '' : ''
       const etag = fresh || rejected
       if (!etag) return { ok: false, conflict: false }
@@ -98,10 +100,10 @@ export async function saveRemote(bytes: Uint8Array, etag: string): Promise<Remot
   return { ok: true, etag: response.headers.get('etag') || '' }
 }
 
-export async function keepRemote(etag: string): Promise<RemoteKeep> {
+export async function keepRemote(etag: string, bookId?: string | null): Promise<RemoteKeep> {
   let response: Response
   try {
-    response = await fetch(api('/api/canvas/keep'), {
+    response = await fetch(api('/api/canvas/keep', bookId), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -131,10 +133,10 @@ export async function keepRemote(etag: string): Promise<RemoteKeep> {
   }
 }
 
-export async function listRemoteSnapshots(): Promise<RemoteSnapshotItem[] | null> {
+export async function listRemoteSnapshots(bookId?: string | null): Promise<RemoteSnapshotItem[] | null> {
   let response: Response
   try {
-    response = await fetch(api('/api/canvas/snapshots'), { cache: 'no-store' })
+    response = await fetch(api('/api/canvas/snapshots', bookId), { cache: 'no-store' })
   } catch {
     return null
   }
@@ -156,10 +158,10 @@ export async function listRemoteSnapshots(): Promise<RemoteSnapshotItem[] | null
   return items
 }
 
-export async function rollbackRemote(name: string, etag: string): Promise<RemoteRollback> {
+export async function rollbackRemote(name: string, etag: string, bookId?: string | null): Promise<RemoteRollback> {
   let response: Response
   try {
-    response = await fetch(api('/api/canvas/rollback'), {
+    response = await fetch(api('/api/canvas/rollback', bookId), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

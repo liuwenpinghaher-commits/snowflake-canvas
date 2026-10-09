@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Background,
   Controls,
@@ -14,14 +13,8 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import CardDiscuss from './CardDiscuss.tsx'
+import { estimateSnowCardHeight, shiftOverlappingCards, type ShiftBox } from './card-layout.ts'
 import { cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
-
-type DiscussBind = {
-  cardBody: string
-  onClose: () => void
-  onCommitBody: (cardId: string, body: string) => Promise<void>
-}
 
 type CardData = {
   layerLabel: string
@@ -32,135 +25,33 @@ type CardData = {
   title: string
   body: string
   meta: string
+  boxHeight: number
+  onHeight: (id: string, height: number) => void
 }
 type GroupData = { text: string; conflict: boolean }
 
-export const NARROW_QUERY = '(max-width: 760px)'
-
-type DockPlace = { dir: 'down' | 'up' | 'clamp'; top: number; left: number; maxH: number | null }
-
-function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
-  useEffect(() => {
-    const query = window.matchMedia(NARROW_QUERY)
-    const update = () => setNarrow(query.matches)
-    update()
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [])
-  return narrow
-}
-
-// 浮窗挂在 document.body 上，不在卡片节点里，所以画布缩放不改它的字号和宽度。
-// 宽屏按卡片的屏幕位置贴在卡片下方（放不下就上方，再不行就夹在视口内）；窄屏贴在视口下半屏。
-function DiscussDock({ cardId, bind }: { cardId: string; bind: DiscussBind }) {
-  const dockRef = useRef<HTMLDivElement>(null)
-  const narrow = useNarrow()
-  const transform = useStore((state) => state.transform)
-  const cardAt = useStore((state) => {
-    const at = state.nodeLookup.get(cardId)?.internals.positionAbsolute
-    return at ? `${at.x},${at.y}` : ''
-  })
-  const [place, setPlace] = useState<DockPlace | null>(null)
-
-  useLayoutEffect(() => {
-    if (narrow) return
-    let dead = false
-    const measure = () => {
-      if (dead) return
-      const node = document.querySelector<HTMLElement>(`.react-flow__node-snowCard[data-id="${CSS.escape(cardId)}"]`)
-      const dock = dockRef.current
-      if (!node || !dock) return
-      const card = node.getBoundingClientRect()
-      if (card.width < 1 || card.height < 1) return
-      const vw = document.documentElement.clientWidth || window.innerWidth
-      const vh = window.innerHeight
-      const margin = 8
-      const gap = 8
-      const desired = 460
-      const width = dock.offsetWidth || Math.min(380, vw - margin * 2)
-      const spaceBelow = vh - card.bottom - gap - margin
-      const spaceAbove = card.top - gap - margin
-      let next: DockPlace
-      if (spaceBelow >= desired) {
-        next = { dir: 'down', top: card.bottom + gap, left: card.left, maxH: null }
-      } else if (spaceAbove >= desired) {
-        next = { dir: 'up', top: 0, left: card.left, maxH: null }
-      } else if (spaceBelow >= spaceAbove && spaceBelow >= 220) {
-        next = { dir: 'down', top: card.bottom + gap, left: card.left, maxH: Math.floor(spaceBelow) }
-      } else if (spaceAbove >= 220) {
-        next = { dir: 'up', top: 0, left: card.left, maxH: Math.floor(spaceAbove) }
-      } else {
-        const height = Math.min(desired, Math.max(180, vh - margin * 2))
-        let top = card.bottom + gap
-        if (top + height > vh - margin) top = vh - margin - height
-        if (top < margin) top = margin
-        next = { dir: 'clamp', top, left: card.left, maxH: Math.floor(height) }
-      }
-      next.left = Math.min(Math.max(margin, next.left), Math.max(margin, vw - width - margin))
-      if (next.dir === 'up') {
-        // 浮窗实际高度可能小于上限，往上展开时按实际高度让底边贴着卡片顶边。
-        const popover = dock.querySelector<HTMLElement>('.discuss-popover')
-        const height = Math.min(popover?.offsetHeight || desired, next.maxH ?? desired)
-        next.top = card.top - gap - height
-      }
-      next.top += window.scrollY
-      next.left += window.scrollX
-      setPlace((prev) =>
-        prev && prev.dir === next.dir && prev.top === next.top && prev.left === next.left && prev.maxH === next.maxH
-          ? prev
-          : next,
-      )
-    }
-    measure()
-    const frame = window.requestAnimationFrame(measure)
-    const observer = new ResizeObserver(measure)
-    if (dockRef.current) observer.observe(dockRef.current)
-    window.addEventListener('resize', measure)
-    window.addEventListener('scroll', measure, true)
-    return () => {
-      dead = true
-      window.cancelAnimationFrame(frame)
-      observer.disconnect()
-      window.removeEventListener('resize', measure)
-      window.removeEventListener('scroll', measure, true)
-    }
-  }, [cardId, narrow, transform, cardAt])
-
-  const style: CSSProperties & Record<string, string | number> = {}
-  if (!narrow) {
-    if (place) {
-      style.top = place.top
-      style.left = place.left
-      if (place.maxH != null) style['--discuss-max'] = `${place.maxH}px`
-    } else {
-      style.visibility = 'hidden'
-    }
-  }
-  const className = [
-    'discuss-dock',
-    narrow ? 'discuss-sheet' : '',
-    !narrow && place?.dir === 'up' ? 'discuss-up' : '',
-    !narrow && place?.dir === 'clamp' ? 'discuss-clamp' : '',
-    !narrow && place?.maxH != null ? 'discuss-fit' : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  return createPortal(
-    <div ref={dockRef} className={className} style={style} data-discuss-dock="">
-      <CardDiscuss cardId={cardId} cardBody={bind.cardBody} onClose={bind.onClose} onCommitBody={bind.onCommitBody} />
-    </div>,
-    document.body,
-  )
-}
-
-function SnowCard({ data }: NodeProps<Node<CardData, 'snowCard'>>) {
+function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
+  const cardRef = useRef<HTMLDivElement>(null)
   const title = data.title.trim()
   const body = data.body.trim()
+  useLayoutEffect(() => {
+    const el = cardRef.current
+    if (!el) return
+    const report = () => {
+      const measured = Math.round(el.offsetHeight)
+      if (!Number.isFinite(measured) || measured < 1) return
+      const next = Math.abs(measured - data.boxHeight) <= 1 ? data.boxHeight : measured
+      data.onHeight(id, next)
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [id, data.body, data.boxHeight, data.layerLabel, data.meta, data.onHeight, data.title])
   return (
     <div className="snow-node">
       <div
+        ref={cardRef}
         className={['snow-card', data.flash ? 'adopt-flash' : '', data.conflict ? 'is-conflict' : ''].filter(Boolean).join(' ')}
         data-color={data.color}
       >
@@ -195,9 +86,10 @@ function toFlowNode(
   node: CanvasNode,
   card: Card | undefined,
   activeId: string | null,
-  discussId: string | null,
   flashId: string | null,
   conflict: boolean,
+  measured: number | undefined,
+  onHeight: (id: string, height: number) => void,
 ): Node {
   if (node.type === 'group') {
     return {
@@ -213,8 +105,8 @@ function toFlowNode(
     }
   }
   const face = card ? cardFace(card) : { title: node.text ?? '', body: '', meta: '' }
-  const tall = face.body.trim().length > 0 || face.title.trim().length > 18
-  const height = Math.max(node.height, tall ? 176 : node.height)
+  const estimated = estimateSnowCardHeight({ title: face.title, body: face.body, meta: face.meta, width: node.width })
+  const height = measured ?? estimated
   return {
     id: node.id,
     type: 'snowCard',
@@ -222,7 +114,7 @@ function toFlowNode(
     width: node.width,
     height,
     selected: node.id === activeId,
-    zIndex: discussId === node.id ? 20 : 1,
+    zIndex: 1,
     data: {
       layerLabel: card ? layerLabel(card.layer) : '',
       color: node.color ?? '1',
@@ -232,6 +124,8 @@ function toFlowNode(
       title: face.title,
       body: face.body,
       meta: face.meta,
+      boxHeight: height,
+      onHeight,
     },
     style: { width: node.width, height },
   }
@@ -243,32 +137,28 @@ export default function FlowCanvas({
   cards,
   activeId,
   conflictIds,
+  canEdit,
   onMove,
+  onShift,
   onSelect,
   onSpawn,
   onLink,
   onCreateAt,
-  onOpenDiscuss,
-  discussCardId,
   flashCardId,
-  onCloseDiscuss,
-  onCommitBody,
 }: {
   nodes: CanvasNode[]
   edges: CanvasEdge[]
   cards: Record<string, Card>
   activeId: string | null
   conflictIds?: ReadonlySet<string>
+  canEdit: boolean
   onMove: (id: string, x: number, y: number) => void
+  onShift: (moves: { id: string; x: number; y: number }[]) => void
   onSelect: (id: string) => void
   onSpawn: (fromId: string, x: number, y: number) => void
   onLink: (fromId: string, toId: string) => void
   onCreateAt: (x: number, y: number) => void
-  onOpenDiscuss: (cardId: string) => void
-  discussCardId: string | null
   flashCardId: string | null
-  onCloseDiscuss: () => void
-  onCommitBody: (cardId: string, body: string) => Promise<void>
 }) {
   const { screenToFlowPosition, fitView, getNodesBounds, setViewport } = useReactFlow()
   const lastPaneClick = useRef(0)
@@ -288,35 +178,128 @@ export default function FlowCanvas({
     void setViewport(getViewportForBounds(bounds, paneWidth, paneHeight, 0.1, 1, 0.2))
   }, [nodesReady, nodes, paneWidth, paneHeight, getNodesBounds, setViewport])
 
+  const [heights, setHeights] = useState<Record<string, number>>({})
+  const heightsRef = useRef(heights)
+  heightsRef.current = heights
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  const canEditRef = useRef(canEdit)
+  canEditRef.current = canEdit
+  const onShiftRef = useRef(onShift)
+  onShiftRef.current = onShift
+  const dragRef = useRef<string | null>(null)
+  const pendingShift = useRef(false)
+  const settledRef = useRef<Record<string, number>>({})
+  const yRef = useRef<Record<string, number>>({})
+  const seenY = useRef<Record<string, number>>({})
+  const shiftQueue = useRef<Promise<void>>(Promise.resolve())
+
+  for (const node of nodes) {
+    const seen = seenY.current[node.id]
+    if (seen !== node.y) {
+      if (seen != null && yRef.current[node.id] !== node.y) yRef.current[node.id] = node.y
+      seenY.current[node.id] = node.y
+    }
+  }
+
+  const onHeight = useCallback((id: string, height: number) => {
+    const rounded = Math.round(height)
+    if (!Number.isFinite(rounded) || rounded < 1) return
+    setHeights((current) => {
+      const prev = current[id]
+      if (prev != null && Math.abs(prev - rounded) < 2) return current
+      if (prev === rounded) return current
+      return { ...current, [id]: rounded }
+    })
+  }, [])
+
+  const resolveOverlaps = useCallback((overrides?: Record<string, { x: number; y: number }>) => {
+    if (dragRef.current) {
+      pendingShift.current = true
+      return
+    }
+    const currentNodes = nodesRef.current
+    const measured = heightsRef.current
+    let heightChanged = pendingShift.current
+    const boxes: ShiftBox[] = []
+    for (const node of currentNodes) {
+      const at = overrides?.[node.id]
+      const x = at?.x ?? node.x
+      const y = at?.y ?? yRef.current[node.id] ?? node.y
+      if (node.type === 'group') {
+        boxes.push({
+          id: node.id,
+          x,
+          y,
+          width: node.width,
+          height: node.height,
+          prevHeight: node.height,
+          kind: 'group',
+        })
+        continue
+      }
+      const height = measured[node.id] ?? node.height
+      const prev = settledRef.current[node.id] ?? node.height
+      if (measured[node.id] != null && measured[node.id] !== prev) heightChanged = true
+      boxes.push({ id: node.id, x, y, width: node.width, height, prevHeight: prev, kind: 'card' })
+    }
+    if (!heightChanged) return
+    const moves = shiftOverlappingCards(boxes, null)
+    if (moves.length > 0 && !canEditRef.current) {
+      pendingShift.current = true
+      return
+    }
+    pendingShift.current = false
+    const nextSettled = { ...settledRef.current }
+    for (const node of currentNodes) {
+      if (node.type !== 'group' && measured[node.id] != null) nextSettled[node.id] = measured[node.id]
+    }
+    settledRef.current = nextSettled
+    if (moves.length === 0) return
+    for (const move of moves) yRef.current[move.id] = move.y
+    shiftQueue.current = shiftQueue.current
+      .then(() => onShiftRef.current(moves))
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+  }, [])
+
+  useLayoutEffect(() => {
+    resolveOverlaps()
+  }, [heights, canEdit, resolveOverlaps])
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
       if (event.isComposing) return
       const active = document.activeElement
       if (!(active instanceof Element)) return
-      if (active.closest('.discuss-dock, [data-discuss-popover]')) return
+      if (active.closest('.discuss-dock, [data-discuss-popover], .side')) return
       if (!active.classList.contains('react-flow__node-snowCard')) return
       const id = active.getAttribute('data-id')
       if (!id) return
       event.preventDefault()
-      onOpenDiscuss(id)
+      onSelect(id)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onOpenDiscuss])
+  }, [onSelect])
 
-  const discuss =
-    discussCardId && cards[discussCardId]
-      ? {
-          cardId: discussCardId,
-          bind: { cardBody: cards[discussCardId].body, onClose: onCloseDiscuss, onCommitBody },
-        }
-      : null
   const [dragged, setDragged] = useState<Record<string, { x: number; y: number }>>({})
   const draggedRef = useRef(dragged)
   draggedRef.current = dragged
   const flowNodes = nodes.map((node) => {
-    const flow = toFlowNode(node, cards[node.id], activeId, discuss?.cardId ?? null, flashCardId, conflictIds?.has(node.id) ?? false)
+    const measured = node.type === 'group' ? undefined : heights[node.id]
+    const flow = toFlowNode(
+      node,
+      cards[node.id],
+      activeId,
+      flashCardId,
+      conflictIds?.has(node.id) ?? false,
+      measured,
+      onHeight,
+    )
     const held = dragged[node.id]
     return held ? { ...flow, position: held } : flow
   })
@@ -328,18 +311,22 @@ export default function FlowCanvas({
   }))
 
   // 拖动途中只挪页面上的位置；松手那一次（dragging 为 false）才写进画布。
+  // 松手之后才按新高度解决重叠，拖的那张在拖动过程中不被下移打断。
   const onNodesChange = (changes: NodeChange[]) => {
     const moving: Record<string, { x: number; y: number }> = {}
     const released: { id: string; x: number; y: number }[] = []
+    let draggingNow: string | null = null
     for (const change of changes) {
       if (change.type !== 'position') continue
       if (change.dragging) {
+        draggingNow = change.id
         if (change.position) moving[change.id] = { x: change.position.x, y: change.position.y }
         continue
       }
       const at = change.position ?? draggedRef.current[change.id]
       if (at) released.push({ id: change.id, x: at.x, y: at.y })
     }
+    if (draggingNow) dragRef.current = draggingNow
     const done = new Set(released.map((item) => item.id))
     if (Object.keys(moving).length > 0 || done.size > 0) {
       const next = { ...draggedRef.current, ...moving }
@@ -348,6 +335,16 @@ export default function FlowCanvas({
       setDragged(next)
     }
     for (const item of released) onMove(item.id, item.x, item.y)
+    if (draggingNow) return
+    if (released.length === 0 && dragRef.current == null) return
+    dragRef.current = null
+    if (!pendingShift.current) return
+    const overrides: Record<string, { x: number; y: number }> = {}
+    for (const item of released) {
+      overrides[item.id] = { x: item.x, y: item.y }
+      yRef.current[item.id] = item.y
+    }
+    resolveOverlaps(overrides)
   }
 
   const focusActive = () => {
@@ -382,10 +379,7 @@ export default function FlowCanvas({
         onNodeClick={(_, node) => onSelect(node.id)}
         onNodeDoubleClick={(event, node) => {
           if (node.type !== 'snowCard') return
-          const target = 'target' in event && event.target instanceof Element ? event.target : null
-          if (target?.closest('[data-discuss-popover]')) return
           event.preventDefault()
-          onOpenDiscuss(node.id)
         }}
         onConnect={(connection) => {
           if (!connection.source || !connection.target) return
@@ -425,7 +419,6 @@ export default function FlowCanvas({
           </div>
         </Panel>
       </ReactFlow>
-      {discuss ? <DiscussDock key={discuss.cardId} cardId={discuss.cardId} bind={discuss.bind} /> : null}
     </div>
   )
 }

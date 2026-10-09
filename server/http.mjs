@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { constants as fsConstants, createReadStream } from 'node:fs'
 import { access, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Agent, fetch as undiciFetch } from 'undici'
 import fastifyStatic from '@fastify/static'
@@ -29,14 +30,20 @@ import { stripMarkdown } from '../src/strip-markdown.mjs'
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
 const dataDir = readEnv('SNOWFLAKE_DATA_DIR') || '/home/chris/.local/share/snowflake-canvas'
-const canonicalPath = join(dataDir, 'snowflake.json')
-const canonicalTempPath = join(dataDir, '.snowflake.json.tmp')
-const keepTempPath = join(dataDir, '.snowflake.keep.tmp')
 const SNAPSHOT_STEM = 'snowflake'
-const sessionPath = join(dataDir, 'session.json')
-const sessionBackupPath = join(dataDir, 'session.json.bak')
 const configPath = join(dataDir, 'config.json')
 const gbrainFailFlag = join(dataDir, 'gbrain-force-fail')
+// 每本书一个目录：books/<bookId>/ 里放正本、会话、快照和 meta.json；数据根只留 active.json 和全局配置。
+const booksRoot = join(dataDir, 'books')
+const activePath = join(dataDir, 'active.json')
+const legacyCanonicalPath = join(dataDir, 'snowflake.json')
+const legacySessionPath = join(dataDir, 'session.json')
+const legacySessionBackupPath = join(dataDir, 'session.json.bak')
+const PRE_IMPORT_SUFFIX = '.pre-multi-import'
+const DEFAULT_BOOK_NAME = '未命名书'
+const BOOK_NAME_LIMIT = 200
+const BOOK_ID_RE = /^[a-z0-9]{1,32}$/
+const MSG_NO_BOOK = '没有这本书'
 
 const gatewayOrigin = 'http://127.0.0.1:8642'
 const expandHost = '127.0.0.1'
@@ -121,21 +128,76 @@ async function readJson(path) {
   return JSON.parse(text)
 }
 
-let queue = Promise.resolve()
-let sessionQueue = Promise.resolve()
+async function exists(path) {
+  return stat(path).then(
+    () => true,
+    () => false,
+  )
+}
 
-function exclusive(task) {
-  const run = queue.then(task, task)
-  queue = run.then(
+async function writeJsonAtomic(path, value) {
+  const text = JSON.stringify(value)
+  const temp = join(dirname(path), `.${basename(path)}.tmp`)
+  await writeExact(temp, text)
+  const back = await readFile(temp, 'utf8')
+  if (back !== text) {
+    await rm(temp, { force: true })
+    throw new Error(`${path} 临时文件校验失败`)
+  }
+  await rename(temp, path)
+}
+
+function isBookId(value) {
+  return typeof value === 'string' && BOOK_ID_RE.test(value)
+}
+
+function makeBook(id) {
+  const dir = join(booksRoot, id)
+  return {
+    id,
+    dir,
+    name: DEFAULT_BOOK_NAME,
+    createdAt: '',
+    canonicalPath: join(dir, 'snowflake.json'),
+    canonicalTempPath: join(dir, '.snowflake.json.tmp'),
+    canonicalBackupPath: join(dir, 'snowflake.json.bak'),
+    sessionPath: join(dir, 'session.json'),
+    sessionBackupPath: join(dir, 'session.json.bak'),
+    sessionTempPath: join(dir, '.session.json.tmp'),
+    metaPath: join(dir, 'meta.json'),
+    queue: Promise.resolve(),
+    sessionQueue: Promise.resolve(),
+    canonicalBroken: null,
+    legacyHeld: null,
+    removed: false,
+  }
+}
+
+// 写入串行按书分开：同一本书的正本读改写排一条队，会话文件另排一条队；两本书互不等待。
+function exclusive(book, task) {
+  const run = book.queue.then(task, task)
+  book.queue = run.then(
     () => {},
     () => {},
   )
   return run
 }
 
-function exclusiveSession(task) {
-  const run = sessionQueue.then(task, task)
-  sessionQueue = run.then(
+function exclusiveSession(book, task) {
+  const run = book.sessionQueue.then(task, task)
+  book.sessionQueue = run.then(
+    () => {},
+    () => {},
+  )
+  return run
+}
+
+// 建书、改名、切换、删书排同一条队，active.json 和书目录列表只在这里改。
+let booksQueue = Promise.resolve()
+
+function exclusiveBooks(task) {
+  const run = booksQueue.then(task, task)
+  booksQueue = run.then(
     () => {},
     () => {},
   )
@@ -154,15 +216,19 @@ async function loadConfig() {
   return { gbrainPage: 'projects/snowflake-canvas' }
 }
 
-async function ensureDataDir() {
-  await mkdir(dataDir, { recursive: true, mode: 0o700 })
-  await rm(canonicalTempPath, { force: true })
-  await rm(keepTempPath, { force: true })
-  for (const name of await readdir(dataDir)) {
+async function removeStaleTemps(dir) {
+  await rm(join(dir, '.snowflake.json.tmp'), { force: true })
+  await rm(join(dir, '.snowflake.keep.tmp'), { force: true })
+  for (const name of await readdir(dir)) {
     if (name.startsWith(`.${SNAPSHOT_STEM}.`) && name.endsWith('.snapshot.json.tmp')) {
-      await rm(join(dataDir, name), { force: true })
+      await rm(join(dir, name), { force: true })
     }
   }
+}
+
+async function ensureDataDir() {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  await removeStaleTemps(dataDir)
 }
 
 // 与 src/snapshot.ts 的 isSnapshotFileName 同一套规则。
@@ -195,16 +261,16 @@ function snapshotNameFor(date, existing) {
   throw new Error('快照文件名都已占用')
 }
 
-async function snapshotNames() {
-  const names = (await readdir(dataDir)).filter(isSnapshotName)
+async function snapshotNames(book) {
+  const names = (await readdir(book.dir)).filter(isSnapshotName)
   return names.sort((left, right) => (left < right ? 1 : left > right ? -1 : 0))
 }
 
-async function listSnapshots() {
+async function listSnapshots(book) {
   const items = []
-  for (const name of await snapshotNames()) {
+  for (const name of await snapshotNames(book)) {
     try {
-      const info = await stat(join(dataDir, name))
+      const info = await stat(join(book.dir, name))
       if (info.isFile()) items.push({ name, savedAt: info.mtime.toISOString() })
     } catch {
       // 列目录和取时间之间文件被移走，就不列它。
@@ -213,16 +279,16 @@ async function listSnapshots() {
   return items
 }
 
-async function snapshotCount() {
-  return (await snapshotNames()).length
+async function snapshotCount(book) {
+  return (await snapshotNames(book)).length
 }
 
 // 快照只增不改：先写临时文件、读回比对，再改名成一个目录里还没有的名字。
-async function writeSnapshotFile(document, date) {
-  const existing = new Set(await readdir(dataDir))
+async function writeSnapshotFile(book, document, date) {
+  const existing = new Set(await readdir(book.dir))
   const name = snapshotNameFor(date, existing)
-  const target = join(dataDir, name)
-  const temp = join(dataDir, `.${name}.tmp`)
+  const target = join(book.dir, name)
+  const temp = join(book.dir, `.${name}.tmp`)
   const text = JSON.stringify(document)
   await writeExact(temp, text)
   let back
@@ -249,18 +315,18 @@ async function writeSnapshotFile(document, date) {
 }
 
 // 旧正本把快照正文放在 snapshots 数组里：逐份落成独立文件，全部成功后才清空数组。
-async function migrateEmbeddedSnapshots() {
-  const record = await readCanonical()
+async function migrateEmbeddedSnapshots(book) {
+  const record = await readCanonical(book)
   if (record.snapshots.length === 0) return
   const valid = record.snapshots.every((item) => item && isDocument(item.document))
   if (!valid) {
-    console.error('正本里的旧快照有一份不是完整画布，没有迁移，旧数组原样保留')
+    console.error(`书 ${book.id}：正本里的旧快照有一份不是完整画布，没有迁移，旧数组原样保留`)
     return
   }
   const before = new Set()
-  for (const name of await snapshotNames()) {
+  for (const name of await snapshotNames(book)) {
     try {
-      before.add(await readFile(join(dataDir, name), 'utf8'))
+      before.add(await readFile(join(book.dir, name), 'utf8'))
     } catch {
       // 读不出的旧文件不参与去重。
     }
@@ -270,16 +336,14 @@ async function migrateEmbeddedSnapshots() {
     if (before.has(text)) continue
     const parsed = typeof item.savedAt === 'string' ? new Date(item.savedAt) : null
     const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date()
-    const name = await writeSnapshotFile(item.document, when)
-    await utimes(join(dataDir, name), when, when)
+    const name = await writeSnapshotFile(book, item.document, when)
+    await utimes(join(book.dir, name), when, when)
   }
-  await commitEnvelope(envelope(record.version, record.document, []), canonicalTempPath)
-  console.error(`正本里的 ${record.snapshots.length} 份旧快照已迁成独立文件`)
+  await commitEnvelope(book, envelope(record.version, record.document, []))
+  console.error(`书 ${book.id}：正本里的 ${record.snapshots.length} 份旧快照已迁成独立文件`)
 }
 
 const MSG_CANONICAL_UNREADABLE = '正本读不出来，已停止编辑'
-const canonicalBackupPath = join(dataDir, 'snowflake.json.bak')
-let canonicalBroken = null
 
 function canonicalUnreadable() {
   return httpError(503, MSG_CANONICAL_UNREADABLE)
@@ -296,11 +360,11 @@ function isCanonical(value) {
 }
 
 // 正本存在却读不出：原文件改名留底后停止编辑，直到人工处理并重启。绝不写空画布。
-async function quarantineCanonical(reason) {
+async function quarantineCanonical(book, reason) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const kept = join(dataDir, `snowflake.json.corrupt-${stamp}`)
-  await rename(canonicalPath, kept)
-  canonicalBroken = { kept, reason }
+  const kept = join(book.dir, `snowflake.json.corrupt-${stamp}`)
+  await rename(book.canonicalPath, kept)
+  book.canonicalBroken = { kept, reason }
   throw canonicalUnreadable()
 }
 
@@ -315,48 +379,50 @@ function isUnreadable(error) {
   return Boolean(error && error.statusCode === 503 && error.message === MSG_CANONICAL_UNREADABLE)
 }
 
-async function readCanonical() {
-  if (canonicalBroken) throw canonicalUnreadable()
+async function readCanonical(book) {
+  if (book.removed) throw httpError(404, MSG_NO_BOOK)
+  if (book.canonicalBroken) throw canonicalUnreadable()
   let text
   try {
-    text = await readFile(canonicalPath, 'utf8')
+    text = await readFile(book.canonicalPath, 'utf8')
   } catch (error) {
-    if (!error || error.code !== 'ENOENT') return quarantineCanonical(error)
-    return createCanonical()
+    if (!error || error.code !== 'ENOENT') return quarantineCanonical(book, error)
+    return createCanonical(book)
   }
   let value
   try {
     value = JSON.parse(text)
   } catch (error) {
-    return quarantineCanonical(error)
+    return quarantineCanonical(book, error)
   }
-  if (!isCanonical(value)) return quarantineCanonical(new Error('正本字段校验不过'))
+  if (!isCanonical(value)) return quarantineCanonical(book, new Error('正本字段校验不过'))
   return value
 }
 
-async function backupCanonical() {
+async function backupCanonical(book) {
   try {
-    const value = await readJson(canonicalPath)
+    const value = await readJson(book.canonicalPath)
     if (!isCanonical(value)) return
   } catch {
     return
   }
-  await copyFile(canonicalPath, canonicalBackupPath)
+  await copyFile(book.canonicalPath, book.canonicalBackupPath)
 }
 
-async function createCanonical() {
+async function createCanonical(book) {
   const created = envelope(1, emptyDocument(), [])
-  await writeExact(canonicalTempPath, JSON.stringify(created))
-  const back = await readJson(canonicalTempPath)
+  await writeExact(book.canonicalTempPath, JSON.stringify(created))
+  const back = await readJson(book.canonicalTempPath)
   if (back.version !== 1 || !Array.isArray(back.snapshots)) {
-    await rm(canonicalTempPath, { force: true })
+    await rm(book.canonicalTempPath, { force: true })
     throw new Error('正本临时文件校验失败')
   }
-  await rename(canonicalTempPath, canonicalPath)
+  await rename(book.canonicalTempPath, book.canonicalPath)
   return back
 }
 
-async function commitEnvelope(next, tempPath) {
+async function commitEnvelope(book, next) {
+  const tempPath = book.canonicalTempPath
   const text = JSON.stringify(next)
   await writeExact(tempPath, text)
   const back = await readJson(tempPath)
@@ -364,8 +430,8 @@ async function commitEnvelope(next, tempPath) {
     await rm(tempPath, { force: true })
     throw new Error('正本临时文件校验失败')
   }
-  await backupCanonical()
-  await rename(tempPath, canonicalPath)
+  await backupCanonical(book)
+  await rename(tempPath, book.canonicalPath)
   return back
 }
 
@@ -411,11 +477,9 @@ function textField(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-let legacyHeld = null
-
-async function readSessionRaw() {
+async function readSessionRaw(book) {
   try {
-    return await readJson(sessionPath)
+    return await readJson(book.sessionPath)
   } catch (error) {
     if (error && error.code === 'ENOENT') return null
     throw error
@@ -433,33 +497,33 @@ function backupLooksComplete(bytes) {
   return false
 }
 
-async function backupLegacyOnce(original) {
+async function backupLegacyOnce(book, original) {
   let existing = null
   try {
-    existing = await readFile(sessionBackupPath)
+    existing = await readFile(book.sessionBackupPath)
   } catch {
     existing = null
   }
   if (existing && existing.equals(original)) return
   if (existing && backupLooksComplete(existing)) return
-  const handle = await open(sessionBackupPath, 'w', 0o600)
+  const handle = await open(book.sessionBackupPath, 'w', 0o600)
   try {
     await handle.writeFile(original)
     await handle.sync()
   } finally {
     await handle.close()
   }
-  const back = await readFile(sessionBackupPath)
+  const back = await readFile(book.sessionBackupPath)
   if (!back.equals(original)) {
-    await rm(sessionBackupPath, { force: true })
+    await rm(book.sessionBackupPath, { force: true })
     throw new Error('会话备份校验失败')
   }
 }
 
-async function writeSessionStore(store, mustKeep) {
+async function writeSessionStore(book, store, mustKeep) {
   const normalized = normalizeStore(store)
   const text = JSON.stringify(normalized)
-  const temp = join(dataDir, '.session.json.tmp')
+  const temp = book.sessionTempPath
   await writeExact(temp, text)
   let back
   try {
@@ -476,20 +540,20 @@ async function writeSessionStore(store, mustKeep) {
     await rm(temp, { force: true })
     throw new Error('会话文件校验失败')
   }
-  await rename(temp, sessionPath)
-  legacyHeld = null
+  await rename(temp, book.sessionPath)
+  book.legacyHeld = null
   return back
 }
 
-async function loadDiscussStoreInner() {
-  const record = await exclusive(() => readCanonical())
-  const raw = await readSessionRaw()
+async function loadDiscussStoreInner(book) {
+  const record = await exclusive(book, () => readCanonical(book))
+  const raw = await readSessionRaw(book)
   if (!raw) {
-    legacyHeld = null
+    book.legacyHeld = null
     return { cards: {} }
   }
   if (!isLegacyRecord(raw)) {
-    legacyHeld = null
+    book.legacyHeld = null
     return normalizeStore(raw)
   }
   const legacy = {
@@ -498,28 +562,28 @@ async function loadDiscussStoreInner() {
   }
   const target = situationTarget(record.document)
   if (!target) {
-    legacyHeld = legacy
+    book.legacyHeld = legacy
     return { cards: {} }
   }
-  const original = await readFile(sessionPath)
-  await backupLegacyOnce(original)
+  const original = await readFile(book.sessionPath)
+  await backupLegacyOnce(book, original)
   const store = storeFromLegacy(legacy, target, new Date().toISOString())
-  return writeSessionStore(store, [legacy.sessionId])
+  return writeSessionStore(book, store, [legacy.sessionId])
 }
 
-async function saveDiscussStore(store) {
-  if (legacyHeld) {
-    const record = await exclusive(() => readCanonical())
+async function saveDiscussStore(book, store) {
+  if (book.legacyHeld) {
+    const record = await exclusive(book, () => readCanonical(book))
     const target = situationTarget(record.document)
     if (!target) {
       throw httpError(409, '还没有念头卡，原来的讨论先留在原文件里')
     }
-    const original = await readFile(sessionPath)
-    await backupLegacyOnce(original)
-    const migrated = storeFromLegacy(legacyHeld, target, new Date().toISOString())
-    return writeSessionStore(mergeStores(migrated, store), [legacyHeld.sessionId])
+    const original = await readFile(book.sessionPath)
+    await backupLegacyOnce(book, original)
+    const migrated = storeFromLegacy(book.legacyHeld, target, new Date().toISOString())
+    return writeSessionStore(book, mergeStores(migrated, store), [book.legacyHeld.sessionId])
   }
-  return writeSessionStore(store, [])
+  return writeSessionStore(book, store, [])
 }
 
 async function createGatewaySession(cardId, store) {
@@ -548,63 +612,323 @@ async function createGatewaySession(cardId, store) {
   throw httpError(lastStatus === 503 ? 503 : 502, '画布会话没有建成')
 }
 
-async function ensureCardSession(cardId) {
+async function ensureCardSession(book, cardId) {
   if (!cardId) throw httpError(400, '缺少 cardId')
-  return exclusiveSession(async () => {
-    let store = await loadDiscussStoreInner()
+  return exclusiveSession(book, async () => {
+    let store = await loadDiscussStoreInner(book)
     const existing = activeSessionId(store, cardId)
     if (existing) return { store, sessionId: existing }
     const created = await createGatewaySession(cardId, store)
-    store = await saveDiscussStore(withSession(store, cardId, created))
+    store = await saveDiscussStore(book, withSession(store, cardId, created))
     return { store, sessionId: created.sessionId }
   })
 }
 
-async function createCardSession(cardId) {
+async function createCardSession(book, cardId) {
   if (!cardId) throw httpError(400, '缺少 cardId')
-  return exclusiveSession(async () => {
-    const store = await loadDiscussStoreInner()
+  return exclusiveSession(book, async () => {
+    const store = await loadDiscussStoreInner(book)
     const created = await createGatewaySession(cardId, store)
-    const saved = await saveDiscussStore(withSession(store, cardId, created))
+    const saved = await saveDiscussStore(book, withSession(store, cardId, created))
     return { store: saved, sessionId: created.sessionId }
   })
 }
 
-async function selectCardSession(cardId, sessionId) {
+async function selectCardSession(book, cardId, sessionId) {
   if (!cardId) throw httpError(400, '缺少 cardId')
   if (!sessionId) throw httpError(400, 'cardId 对不上该会话')
-  return exclusiveSession(async () => {
-    const store = await loadDiscussStoreInner()
+  return exclusiveSession(book, async () => {
+    const store = await loadDiscussStoreInner(book)
     if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
-    const saved = await saveDiscussStore(withLast(store, cardId, sessionId))
+    const saved = await saveDiscussStore(book, withLast(store, cardId, sessionId))
     return { store: saved, sessionId }
   })
 }
 
-async function recordFirstAsk(cardId, sessionId, message) {
-  return exclusiveSession(async () => {
-    const store = await loadDiscussStoreInner()
+async function recordFirstAsk(book, cardId, sessionId, message) {
+  return exclusiveSession(book, async () => {
+    const store = await loadDiscussStoreInner(book)
     const { store: next, changed } = withFirstAsk(store, cardId, sessionId, message)
-    if (changed) await saveDiscussStore(next)
+    if (changed) await saveDiscussStore(book, next)
   })
 }
 
-async function recordAdoption(cardId, sessionId, adoption) {
-  return exclusiveSession(async () => {
-    const store = await loadDiscussStoreInner()
+async function recordAdoption(book, cardId, sessionId, adoption) {
+  return exclusiveSession(book, async () => {
+    const store = await loadDiscussStoreInner(book)
     if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
-    return saveDiscussStore(withAdoption(store, cardId, sessionId, adoption))
+    return saveDiscussStore(book, withAdoption(store, cardId, sessionId, adoption))
   })
 }
 
-async function assertOwned(cardId, sessionId, touch) {
+async function assertOwned(book, cardId, sessionId, touch) {
   if (!cardId) throw httpError(400, '缺少 cardId')
   if (!sessionId) throw httpError(400, 'cardId 对不上该会话')
-  return exclusiveSession(async () => {
-    const store = await loadDiscussStoreInner()
+  return exclusiveSession(book, async () => {
+    const store = await loadDiscussStoreInner(book)
     if (!sessionOwned(store, cardId, sessionId)) throw httpError(400, 'cardId 对不上该会话')
     if (!touch) return store
-    return saveDiscussStore(withLast(store, cardId, sessionId))
+    return saveDiscussStore(book, withLast(store, cardId, sessionId))
+  })
+}
+
+// 写入脑不按书拆：卡片和会话的归属在哪本书里都算数，先看活动书，再看其余书。
+async function assertOwnedAnyBook(cardId, sessionId) {
+  await ensureBooks()
+  const first = activeBook()
+  try {
+    return await assertOwned(first, cardId, sessionId, false)
+  } catch (error) {
+    if (!error || error.statusCode !== 400 || error.message !== 'cardId 对不上该会话') throw error
+    for (const book of sortedBooks()) {
+      if (book === first) continue
+      try {
+        return await assertOwned(book, cardId, sessionId, false)
+      } catch {
+        // 别的书对不上或读不出，都按活动书的结论回。
+      }
+    }
+    throw error
+  }
+}
+
+const books = new Map()
+let activeBookId = ''
+let booksReady = null
+
+// 只认书级标题字段（外层、document、snowflake 上的 title）。卡片里的场景标题不是书名。
+function legacyBookName(text) {
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return DEFAULT_BOOK_NAME
+  }
+  const document = value && typeof value === 'object' ? value.document : null
+  const snowflake = document && typeof document === 'object' ? document.snowflake : null
+  for (const layer of [value, document, snowflake]) {
+    if (!layer || typeof layer !== 'object' || Array.isArray(layer)) continue
+    const title = typeof layer.title === 'string' ? layer.title.trim() : ''
+    if (title) return title.slice(0, BOOK_NAME_LIMIT)
+  }
+  return DEFAULT_BOOK_NAME
+}
+
+// 已存在就不写：pre-multi-import 只在第一次迁移时留一份，之后不覆盖。
+async function writeOnce(path, bytes) {
+  let handle
+  try {
+    handle = await open(path, 'wx', 0o600)
+  } catch (error) {
+    if (error && error.code === 'EEXIST') return
+    throw error
+  }
+  try {
+    await handle.writeFile(bytes)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  const back = await readFile(path)
+  if (!back.equals(bytes)) throw new Error(`${path} 校验失败`)
+}
+
+async function scanBookIds() {
+  let entries
+  try {
+    entries = await readdir(booksRoot, { withFileTypes: true })
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return []
+    throw error
+  }
+  const ids = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isBookId(entry.name)) continue
+    const dir = join(booksRoot, entry.name)
+    if ((await exists(join(dir, 'meta.json'))) || (await exists(join(dir, 'snowflake.json')))) ids.push(entry.name)
+  }
+  return ids
+}
+
+async function newBookId() {
+  for (;;) {
+    const id = randomBytes(4).toString('hex')
+    if (!books.has(id) && !(await exists(join(booksRoot, id)))) return id
+  }
+}
+
+// 旧版把正本和会话直接放在数据根。还没有书时搬成第一本书：先搬正本，书目录立刻可认；
+// 每搬走一份，在数据根留一份迁走前的原样副本。根上已有 pre-multi-import 说明迁过，不再动。
+async function migrateLegacyRoot() {
+  if ((await scanBookIds()).length > 0) return
+  const hasCanvas = await exists(legacyCanonicalPath)
+  const hasSession = await exists(legacySessionPath)
+  if (!hasCanvas && !hasSession) return
+  if (
+    (await exists(`${legacyCanonicalPath}${PRE_IMPORT_SUFFIX}`)) ||
+    (await exists(`${legacySessionPath}${PRE_IMPORT_SUFFIX}`))
+  ) {
+    console.error('数据根已有 pre-multi-import，旧数据迁过一次，这次不再搬')
+    return
+  }
+  const id = await newBookId()
+  const book = makeBook(id)
+  await mkdir(book.dir, { recursive: true, mode: 0o700 })
+  let name = DEFAULT_BOOK_NAME
+  if (hasCanvas) {
+    const bytes = await readFile(legacyCanonicalPath)
+    name = legacyBookName(bytes.toString('utf8'))
+    await rename(legacyCanonicalPath, book.canonicalPath)
+    await writeOnce(`${legacyCanonicalPath}${PRE_IMPORT_SUFFIX}`, bytes)
+  }
+  await writeJsonAtomic(book.metaPath, { id, name, createdAt: new Date().toISOString() })
+  if (hasSession) {
+    const bytes = await readFile(legacySessionPath)
+    await rename(legacySessionPath, book.sessionPath)
+    await writeOnce(`${legacySessionPath}${PRE_IMPORT_SUFFIX}`, bytes)
+  }
+  if (await exists(legacySessionBackupPath)) await rename(legacySessionBackupPath, book.sessionBackupPath)
+  for (const entry of await readdir(dataDir)) {
+    if (isSnapshotName(entry)) await rename(join(dataDir, entry), join(book.dir, entry))
+  }
+  await writeJsonAtomic(activePath, { activeBookId: id })
+  console.error(`数据根的旧画布已迁成第一本书 ${id}（${name}）`)
+}
+
+async function loadBook(id) {
+  const book = makeBook(id)
+  let meta = null
+  try {
+    meta = await readJson(book.metaPath)
+  } catch {
+    meta = null
+  }
+  const name = meta && typeof meta.name === 'string' ? meta.name.trim() : ''
+  const createdAt = meta && typeof meta.createdAt === 'string' ? meta.createdAt : ''
+  if (name && createdAt) {
+    book.name = name
+    book.createdAt = createdAt
+    return book
+  }
+  let derived = name
+  if (!derived) {
+    try {
+      derived = legacyBookName(await readFile(book.canonicalPath, 'utf8'))
+    } catch {
+      derived = DEFAULT_BOOK_NAME
+    }
+  }
+  book.name = derived
+  book.createdAt = createdAt || (await stat(book.dir)).mtime.toISOString()
+  await writeJsonAtomic(book.metaPath, { id, name: book.name, createdAt: book.createdAt })
+  return book
+}
+
+function sortedBooks() {
+  return [...books.values()].sort((left, right) => {
+    if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  })
+}
+
+function activeBook() {
+  return books.get(activeBookId) || sortedBooks()[0] || null
+}
+
+async function setActive(id) {
+  await writeJsonAtomic(activePath, { activeBookId: id })
+  activeBookId = id
+}
+
+async function createBook(name) {
+  const id = await newBookId()
+  const book = makeBook(id)
+  await mkdir(book.dir, { recursive: true, mode: 0o700 })
+  await createCanonical(book)
+  book.name = name
+  book.createdAt = new Date().toISOString()
+  await writeJsonAtomic(book.metaPath, { id, name, createdAt: book.createdAt })
+  books.set(id, book)
+  return book
+}
+
+async function initBooks() {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  await migrateLegacyRoot()
+  for (const id of await scanBookIds()) {
+    if (!books.has(id)) books.set(id, await loadBook(id))
+  }
+  if (books.size === 0) await createBook(DEFAULT_BOOK_NAME)
+  let wanted = ''
+  try {
+    const value = await readJson(activePath)
+    if (value && isBookId(value.activeBookId)) wanted = value.activeBookId
+  } catch {
+    wanted = ''
+  }
+  if (books.has(wanted)) activeBookId = wanted
+  else await setActive(sortedBooks()[0].id)
+}
+
+function ensureBooks() {
+  if (!booksReady) booksReady = initBooks()
+  return booksReady
+}
+
+// 旧路径（不带 bookId）落到活动书；新路径按 bookId 找，找不到或 id 不合规都算没有这本书。
+async function bookFor(request) {
+  await ensureBooks()
+  const id = request.params ? request.params.bookId : undefined
+  if (id === undefined) return activeBook()
+  if (!isBookId(id)) return null
+  const book = books.get(id)
+  return book && !book.removed ? book : null
+}
+
+function sendNoBook(reply) {
+  reply.code(404)
+  reply.header('Cache-Control', 'no-store')
+  return reply.send({ error: MSG_NO_BOOK })
+}
+
+function publicBook(book) {
+  return { id: book.id, name: book.name, active: book.id === activeBookId }
+}
+
+function bookNameFrom(body) {
+  return body && typeof body === 'object' && typeof body.name === 'string' ? body.name.trim() : ''
+}
+
+async function renameBook(book, name) {
+  return exclusiveBooks(async () => {
+    if (book.removed) throw httpError(404, MSG_NO_BOOK)
+    await writeJsonAtomic(book.metaPath, { id: book.id, name, createdAt: book.createdAt })
+    book.name = name
+    return book
+  })
+}
+
+async function activateBook(book) {
+  return exclusiveBooks(async () => {
+    if (book.removed) throw httpError(404, MSG_NO_BOOK)
+    await setActive(book.id)
+    return book
+  })
+}
+
+// 先排进这本书的会话队列、再排正本队列（与讨论接口同一顺序），等手上的写入都落盘后才删目录。
+async function deleteBook(book) {
+  return exclusiveBooks(async () => {
+    if (book.removed) throw httpError(404, MSG_NO_BOOK)
+    if (books.size <= 1) throw httpError(409, '只剩这一本书，不能删')
+    await exclusiveSession(book, () =>
+      exclusive(book, async () => {
+        book.removed = true
+        books.delete(book.id)
+        await rm(book.dir, { recursive: true, force: true })
+      }),
+    )
+    if (activeBookId === book.id) await setActive(sortedBooks()[0].id)
   })
 }
 
@@ -872,24 +1196,115 @@ async function proxyGatewayStream(raw, upstream) {
 }
 
 function registerApi(app, prefix) {
-  app.get(`${prefix}/api/canvas`, async (_request, reply) => {
+  // 画布和讨论接口各挂两份：旧路径落到活动书，/api/books/:bookId/... 落到指定的书。
+  const scoped = (method, path, handler) => {
+    app.route({ method, url: `${prefix}/api${path}`, handler })
+    app.route({ method, url: `${prefix}/api/books/:bookId${path}`, handler })
+  }
+
+  app.get(`${prefix}/api/books`, async (_request, reply) => {
+    await ensureBooks()
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ books: sortedBooks().map(publicBook), activeBookId })
+  })
+
+  app.post(`${prefix}/api/books`, async (request, reply) => {
+    await ensureBooks()
+    const name = bookNameFrom(request.body) || DEFAULT_BOOK_NAME
+    if (name.length > BOOK_NAME_LIMIT) {
+      reply.code(400)
+      return reply.send({ error: `书名不能超过 ${BOOK_NAME_LIMIT} 个字符` })
+    }
+    const book = await exclusiveBooks(async () => {
+      const created = await createBook(name)
+      await setActive(created.id)
+      return created
+    })
+    reply.code(201)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(publicBook(book))
+  })
+
+  app.patch(`${prefix}/api/books/:bookId`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const name = bookNameFrom(request.body)
+    if (!name) {
+      reply.code(400)
+      return reply.send({ error: '书名不能是空的' })
+    }
+    if (name.length > BOOK_NAME_LIMIT) {
+      reply.code(400)
+      return reply.send({ error: `书名不能超过 ${BOOK_NAME_LIMIT} 个字符` })
+    }
+    try {
+      await renameBook(book, name)
+    } catch (error) {
+      if (error && error.statusCode === 404) return sendNoBook(reply)
+      throw error
+    }
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(publicBook(book))
+  })
+
+  app.post(`${prefix}/api/books/:bookId/activate`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    try {
+      await activateBook(book)
+    } catch (error) {
+      if (error && error.statusCode === 404) return sendNoBook(reply)
+      throw error
+    }
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(publicBook(book))
+  })
+
+  app.delete(`${prefix}/api/books/:bookId`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    if (!request.query || request.query.confirm !== '1') {
+      reply.code(400)
+      return reply.send({ error: '删书要带 confirm=1，这次没有删' })
+    }
+    try {
+      await deleteBook(book)
+    } catch (error) {
+      if (error && error.statusCode === 404) return sendNoBook(reply)
+      if (error && error.statusCode === 409) {
+        reply.code(409)
+        return reply.send({ error: error.message })
+      }
+      throw error
+    }
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ deleted: book.id, activeBookId })
+  })
+
+  scoped('GET', '/canvas', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     let record
     try {
-      record = await exclusive(() => readCanonical())
+      record = await exclusive(book, () => readCanonical(book))
     } catch (error) {
       if (isUnreadable(error)) return sendUnreadable(reply)
       throw error
     }
-    reply.header('X-Snapshot-Count', String(await snapshotCount()))
+    reply.header('X-Snapshot-Count', String(await snapshotCount(book)))
     return sendCanvas(reply, record)
   })
 
-  app.get(`${prefix}/api/canvas/snapshots`, async (_request, reply) => {
+  scoped('GET', '/canvas/snapshots', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     reply.header('Cache-Control', 'no-store')
-    return reply.send(await listSnapshots())
+    return reply.send(await listSnapshots(book))
   })
 
-  app.put(`${prefix}/api/canvas`, async (request, reply) => {
+  scoped('PUT', '/canvas', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const document = request.body
     if (!isDocument(document)) {
       reply.code(400)
@@ -899,13 +1314,13 @@ function registerApi(app, prefix) {
     const ifMatch = Array.isArray(header) ? header.join(',') : header
     let outcome
     try {
-      outcome = await exclusive(async () => {
-        const current = await readCanonical()
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
         if (!ifMatchSatisfied(ifMatch, current.version)) {
           return { status: 412, record: current }
         }
         const next = envelope(current.version + 1, document, current.snapshots)
-        const saved = await commitEnvelope(next, canonicalTempPath)
+        const saved = await commitEnvelope(book, next)
         return { status: 200, record: saved }
       })
     } catch (error) {
@@ -916,20 +1331,19 @@ function registerApi(app, prefix) {
     return sendCanvas(reply, outcome.record)
   })
 
-  app.post(`${prefix}/api/canvas/keep`, async (request, reply) => {
+  scoped('POST', '/canvas/keep', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const header = request.headers['if-match']
     const ifMatch = Array.isArray(header) ? header.join(',') : header
     let outcome
     try {
-      outcome = await exclusive(async () => {
-        const current = await readCanonical()
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
         if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
-        const snapshotName = await writeSnapshotFile(current.document, new Date())
+        const snapshotName = await writeSnapshotFile(book, current.document, new Date())
         try {
-          const saved = await commitEnvelope(
-            envelope(current.version + 1, current.document, current.snapshots),
-            canonicalTempPath,
-          )
+          const saved = await commitEnvelope(book, envelope(current.version + 1, current.document, current.snapshots))
           return { status: 200, record: saved, snapshotName, keptVersion: current.version }
         } catch {
           return { status: 500, snapshotName }
@@ -937,6 +1351,7 @@ function registerApi(app, prefix) {
       })
     } catch (error) {
       if (isUnreadable(error)) return sendUnreadable(reply)
+      if (error && error.statusCode === 404) return sendNoBook(reply)
       reply.code(500)
       return reply.send({ error: error instanceof Error ? `快照没有存下：${error.message}` : '快照没有存下' })
     }
@@ -953,13 +1368,15 @@ function registerApi(app, prefix) {
       recordKeepTimeline(outcome.keptVersion)
       timeline = 'ok'
     }
-    const count = await snapshotCount()
+    const count = await snapshotCount(book)
     reply.code(200)
     reply.header('X-Snapshot-Count', String(count))
     return sendCanvas(reply, outcome.record, { snapshotCount: count, snapshotName: outcome.snapshotName, timeline })
   })
 
-  app.post(`${prefix}/api/canvas/rollback`, async (request, reply) => {
+  scoped('POST', '/canvas/rollback', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const name = request.body && typeof request.body === 'object' ? request.body.name : undefined
     if (!isSnapshotName(name)) {
       reply.code(400)
@@ -969,23 +1386,24 @@ function registerApi(app, prefix) {
     const ifMatch = Array.isArray(header) ? header.join(',') : header
     let outcome
     try {
-      outcome = await exclusive(async () => {
-        const current = await readCanonical()
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
         if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
         let selected
         try {
-          selected = JSON.parse(await readFile(join(dataDir, name), 'utf8'))
+          selected = JSON.parse(await readFile(join(book.dir, name), 'utf8'))
         } catch (error) {
           if (error && error.code === 'ENOENT') return { status: 404, error: '没有这份快照' }
           return { status: 422, error: '这份快照读不出来' }
         }
         if (!isDocument(selected)) return { status: 422, error: '这份快照不是完整画布' }
-        await writeSnapshotFile(current.document, new Date())
-        const saved = await commitEnvelope(envelope(current.version + 1, selected, current.snapshots), canonicalTempPath)
+        await writeSnapshotFile(book, current.document, new Date())
+        const saved = await commitEnvelope(book, envelope(current.version + 1, selected, current.snapshots))
         return { status: 200, record: saved }
       })
     } catch (error) {
       if (isUnreadable(error)) return sendUnreadable(reply)
+      if (error && error.statusCode === 404) return sendNoBook(reply)
       reply.code(500)
       return reply.send({ error: error instanceof Error ? `没有回退：${error.message}` : '没有回退' })
     }
@@ -994,20 +1412,22 @@ function registerApi(app, prefix) {
       return reply.send({ error: outcome.error })
     }
     reply.code(outcome.status)
-    reply.header('X-Snapshot-Count', String(await snapshotCount()))
+    reply.header('X-Snapshot-Count', String(await snapshotCount(book)))
     return sendCanvas(reply, outcome.record)
   })
 
   app.get(`${prefix}/api/health`, async () => ({ ok: true }))
 
-  app.get(`${prefix}/api/discuss/session`, async (request, reply) => {
+  scoped('GET', '/discuss/session', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const cardId = textField(request.query?.cardId)
     if (!cardId) {
       reply.code(400)
       return reply.send({ error: '缺少 cardId' })
     }
     try {
-      const { store, sessionId } = await ensureCardSession(cardId)
+      const { store, sessionId } = await ensureCardSession(book, cardId)
       reply.header('Cache-Control', 'no-store')
       return reply.send({ cardId, sessionId, sessions: publicSessions(store, cardId) })
     } catch (error) {
@@ -1015,7 +1435,9 @@ function registerApi(app, prefix) {
     }
   })
 
-  app.post(`${prefix}/api/discuss/session`, async (request, reply) => {
+  scoped('POST', '/discuss/session', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const body = request.body && typeof request.body === 'object' ? request.body : {}
     const cardId = textField(body.cardId)
     const sessionId = textField(body.sessionId)
@@ -1024,7 +1446,9 @@ function registerApi(app, prefix) {
       return reply.send({ error: '缺少 cardId' })
     }
     try {
-      const result = sessionId ? await selectCardSession(cardId, sessionId) : await createCardSession(cardId)
+      const result = sessionId
+        ? await selectCardSession(book, cardId, sessionId)
+        : await createCardSession(book, cardId)
       reply.header('Cache-Control', 'no-store')
       return reply.send({ cardId, sessionId: result.sessionId, sessions: publicSessions(result.store, cardId) })
     } catch (error) {
@@ -1032,11 +1456,13 @@ function registerApi(app, prefix) {
     }
   })
 
-  app.get(`${prefix}/api/discuss/messages`, async (request, reply) => {
+  scoped('GET', '/discuss/messages', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const cardId = textField(request.query?.cardId)
     const sessionId = textField(request.query?.sessionId)
     try {
-      const store = await assertOwned(cardId, sessionId, false)
+      const store = await assertOwned(book, cardId, sessionId, false)
       const page = await loadMessagePage(gatewayFetch, store, cardId, sessionId, {
         limit: request.query?.limit,
         offset: request.query?.offset,
@@ -1048,7 +1474,9 @@ function registerApi(app, prefix) {
     }
   })
 
-  app.post(`${prefix}/api/discuss/adoptions`, async (request, reply) => {
+  scoped('POST', '/discuss/adoptions', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const body = request.body && typeof request.body === 'object' ? request.body : {}
     const cardId = textField(body.cardId)
     const sessionId = textField(body.sessionId)
@@ -1058,7 +1486,7 @@ function registerApi(app, prefix) {
       return reply.send({ error: '缺少采纳内容' })
     }
     try {
-      await assertOwned(cardId, sessionId, false)
+      await assertOwned(book, cardId, sessionId, false)
       const resolved = await resolveAdoptionKey(gatewayFetch, sessionId, {
         messageId: textField(body.messageId),
         role: textField(body.role) || 'assistant',
@@ -1066,7 +1494,7 @@ function registerApi(app, prefix) {
         content,
       })
       const adoptedAt = new Date().toISOString()
-      await recordAdoption(cardId, sessionId, { ...resolved, adoptedAt })
+      await recordAdoption(book, cardId, sessionId, { ...resolved, adoptedAt })
       reply.header('Cache-Control', 'no-store')
       return reply.send({ cardId, sessionId, key: resolved.key, adoptedAt })
     } catch (error) {
@@ -1074,7 +1502,7 @@ function registerApi(app, prefix) {
     }
   })
 
-  app.post(`${prefix}/api/discuss/stream`, async (request, reply) => {
+  scoped('POST', '/discuss/stream', async (request, reply) => {
     // 必须在任何 await 之前接管，否则底层连接不会把后来的字节送出去。
     reply.hijack()
     const raw = reply.raw
@@ -1092,13 +1520,18 @@ function registerApi(app, prefix) {
       failRaw(raw, 400, '缺少 cardId')
       return
     }
+    const book = await bookFor(request)
+    if (!book) {
+      failRaw(raw, 404, MSG_NO_BOOK)
+      return
+    }
     try {
-      await assertOwned(cardId, sessionId, true)
+      await assertOwned(book, cardId, sessionId, true)
     } catch (error) {
       failRaw(raw, error && error.statusCode ? error.statusCode : 400, error instanceof Error ? error.message : 'cardId 对不上该会话')
       return
     }
-    void recordFirstAsk(cardId, sessionId, message).catch(() => {})
+    void recordFirstAsk(book, cardId, sessionId, message).catch(() => {})
     let upstream
     try {
       upstream = await gatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/chat/stream`, {
@@ -1113,11 +1546,13 @@ function registerApi(app, prefix) {
     await proxyGatewayStream(raw, upstream)
   })
 
-  app.get(`${prefix}/api/discuss/runs/:runId`, async (request, reply) => {
+  scoped('GET', '/discuss/runs/:runId', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const cardId = textField(request.query?.cardId)
     const sessionId = textField(request.query?.sessionId)
     try {
-      await assertOwned(cardId, sessionId, false)
+      await assertOwned(book, cardId, sessionId, false)
     } catch (error) {
       return discussFailure(reply, error, 'cardId 对不上该会话')
     }
@@ -1132,11 +1567,13 @@ function registerApi(app, prefix) {
     return reply.send(text)
   })
 
-  app.post(`${prefix}/api/discuss/runs/:runId/stop`, async (request, reply) => {
+  scoped('POST', '/discuss/runs/:runId/stop', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
     const cardId = textField(request.query?.cardId)
     const sessionId = textField(request.query?.sessionId)
     try {
-      await assertOwned(cardId, sessionId, false)
+      await assertOwned(book, cardId, sessionId, false)
     } catch (error) {
       return discussFailure(reply, error, 'cardId 对不上该会话')
     }
@@ -1209,7 +1646,7 @@ function registerApi(app, prefix) {
       return reply.send({ error: '只能把 AI 回复写入脑' })
     }
     try {
-      await assertOwned(cardId, sessionId, false)
+      await assertOwnedAnyBook(cardId, sessionId)
     } catch (error) {
       return discussFailure(reply, error, 'cardId 对不上该会话')
     }
@@ -1268,17 +1705,23 @@ app.route({
 })
 
 await ensureDataDir()
-try {
-  await exclusive(() => readCanonical())
-} catch (error) {
-  if (!isUnreadable(error)) throw error
-  console.error(`${MSG_CANONICAL_UNREADABLE}：原文件已改名为 ${canonicalBroken?.kept ?? ''}`)
-}
-if (!canonicalBroken) {
+await ensureBooks()
+for (const book of sortedBooks()) {
+  await removeStaleTemps(book.dir)
   try {
-    await exclusive(() => migrateEmbeddedSnapshots())
+    await exclusive(book, () => readCanonical(book))
   } catch (error) {
-    console.error(`旧快照迁移失败，正本里的旧数组原样保留：${error instanceof Error ? error.message : String(error)}`)
+    if (!isUnreadable(error)) throw error
+    console.error(`书 ${book.id}：${MSG_CANONICAL_UNREADABLE}：原文件已改名为 ${book.canonicalBroken?.kept ?? ''}`)
+  }
+  if (!book.canonicalBroken) {
+    try {
+      await exclusive(book, () => migrateEmbeddedSnapshots(book))
+    } catch (error) {
+      console.error(
+        `书 ${book.id}：旧快照迁移失败，正本里的旧数组原样保留：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
 }
 

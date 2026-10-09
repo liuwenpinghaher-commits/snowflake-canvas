@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MarkdownText, stripMarkdown } from './markdown-lite.tsx'
+import { bookScopedPath } from './books.ts'
 
 function api(path: string): string {
   const base = import.meta.env.BASE_URL || '/'
   const prefix = base.endsWith('/') ? base.slice(0, -1) : base
-  return `${prefix}${path}`
+  return `${prefix}${bookScopedPath(path)}`
 }
 
 const BUSY = '讨论的人有点多，正在排队，稍后自动重试。'
@@ -67,6 +68,7 @@ export function pointerCloses(target: unknown, cardId: string): boolean {
   const el = target as ClosestTarget
   if (el.closest('[data-discuss-popover]')) return false
   if (el.closest('.side')) return false
+  if (el.closest('.drawer-resizer') || el.closest('.side-stack')) return false
   const host = el.closest('.react-flow__node')
   if (host?.getAttribute('data-id') === cardId) return false
   return true
@@ -216,7 +218,7 @@ export function AssistantActions({
   return (
     <>
       {item.brainSlug ? <p className="brain-mark">已写入脑：{item.brainSlug}</p> : null}
-      <div className="bubble-actions">
+      <div className="log-actions">
         <button type="button" onClick={onAdopt}>
           采纳进本念头
         </button>
@@ -266,6 +268,156 @@ export function applySse(
       // 不是 JSON 的 data 行仍留给下一行，不把整段连接掐掉。
     }
   }
+}
+
+function HistoryBar({
+  busy,
+  sessions,
+  selected,
+  onOpen,
+  onCreate,
+}: {
+  busy: boolean
+  sessions: DiscussSession[]
+  selected: string
+  onOpen: (sessionId: string) => void
+  onCreate: () => void
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const labelSizeRef = useRef<HTMLSpanElement>(null)
+  const createSizeRef = useRef<HTMLSpanElement>(null)
+  const charSizeRef = useRef<HTMLSpanElement>(null)
+  const moreRef = useRef<HTMLDivElement>(null)
+  const [folded, setFolded] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  useLayoutEffect(() => {
+    const row = rowRef.current
+    if (!row) return
+    const measure = () => {
+      const label = labelSizeRef.current
+      const createText = createSizeRef.current
+      const charText = charSizeRef.current
+      if (!label || !createText || !charText) return
+      const button = row.querySelector('button')
+      const select = row.querySelector('select')
+      if (button) {
+        const font = getComputedStyle(button).font
+        createText.style.font = font
+      }
+      if (select) charText.style.font = getComputedStyle(select).font
+      const chrome = (el: Element | null) => {
+        if (!el) return 0
+        const style = getComputedStyle(el)
+        return (
+          (Number.parseFloat(style.paddingLeft) || 0) +
+          (Number.parseFloat(style.paddingRight) || 0) +
+          (Number.parseFloat(style.borderLeftWidth) || 0) +
+          (Number.parseFloat(style.borderRightWidth) || 0)
+        )
+      }
+      const rowStyle = getComputedStyle(row)
+      const rowGap = Number.parseFloat(rowStyle.columnGap || rowStyle.gap || '0') || 0
+      const labelRow = row.querySelector('label')
+      const labelStyle = labelRow ? getComputedStyle(labelRow) : rowStyle
+      const innerGap = Number.parseFloat(labelStyle.columnGap || labelStyle.gap || '0') || 0
+      const needed =
+        label.offsetWidth +
+        innerGap +
+        charText.offsetWidth +
+        chrome(select) +
+        rowGap +
+        createText.offsetWidth +
+        chrome(button)
+      const next = row.clientWidth > 0 && row.clientWidth < needed
+      setFolded((current) => (current === next ? current : next))
+      if (!next) setMenuOpen(false)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(row)
+    if (document.fonts) void document.fonts.ready.then(measure)
+    return () => observer.disconnect()
+  }, [sessions.length, selected])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointer = (event: PointerEvent) => {
+      const root = moreRef.current
+      if (!root) return
+      if (event.target instanceof Node && root.contains(event.target)) return
+      setMenuOpen(false)
+    }
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
+  return (
+    <div className="discuss-history" ref={rowRef}>
+      <span className="history-sizer" aria-hidden="true">
+        <span className="history-label-text" ref={labelSizeRef}>
+          历史讨论
+        </span>
+        <span ref={createSizeRef}>新建讨论</span>
+        <span ref={charSizeRef}>选</span>
+      </span>
+      <label>
+        <span className="history-label-text">历史讨论</span>
+        <select
+          aria-label="历史讨论"
+          value={selected}
+          disabled={busy || sessions.length === 0}
+          onChange={(event) => onOpen(event.target.value)}
+        >
+          {sessions.map((item) => (
+            <option key={item.sessionId} value={item.sessionId}>
+              {sessionLabel(item)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {folded ? (
+        <div className="history-more" ref={moreRef}>
+          <button
+            type="button"
+            className="history-btn"
+            aria-expanded={menuOpen}
+            aria-controls="history-more-pop"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            更多
+          </button>
+          {menuOpen ? (
+            <div id="history-more-pop" className="history-more-pop">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setMenuOpen(false)
+                  onCreate()
+                }}
+              >
+                新建讨论
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <button type="button" className="history-btn" disabled={busy} onClick={onCreate}>
+          新建讨论
+        </button>
+      )}
+      {/* 关闭只留在卡头，讨论记录这一排不再放第二个关闭。 */}
+    </div>
+  )
 }
 
 export default function CardDiscuss({
@@ -833,27 +985,13 @@ export default function CardDiscuss({
 
   return (
     <section className="discuss-popover" data-discuss-popover="">
-      <div className="discuss-history">
-        <label>
-          历史讨论
-          <select
-            aria-label="历史讨论"
-            value={selected}
-            disabled={busy || sessions.length === 0}
-            onChange={(event) => void openSession(event.target.value)}
-          >
-            {sessions.map((item) => (
-              <option key={item.sessionId} value={item.sessionId}>
-                {sessionLabel(item)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" disabled={busy} onClick={() => void createSession()}>
-          新建讨论
-        </button>
-        {/* 关闭只留在卡头，讨论区不再放第二个关闭。 */}
-      </div>
+      <HistoryBar
+        busy={busy}
+        sessions={sessions}
+        selected={selected}
+        onOpen={(id) => void openSession(id)}
+        onCreate={() => void createSession()}
+      />
       <div className="discuss-chat" aria-label="讨论记录" ref={chatRef} onScroll={onChatScroll}>
         {hasMore ? (
           <button type="button" className="load-older" disabled={loadingOlder} onClick={() => void loadOlder()}>
@@ -864,35 +1002,34 @@ export default function CardDiscuss({
           const time = clock(item.at)
           if (item.role === 'error') {
             return (
-              <div key={item.key} className="bubble-row error" data-role="error">
-                <span className="avatar">!</span>
-                <div className="bubble">
-                  <p className="plain">{item.content}</p>
-                  {item.retryText ? (
-                    <div className="bubble-actions shown">
-                      <button type="button" onClick={() => void retry(item.retryText || '')}>
-                        重试
-                      </button>
-                    </div>
-                  ) : null}
+              <div key={item.key} className="log-row" data-role="error">
+                <div className="log-meta">
+                  <span className="who">出错</span>
                 </div>
+                <p className="plain log-body">{item.content}</p>
+                {item.retryText ? (
+                  <div className="log-actions">
+                    <button type="button" onClick={() => void retry(item.retryText || '')}>
+                      重试
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )
           }
           const mine = item.role === 'user'
           return (
-            <div key={item.key} className={`bubble-row ${item.role}`} data-role={item.role}>
-              <span className="avatar">{mine ? '我' : 'AI'}</span>
-              <div className="bubble">
-                <div className="bubble-meta">
-                  <span className="who">{mine ? '我' : 'AI'}</span>
-                  {time ? (
-                    <time className="stamp" dateTime={item.at} title={time.full}>
-                      <span className="stamp-short">{time.short}</span>
-                      <span className="stamp-full">{time.full}</span>
-                    </time>
-                  ) : null}
-                </div>
+            <div key={item.key} className="log-row" data-role={item.role}>
+              <div className="log-meta">
+                <span className="who">{mine ? '我' : 'AI'}</span>
+                {time ? (
+                  <time className="stamp" dateTime={item.at} title={time.full}>
+                    <span className="stamp-short">{time.short}</span>
+                    <span className="stamp-full">{time.full}</span>
+                  </time>
+                ) : null}
+              </div>
+              <div className="log-body">
                 {mine ? (
                   <p className="plain">{item.content}</p>
                 ) : item.content ? (
@@ -902,17 +1039,17 @@ export default function CardDiscuss({
                 ) : (
                   <p className="plain" />
                 )}
-                {item.role === 'assistant' && item.adopted ? <p className="adopted-mark">已采纳</p> : null}
-                <AssistantActions
-                  item={item}
-                  copied={copiedAt === item.key}
-                  writing={writingBrain[item.key] === true}
-                  finished={!(busy && index === messages.length - 1)}
-                  onAdopt={() => void adopt(item)}
-                  onCopy={() => void copyText(item.content, item.key)}
-                  onWriteBrain={() => void writeBrain(item)}
-                />
               </div>
+              {item.role === 'assistant' && item.adopted ? <p className="adopted-mark">已采纳</p> : null}
+              <AssistantActions
+                item={item}
+                copied={copiedAt === item.key}
+                writing={writingBrain[item.key] === true}
+                finished={!(busy && index === messages.length - 1)}
+                onAdopt={() => void adopt(item)}
+                onCopy={() => void copyText(item.content, item.key)}
+                onWriteBrain={() => void writeBrain(item)}
+              />
             </div>
           )
         })}
