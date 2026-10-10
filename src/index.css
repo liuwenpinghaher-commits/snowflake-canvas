@@ -394,9 +394,50 @@ button.on {
   text-wrap: pretty;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  max-height: calc(1.5em * 12);
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
+}
+
+/* 只在收起时截到约 12 行。展开不加 max-height，高度一次落到全文。
+   不用高度过渡：重叠避让按实测高度改位置，过渡会连着推很多次。 */
+.snow-body.is-collapsed {
+  max-height: calc(1.5em * 12);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1.5em), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1.5em), transparent 100%);
+}
+
+.snow-card:has(.snow-expand) {
+  padding-bottom: 0;
+}
+
+.snow-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  width: calc(100% + 24px);
+  min-height: 36px;
+  height: 36px;
+  margin: -8px -12px 0;
+  padding: 0 12px;
+  border: 0;
+  border-top: 1px solid #e4d9cc;
+  border-radius: 0;
+  background: #f6f1e8;
+  color: #6a3d28;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.snow-expand:hover {
+  background: #efe4d6;
+}
+
+.snow-expand:focus-visible {
+  outline: 2px solid #8c4a32;
+  outline-offset: -2px;
 }
 
 .snow-group {

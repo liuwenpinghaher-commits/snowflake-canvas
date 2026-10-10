@@ -1,7 +1,10 @@
-// 正文最多显示 12 行，超出在卡片里滚动。
-// 12 行大约 252px，比视口 70% 矮得多，长正文不会把整屏撑满。
+// 收起时正文最多按 12 行显示，开头留在卡片上，底部留出展开条。
+// 展开时按全文行数估高，卡片跟着变长，不再靠卡片内部滚动看完。
 export const BODY_LINE_CAP = 12
 export const COLUMN_GAP = 16
+export const EXPAND_BAR_PX = 36
+const CARD_PAD_BOTTOM = 10
+export const EXPAND_CHROME_PX = EXPAND_BAR_PX - CARD_PAD_BOTTOM
 
 const TITLE_PX = 16
 const TITLE_LH = 1.25
@@ -42,13 +45,30 @@ function wrappedLines(text: string, innerWidth: number, fontPx: number, cap?: nu
   return lines
 }
 
-export function estimateSnowCardHeight(input: { title: string; body: string; meta: string; width: number }): number {
-  const inner = Math.max(40, input.width - 12 * 2 - 2)
+function contentWidth(width: number): number {
+  return Math.max(40, width - 12 * 2 - 2)
+}
+
+export function snowBodyOverflows(body: string, width: number): boolean {
+  return wrappedLines(body, contentWidth(width), BODY_PX) > BODY_LINE_CAP
+}
+
+export function estimateSnowCardHeight(input: {
+  title: string
+  body: string
+  meta: string
+  width: number
+  expanded?: boolean
+}): number {
+  const inner = contentWidth(input.width)
   const titleLines = Math.max(1, wrappedLines(input.title.trim() || '还没有写下内容', inner, TITLE_PX))
-  const bodyLines = wrappedLines(input.body, inner, BODY_PX, BODY_LINE_CAP)
+  const rawBodyLines = wrappedLines(input.body, inner, BODY_PX)
+  const overflows = rawBodyLines > BODY_LINE_CAP
+  const bodyLines = overflows && !input.expanded ? BODY_LINE_CAP : rawBodyLines
   let height = 4 + 1 + 20 + 12 * 1.4 + 8
   height += titleLines * TITLE_PX * TITLE_LH
   if (bodyLines > 0) height += 4 + bodyLines * BODY_PX * BODY_LH
+  if (overflows) height += EXPAND_CHROME_PX
   return Math.ceil(height)
 }
 
