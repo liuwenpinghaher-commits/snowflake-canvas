@@ -13,8 +13,8 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import { estimateSnowCardHeight, shiftOverlappingCards, snowBodyOverflows, type ShiftBox } from './card-layout.ts'
-import { cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
+import { estimateSnowCardHeight, measureSnowBodyOverflow, shiftOverlappingCards, snowExpandLabel, type ShiftBox } from './card-layout.ts'
+import { bodyTextForCard, cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
 
 type CardData = {
   layerLabel: string
@@ -35,10 +35,32 @@ type GroupData = { text: string; conflict: boolean }
 
 function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
   const cardRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const title = data.title.trim()
   const body = data.body.trim()
-  const overflows = snowBodyOverflows(body, data.width)
+  const [overflows, setOverflows] = useState(false)
   const expanded = data.expanded && overflows
+  const expandLabel = snowExpandLabel(overflows, expanded)
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (!el || !body) {
+      setOverflows(false)
+      return
+    }
+    let measuring = false
+    const measure = () => {
+      const node = bodyRef.current
+      if (!node || measuring) return
+      measuring = true
+      const next = measureSnowBodyOverflow(node)
+      measuring = false
+      setOverflows((current) => (current === next ? current : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [body, data.width])
   useLayoutEffect(() => {
     const el = cardRef.current
     if (!el) return
@@ -52,7 +74,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
     const observer = new ResizeObserver(report)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [id, data.body, data.boxHeight, data.expanded, data.layerLabel, data.meta, data.onHeight, data.title, data.width])
+  }, [id, data.body, data.boxHeight, data.expanded, data.layerLabel, data.meta, data.onHeight, data.title, data.width, overflows])
   return (
     <div className="snow-node">
       <div
@@ -67,9 +89,13 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         </div>
         <div className="snow-copy">
           <div className="snow-title">{title || '还没有写下内容'}</div>
-          {body ? <div className={overflows && !expanded ? 'snow-body is-collapsed' : 'snow-body'}>{body}</div> : null}
+          {body ? (
+            <div ref={bodyRef} className={overflows && !expanded ? 'snow-body is-collapsed' : 'snow-body'}>
+              {body}
+            </div>
+          ) : null}
         </div>
-        {overflows ? (
+        {expandLabel ? (
           <button
             type="button"
             className="snow-expand nodrag nopan nowheel"
@@ -96,7 +122,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
               event.stopPropagation()
             }}
           >
-            {expanded ? '收起' : '展开全文'}
+            {expandLabel}
           </button>
         ) : null}
         <Handle type="target" position={Position.Left} />
@@ -142,9 +168,11 @@ function toFlowNode(
     }
   }
   const face = card ? cardFace(card) : { title: node.text ?? '', body: '', meta: '' }
+  // 卡面 body 为空时，用字段里多出来、会画在正文上的那段，避免只去量一段空正文。
+  const bodyText = card ? bodyTextForCard(card).text : face.body
   const estimated = estimateSnowCardHeight({
     title: face.title,
-    body: face.body,
+    body: bodyText,
     meta: face.meta,
     width: node.width,
     expanded,
@@ -165,7 +193,7 @@ function toFlowNode(
       flash: flashId === node.id,
       conflict,
       title: face.title,
-      body: face.body,
+      body: bodyText,
       meta: face.meta,
       width: node.width,
       expanded,

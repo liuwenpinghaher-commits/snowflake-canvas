@@ -1,5 +1,5 @@
 // 收起时正文最多按 12 行显示，开头留在卡片上，底部留出展开条。
-// 展开时按全文行数估高，卡片跟着变长，不再靠卡片内部滚动看完。
+// 展开条出不出现只看渲染后的正文高度。下面的字数估算只给首帧占位，不决定按钮。
 export const BODY_LINE_CAP = 12
 export const COLUMN_GAP = 16
 export const EXPAND_BAR_PX = 36
@@ -49,8 +49,34 @@ function contentWidth(width: number): number {
   return Math.max(40, width - 12 * 2 - 2)
 }
 
-export function snowBodyOverflows(body: string, width: number): boolean {
-  return wrappedLines(body, contentWidth(width), BODY_PX) > BODY_LINE_CAP
+// 比较的是渲染后的像素，不是字数。多 1 像素以内当成同一行，避免小数取整误开按钮。
+export function snowBodyOverflows(scrollHeight: number, lineCapPx: number): boolean {
+  if (!Number.isFinite(scrollHeight) || !Number.isFinite(lineCapPx) || lineCapPx <= 0) return false
+  return scrollHeight > lineCapPx + 1
+}
+
+export function snowBodyLineCapPx(fontSize: string, lineHeight: string): number {
+  const size = Number.parseFloat(fontSize)
+  const sizePx = Number.isFinite(size) && size > 0 ? size : BODY_PX
+  const parsedLine = Number.parseFloat(lineHeight)
+  const linePx = Number.isFinite(parsedLine) && parsedLine > 0 ? parsedLine : sizePx * BODY_LH
+  return linePx * BODY_LINE_CAP
+}
+
+// 先去掉收起时的限高，再读全文高度。限高还在时，有的浏览器会把 scrollHeight 报成可见高度。
+export function snowExpandLabel(overflows: boolean, expanded: boolean): '展开全文' | '收起' | null {
+  if (!overflows) return null
+  return expanded ? '收起' : '展开全文'
+}
+
+export function measureSnowBodyOverflow(bodyEl: HTMLElement): boolean {
+  const style = getComputedStyle(bodyEl)
+  const cap = snowBodyLineCapPx(style.fontSize, style.lineHeight)
+  const previous = bodyEl.style.maxHeight
+  bodyEl.style.maxHeight = 'none'
+  const scrollHeight = bodyEl.scrollHeight
+  bodyEl.style.maxHeight = previous
+  return snowBodyOverflows(scrollHeight, cap)
 }
 
 export function estimateSnowCardHeight(input: {
@@ -59,11 +85,13 @@ export function estimateSnowCardHeight(input: {
   meta: string
   width: number
   expanded?: boolean
+  // 渲染测过、确认超过 12 行之后才传入。不传就按全文估高，不加展开条。
+  overflows?: boolean
 }): number {
   const inner = contentWidth(input.width)
   const titleLines = Math.max(1, wrappedLines(input.title.trim() || '还没有写下内容', inner, TITLE_PX))
   const rawBodyLines = wrappedLines(input.body, inner, BODY_PX)
-  const overflows = rawBodyLines > BODY_LINE_CAP
+  const overflows = input.overflows === true
   const bodyLines = overflows && !input.expanded ? BODY_LINE_CAP : rawBodyLines
   let height = 4 + 1 + 20 + 12 * 1.4 + 8
   height += titleLines * TITLE_PX * TITLE_LH

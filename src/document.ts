@@ -602,6 +602,31 @@ export function cardFace(card: Card): CardFace {
   }
 }
 
+export type CardBodySource = {
+  text: string
+  where: 'body' | 'fields'
+  fieldKey: string | null
+}
+
+// 卡片上要画进 .snow-body 的那段。卡面正文有字就用它；没有时改用字段里比标题更长的那段。
+export function bodyTextForCard(card: Card): CardBodySource {
+  const face = cardFace(card)
+  const faceBody = face.body.trim()
+  if (faceBody) {
+    const fieldKey = Object.entries(card.fields).find(([, value]) => (value ?? '').includes(faceBody))?.[0] ?? null
+    return { text: face.body, where: fieldKey ? 'fields' : 'body', fieldKey }
+  }
+  const title = face.title.trim()
+  const fields = Object.entries(card.fields)
+    .map(([key, value]) => ({ key, text: (value ?? '').trim() }))
+    .filter((item) => item.text.length > 0)
+    .sort((a, b) => b.text.length - a.text.length || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  const top = fields[0]
+  if (!top || top.text === title) return { text: '', where: top ? 'fields' : 'body', fieldKey: top?.key ?? null }
+  const text = title && top.text.startsWith(title) ? top.text.slice(title.length).trim() : top.text
+  return { text, where: 'fields', fieldKey: top.key }
+}
+
 
 function bodyFor(layer: Layer, fields: Record<string, string>, freeText: string): string {
   if (layer === 'situation' || layer === '正文草稿') return freeText
