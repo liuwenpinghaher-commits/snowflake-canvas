@@ -1900,3 +1900,45 @@ button.danger-quiet {
     padding: 8px 12px;
   }
 }
+
+.layer-pipeline {
+  margin: 0 0 8px;
+}
+
+.layer-pipeline > .hint {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.layer-group {
+  padding: 0 14px;
+}
+
+.layer-group-title {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 6px 0 4px;
+  border: none;
+  border-bottom: 1px solid #eee6da;
+  border-radius: 0;
+  background: transparent;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.layer-group-title:hover {
+  color: #8c4a32;
+}
+
+.layer-group .field-row {
+  padding-left: 0;
+  padding-right: 0;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+
+.layer-next-hint {
+  margin-bottom: 6px;
+}

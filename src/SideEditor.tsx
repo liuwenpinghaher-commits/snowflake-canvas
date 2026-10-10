@@ -20,6 +20,7 @@ import {
   type Card,
   type Layer,
 } from './document.ts'
+import { nextStepHint, pipelineGroupLabel, pipelineGroupProgress } from './card-layout.ts'
 import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
 import FoldPanel from './FoldPanel.tsx'
@@ -144,6 +145,8 @@ export default function SideEditor({
     key: string | null
   } | null>(null)
   const [faceOpen, setFaceOpen] = useState(false)
+  // 分组折叠只留在这栏，不写入 snowflake.json，也不进撤销。
+  const [pipelineCollapsed, setPipelineCollapsed] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     setFaceOpen(false)
@@ -322,6 +325,8 @@ export default function SideEditor({
 
   const later = card ? laterLayers(card.layer) : []
   const upcoming = card ? nextLayer(card.layer) : null
+  const pipeline = pipelineGroupProgress(documentState.snowflake.cards)
+  const stepHint = nextStepHint(documentState.snowflake.cards)
 
   return (
     <div className="side-editor">
@@ -418,24 +423,45 @@ export default function SideEditor({
 
       {card ? (
         <>
-          {later.length > 0 ? (
-            <div className="field-row">
-              <span>改成更后面的层</span>
-              {later.map((layer) => (
-                <button
-                  key={layer}
-                  type="button"
-                  onClick={() => {
-                    if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
-                    if (!window.confirm(describeLayerChange(card, layer))) return
-                    onChangeLayer(cardId, layer)
-                  }}
-                >
-                  {layerLabel(layer)}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <div className="layer-pipeline">
+            {later.length > 0 ? <p className="hint">改成更后面的层</p> : null}
+            {stepHint ? <p className="hint layer-next-hint">{stepHint}</p> : null}
+            {pipeline.map((group) => {
+              const layers = group.layers.filter((layer) => later.includes(layer))
+              const open = pipelineCollapsed[group.title] !== true
+              return (
+                <div key={group.title} className="layer-group">
+                  <button
+                    type="button"
+                    className="layer-group-title"
+                    aria-expanded={open}
+                    onClick={() => {
+                      setPipelineCollapsed((current) => ({ ...current, [group.title]: open }))
+                    }}
+                  >
+                    {pipelineGroupLabel(group)}
+                  </button>
+                  {open && layers.length > 0 ? (
+                    <div className="field-row">
+                      {layers.map((layer) => (
+                        <button
+                          key={layer}
+                          type="button"
+                          onClick={() => {
+                            if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
+                            if (!window.confirm(describeLayerChange(card, layer))) return
+                            onChangeLayer(cardId, layer)
+                          }}
+                        >
+                          {layerLabel(layer)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
           {cardId ? (
             <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} />
           ) : null}

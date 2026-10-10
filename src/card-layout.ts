@@ -1,3 +1,6 @@
+import { LAYERS, fieldKeys, layerLabel } from './document.ts'
+import type { Card, Layer } from './document.ts'
+
 // 收起时正文最多按 12 行显示，开头留在卡片上，底部留出展开条。
 // 展开条出不出现只看渲染后的正文高度。下面的字数估算只给首帧占位，不决定按钮。
 export const BODY_LINE_CAP = 12
@@ -155,4 +158,63 @@ export function shiftOverlappingCards(
     moves.push({ id: card.id, x: card.x, y: card.y })
   }
   return moves
+}
+
+// 写作工序分组。念头不进这四组。组的顺序固定。
+export const PIPELINE_GROUPS: readonly { title: string; layers: readonly Layer[] }[] = [
+  { title: '立意', layers: ['一句话', '一段'] },
+  { title: '人物', layers: ['renwubiao', 'renwugushi', 'renwudangan'] },
+  { title: '结构', layers: ['yiyedagang', '场景表', 'changci'] },
+  { title: '成稿', layers: ['正文草稿'] },
+]
+
+// 下一步按十层顺序走，跳过念头。
+export const NEXT_STEP_LAYERS: readonly Layer[] = LAYERS.filter((layer) => layer !== 'situation')
+
+// 这一层算不算写完。按该层自己的字段判断，不把「名字：」这种空标签正文当成已写。
+export function cardCountsAsDone(card: Card): boolean {
+  if (card.layer === 'situation' || card.layer === '正文草稿') {
+    return card.body.trim().length > 0
+  }
+  if (card.layer === '一句话') {
+    return (card.fields.sentence ?? '').trim().length > 0
+  }
+  return fieldKeys(card.layer).some((key) => (card.fields[key] ?? '').trim().length > 0)
+}
+
+export function layerIsDone(cards: Readonly<Record<string, Card>>, layer: Layer): boolean {
+  for (const card of Object.values(cards)) {
+    if (card.layer === layer && cardCountsAsDone(card)) return true
+  }
+  return false
+}
+
+export type PipelineGroupProgress = {
+  title: string
+  done: number
+  total: number
+  layers: readonly Layer[]
+}
+
+export function pipelineGroupProgress(cards: Readonly<Record<string, Card>>): PipelineGroupProgress[] {
+  return PIPELINE_GROUPS.map((group) => ({
+    title: group.title,
+    layers: group.layers,
+    total: group.layers.length,
+    done: group.layers.filter((layer) => layerIsDone(cards, layer)).length,
+  }))
+}
+
+export function pipelineGroupLabel(group: PipelineGroupProgress): string {
+  return `${group.title} ${group.done}/${group.total}`
+}
+
+// 从一句话起，碰到第一层还没写完的：前一层已经写完就提示写这一层。全部写完则不提示。
+export function nextStepHint(cards: Readonly<Record<string, Card>>): string | null {
+  const pending = NEXT_STEP_LAYERS.findIndex((layer) => !layerIsDone(cards, layer))
+  if (pending <= 0) return null
+  const finished = NEXT_STEP_LAYERS[pending - 1]
+  const upcoming = NEXT_STEP_LAYERS[pending]
+  if (!finished || !upcoming) return null
+  return `${layerLabel(finished)}写好了，下一步可以写${layerLabel(upcoming)}`
 }
