@@ -61,23 +61,11 @@ export const DRAWER_WIDTH_MIN = 380
 export const DRAWER_WIDTH_MAX = 520
 export const DRAWER_WIDTH_DEFAULT = 380
 
-export const DRAWER_SPLIT_KEY = 'snowflake-drawer-split'
-export const DRAWER_SPLIT_MIN = 28
-export const DRAWER_SPLIT_MAX = 62
-export const DRAWER_SPLIT_DEFAULT = 40
-
 export const LINE_HEIGHT_KEY = 'snowflake-discuss-line-height'
 export const LINE_HEIGHTS = [1.4, 1.5, 1.7] as const
 export const LINE_HEIGHT_DEFAULT = 1.5
 
 const HINT_SEEN_KEY = 'snowflake-hint-seen'
-
-export function readDrawerSplit(raw: string | null | undefined): number {
-  if (typeof raw !== 'string' || !/^\d+(?:\.\d+)?$/.test(raw.trim())) return DRAWER_SPLIT_DEFAULT
-  const value = Number(raw.trim())
-  if (!Number.isFinite(value) || value < DRAWER_SPLIT_MIN || value > DRAWER_SPLIT_MAX) return DRAWER_SPLIT_DEFAULT
-  return Math.round(value)
-}
 
 export function readLineHeight(raw: string | null | undefined): number {
   const value = Number(raw)
@@ -98,61 +86,6 @@ function store(key: string, value: string): void {
   } catch {
     // 浏览器拒绝写入时，只在本页生效。
   }
-}
-
-function clampSplit(value: number): number {
-  return Math.min(DRAWER_SPLIT_MAX, Math.max(DRAWER_SPLIT_MIN, Math.round(value)))
-}
-
-function SplitResizer({ split, onSplit, onDone }: { split: number; onSplit: (next: number) => void; onDone: (next: number) => void }) {
-  const drag = useRef<{ pointerId: number; startY: number; startSplit: number; height: number } | null>(null)
-  const last = useRef(split)
-  const valueAt = (clientY: number) => {
-    const current = drag.current
-    if (!current || current.height <= 0) return split
-    return clampSplit(current.startSplit + ((clientY - current.startY) / current.height) * 100)
-  }
-  return (
-    <div
-      className="split-resizer"
-      role="separator"
-      tabIndex={0}
-      aria-orientation="horizontal"
-      aria-label="调节字段区和讨论区的高度"
-      aria-valuemin={DRAWER_SPLIT_MIN}
-      aria-valuemax={DRAWER_SPLIT_MAX}
-      aria-valuenow={split}
-      onKeyDown={(event) => {
-        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-        event.preventDefault()
-        const next = clampSplit(split + (event.key === 'ArrowUp' ? -2 : 2))
-        onSplit(next)
-        onDone(next)
-      }}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return
-        event.preventDefault()
-        event.currentTarget.setPointerCapture(event.pointerId)
-        const host = event.currentTarget.closest('.drawer-body')
-        drag.current = { pointerId: event.pointerId, startY: event.clientY, startSplit: split, height: host?.clientHeight ?? 0 }
-      }}
-      onPointerMove={(event) => {
-        if (!drag.current || drag.current.pointerId !== event.pointerId) return
-        last.current = valueAt(event.clientY)
-        onSplit(last.current)
-      }}
-      onPointerUp={(event) => {
-        if (!drag.current || drag.current.pointerId !== event.pointerId) return
-        last.current = valueAt(event.clientY)
-        drag.current = null
-        onSplit(last.current)
-        onDone(last.current)
-      }}
-      onPointerCancel={() => {
-        drag.current = null
-      }}
-    />
-  )
 }
 
 export function readDrawerWidth(raw: string | null | undefined): number {
@@ -286,7 +219,7 @@ function inChip(text: string): boolean {
   return text === '正本在服务器' || text === MSG_WRITING || /^版本 \d+$/.test(text)
 }
 
-function MoreMenu({ children }: { children: ReactNode }) {
+function NamedMenu({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -313,12 +246,12 @@ function MoreMenu({ children }: { children: ReactNode }) {
   }, [open])
 
   return (
-    <div className="more-menu" ref={rootRef}>
+    <div className="named-menu" ref={rootRef}>
       <button
         ref={buttonRef}
         type="button"
         aria-expanded={open}
-        aria-controls="more-menu-pop"
+        aria-controls={id}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
           if (event.key !== 'ArrowDown') return
@@ -326,10 +259,10 @@ function MoreMenu({ children }: { children: ReactNode }) {
           setOpen(true)
         }}
       >
-        更多
+        {label}
       </button>
       {open ? (
-        <div id="more-menu-pop" className="more-menu-pop">
+        <div id={id} className="named-menu-pop">
           {children}
         </div>
       ) : null}
@@ -349,7 +282,7 @@ export default function App() {
   const adoptFieldRef = useRef<string | null>(null)
   const [page, setPage] = useState<'canvas' | 'books'>('canvas')
   const [wizardOnOpen, setWizardOnOpen] = useState(false)
-  const [drawerSplit, setDrawerSplit] = useState(() => readStored(DRAWER_SPLIT_KEY, readDrawerSplit, DRAWER_SPLIT_DEFAULT))
+  const [controlFolded, setControlFolded] = useState(false)
   const [lineHeight, setLineHeight] = useState(() => readStored(LINE_HEIGHT_KEY, readLineHeight, LINE_HEIGHT_DEFAULT))
   const [hintOpen, setHintOpen] = useState(() => readStored(HINT_SEEN_KEY, (raw) => raw !== '1', false))
   const seedRef = useRef<{ bookId: string; text: string } | null>(null)
@@ -618,9 +551,6 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button type="button" className="top-books" disabled={bookBusy} onClick={() => openBooks(false)}>
-                书籍
-              </button>
               <span className="top-words" aria-label="这本书的总字数">
                 {bookWords} 字
               </span>
@@ -644,7 +574,7 @@ export default function App() {
           >
             新建念头
           </button>
-          <MoreMenu>
+          <NamedMenu id="version-menu-pop" label="版本">
             <p className="menu-facts">
               雪花画布{currentBook ? ` · ${currentBook.name}` : ''}
               <br />
@@ -653,6 +583,48 @@ export default function App() {
             <button type="button" disabled={!canEdit} onClick={() => void ctlRef.current?.keepVersion()}>
               {MSG_KEEP_SNAPSHOT}
             </button>
+            {view.downloadMode && !view.fileProtocol ? (
+              <label className="file-pick">
+                选快照回退
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0]
+                    event.currentTarget.value = ''
+                    if (!file) return
+                    void file.arrayBuffer().then((buffer) => {
+                      void ctlRef.current?.rollbackToBytes(new Uint8Array(buffer))
+                    })
+                  }}
+                />
+              </label>
+            ) : (
+              <>
+                <select
+                  aria-label="已有快照"
+                  className="snap-select"
+                  value={snapName}
+                  onChange={(event) => setSnapName(event.currentTarget.value)}
+                >
+                  <option value="">选择一份快照</option>
+                  {view.snapshotOptions.map((option) => (
+                    <option key={option.name} value={option.name}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!canEdit || snapName.length === 0}
+                  onClick={() => void ctlRef.current?.rollbackTo(snapName)}
+                >
+                  回退到这一版
+                </button>
+              </>
+            )}
+          </NamedMenu>
+          <NamedMenu id="books-menu-pop" label="书籍">
             {bookId ? (
               <>
                 <button type="button" disabled={bookBusy} onClick={() => openBooks(false)}>
@@ -663,6 +635,8 @@ export default function App() {
                 </button>
               </>
             ) : null}
+          </NamedMenu>
+          <NamedMenu id="settings-menu-pop" label="设置">
             <label className="menu-row">
               讨论行高
               <select
@@ -742,47 +716,7 @@ export default function App() {
             <button type="button" disabled={!canEdit || !view.canUndo} onClick={() => void ctlRef.current?.undo()}>
               撤销
             </button>
-            {view.downloadMode && !view.fileProtocol ? (
-              <label className="file-pick">
-                选快照回退
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0]
-                    event.currentTarget.value = ''
-                    if (!file) return
-                    void file.arrayBuffer().then((buffer) => {
-                      void ctlRef.current?.rollbackToBytes(new Uint8Array(buffer))
-                    })
-                  }}
-                />
-              </label>
-            ) : (
-              <>
-                <select
-                  aria-label="已有快照"
-                  className="snap-select"
-                  value={snapName}
-                  onChange={(event) => setSnapName(event.currentTarget.value)}
-                >
-                  <option value="">选择一份快照</option>
-                  {view.snapshotOptions.map((option) => (
-                    <option key={option.name} value={option.name}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={!canEdit || snapName.length === 0}
-                  onClick={() => void ctlRef.current?.rollbackTo(snapName)}
-                >
-                  回退到这一版
-                </button>
-              </>
-            )}
-          </MoreMenu>
+          </NamedMenu>
         </div>
       </header>
       <div className="status-strip">
@@ -812,7 +746,7 @@ export default function App() {
         <h1 className="sr-only">{currentBook?.name || '未命名书'}</h1>
         {noCards || hintOpen ? (
           <div className="canvas-hint" role="note">
-            <p>空白处双击放一张念头。点一张卡片，右侧打开这张卡的字段和讨论。从卡片右边拖出去，长出后面的层。</p>
+            <p>空白处双击放一张念头。点一张卡片，左边改字段，右边单独打开讨论；窄屏时字段收在底部。从卡片右边拖出去，长出后面的层。</p>
             {noCards ? (
               <button type="button" disabled={!canEdit} onClick={createThought}>
                 新建念头
@@ -823,6 +757,64 @@ export default function App() {
               </button>
             )}
           </div>
+        ) : null}
+        {drawerOpen && activeCard && state.activeId ? (
+          <aside className={controlFolded ? 'control-pane is-folded' : 'control-pane'} aria-label="这张卡的字段">
+            <div className="drawer-head card-head">
+              <div className="card-head-top">
+                <span className="card-head-layer">{layerLabel(activeCard.layer)}</span>
+                <span className="card-head-actions">
+                  <button type="button" className="control-fold" aria-expanded={!controlFolded} onClick={() => setControlFolded((value) => !value)}>
+                    {controlFolded ? '展开字段' : '收起字段'}
+                  </button>
+                  <button type="button" onClick={closeDrawer}>
+                    关闭
+                  </button>
+                </span>
+              </div>
+              <h2 className="discuss-heading card-head-title">{cardFace(activeCard).title || discussName}</h2>
+              <p className="card-head-meta">
+                {activeWords} 字{activeAdopted ? ' · 已采纳过' : ''}
+              </p>
+            </div>
+            {activeConflict ? (
+              <ConflictChoice
+                conflict={activeConflict}
+                onPick={(pick) => void ctlRef.current?.resolveCardConflict(activeConflict.cardId, pick)}
+              />
+            ) : null}
+            {controlFolded ? null : (
+              <div className="side-fields">
+                <div className="side-fields-body">
+                  <SideEditor
+                    cardId={state.activeId}
+                    card={activeCard}
+                    documentState={state}
+                    groupSelected={activeNode?.type === 'group'}
+                    canType={canEdit}
+                    onCommit={(cardId, fieldKey, text) => {
+                      void ctlRef.current?.commitText(cardId, fieldKey, text)
+                    }}
+                    onAdoptField={(key) => {
+                      adoptFieldRef.current = key
+                    }}
+                    onChangeLayer={(cardId, layer: Layer) => {
+                      void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer), UNDOABLE)
+                    }}
+                    expandNotice={view.expandNotice}
+                    candidates={view.candidates}
+                    onExpand={(cardId, fieldKey) => {
+                      void ctlRef.current?.requestCandidates(cardId, fieldKey)
+                    }}
+                    onConfirmCandidate={(id) => {
+                      void ctlRef.current?.confirmCandidate(id)
+                    }}
+                    onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
+                  />
+                </div>
+              </div>
+            )}
+          </aside>
         ) : null}
         <ReactFlowProvider>
           <FlowCanvas
@@ -860,7 +852,7 @@ export default function App() {
           />
         </ReactFlowProvider>
         {drawerOpen && activeCard && state.activeId ? (
-          <div className="side-stack" style={wideDrawer ? { width: drawerWidth } : undefined}>
+          <aside className="session-pane" style={wideDrawer ? { width: drawerWidth } : undefined} aria-label={`讨论：${discussName}`}>
             {wideDrawer ? (
               <DrawerResizer
                 width={drawerWidth}
@@ -870,84 +862,32 @@ export default function App() {
                 }}
               />
             ) : null}
-            <aside className="side" aria-label={`讨论：${discussName}`}>
-              <div className="drawer-head card-head">
-                <div className="card-head-top">
-                  <span className="card-head-layer">{layerLabel(activeCard.layer)}</span>
-                  <button type="button" onClick={closeDrawer}>
-                    关闭
-                  </button>
-                </div>
-                <h2 className="discuss-heading card-head-title">{cardFace(activeCard).title || discussName}</h2>
-                <p className="card-head-meta">
-                  {activeWords} 字{activeAdopted ? ' · 已采纳过' : ''}
-                </p>
-              </div>
-              {activeConflict ? (
-                <ConflictChoice
-                  conflict={activeConflict}
-                  onPick={(pick) => void ctlRef.current?.resolveCardConflict(activeConflict.cardId, pick)}
-                />
-              ) : null}
-              <div className="drawer-body">
-                <div className="side-fields" style={{ height: `${drawerSplit}%` }} aria-label="这张卡的字段">
-                  <div className="side-fields-body">
-                    <SideEditor
-                      cardId={state.activeId}
-                      card={activeCard}
-                      documentState={state}
-                      groupSelected={activeNode?.type === 'group'}
-                      canType={canEdit}
-                      onCommit={(cardId, fieldKey, text) => {
-                        void ctlRef.current?.commitText(cardId, fieldKey, text)
-                      }}
-                      onAdoptField={(key) => {
-                        adoptFieldRef.current = key
-                      }}
-                      onChangeLayer={(cardId, layer: Layer) => {
-                        void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer), UNDOABLE)
-                      }}
-                      expandNotice={view.expandNotice}
-                      candidates={view.candidates}
-                      onExpand={(cardId, fieldKey) => {
-                        void ctlRef.current?.requestCandidates(cardId, fieldKey)
-                      }}
-                      onConfirmCandidate={(id) => {
-                        void ctlRef.current?.confirmCandidate(id)
-                      }}
-                      onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
-                    />
-                  </div>
-                </div>
-              <SplitResizer split={drawerSplit} onSplit={setDrawerSplit} onDone={(next) => store(DRAWER_SPLIT_KEY, String(next))} />
-              <div className="discuss-dock">
-                <CardDiscuss
-                  key={state.activeId}
-                  cardId={state.activeId}
-                  cardBody={activeCard.body}
-                  onClose={closeDrawer}
-                  onCommitBody={async (cardId, text) => {
-                    await ctlRef.current?.mutate((current) => {
-                      const next = adoptIntoCard(current, cardId, text, adoptFieldRef.current)
-                      return next === current ? { ...current } : next
-                    })
-                    const messages = ctlRef.current?.snapshot().view.messages ?? []
-                    if (messages.includes(MSG_VERSION_MOVED)) throw new Error(MSG_VERSION_MOVED)
-                    if (messages.includes(MSG_CARD_CONFLICT)) throw new Error(MSG_CARD_CONFLICT)
-                    const failedWrite = [MSG_WRITE_FAILED, MSG_WRITE_FAILED_SERVER].find((item) => messages.includes(item))
-                    if (failedWrite) throw new Error(failedWrite)
-                    setFlashCardId(cardId)
-                    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
-                    flashTimer.current = window.setTimeout(() => {
-                      flashTimer.current = null
-                      setFlashCardId((current) => (current === cardId ? null : current))
-                    }, 1600)
-                  }}
-                />
-              </div>
-              </div>
-            </aside>
-          </div>
+            <div className="discuss-dock">
+              <CardDiscuss
+                key={state.activeId}
+                cardId={state.activeId}
+                cardBody={activeCard.body}
+                onClose={closeDrawer}
+                onCommitBody={async (cardId, text) => {
+                  await ctlRef.current?.mutate((current) => {
+                    const next = adoptIntoCard(current, cardId, text, adoptFieldRef.current)
+                    return next === current ? { ...current } : next
+                  })
+                  const messages = ctlRef.current?.snapshot().view.messages ?? []
+                  if (messages.includes(MSG_VERSION_MOVED)) throw new Error(MSG_VERSION_MOVED)
+                  if (messages.includes(MSG_CARD_CONFLICT)) throw new Error(MSG_CARD_CONFLICT)
+                  const failedWrite = [MSG_WRITE_FAILED, MSG_WRITE_FAILED_SERVER].find((item) => messages.includes(item))
+                  if (failedWrite) throw new Error(failedWrite)
+                  setFlashCardId(cardId)
+                  if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+                  flashTimer.current = window.setTimeout(() => {
+                    flashTimer.current = null
+                    setFlashCardId((current) => (current === cardId ? null : current))
+                  }, 1600)
+                }}
+              />
+            </div>
+          </aside>
         ) : null}
       </main>
       {page === 'books' ? (

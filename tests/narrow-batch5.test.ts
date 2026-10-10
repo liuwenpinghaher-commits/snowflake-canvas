@@ -55,18 +55,21 @@ function functionBody(source: string, name: string): string {
 }
 
 describe('窄屏画布不再被钉成 160px', () => {
-  it('max-width 760px 下画布保持扣除顶栏后的全部高度，抽屉从右边盖上来', () => {
+  it('max-width 760px 下画布不再被钉成 160px，控制区在底部，会话不盖住整块画布', () => {
     const narrow = mediaBlock(read('src/index.css'), '(max-width: 760px)')
     const canvas = ruleBody(narrow, '.canvas-wrap')
     expect(canvas).not.toMatch(/160px/)
     expect(canvas).not.toMatch(/55vh|55dvh/)
-    expect(canvas).toMatch(/height:\s*100%/)
     expect(canvas).toMatch(/min-height:\s*0/)
-    const overlay = ruleBody(narrow, '.side-stack')
-    expect(overlay).toContain('position: absolute')
-    expect(overlay).toContain('right: 0')
-    expect(overlay).toMatch(/width:\s*min\(380px,\s*100%\)/)
-    expect(overlay).toContain('bottom: 0')
+    expect(canvas).not.toContain('position: absolute')
+    const control = ruleBody(narrow, '.control-pane')
+    expect(control).toContain('order: 2')
+    expect(control).toContain('width: 100%')
+    expect(control).not.toContain('position: absolute')
+    const session = ruleBody(narrow, '.session-pane')
+    expect(session).toContain('order: 1')
+    expect(session).toContain('width: 100%')
+    expect(session).not.toContain('position: absolute')
   })
 
   it('打开页面卡片量好尺寸后自动看一次全稿，只看一次', () => {
@@ -108,14 +111,15 @@ describe('讨论在右侧抽屉里，不再贴着卡片', () => {
     expect(css).not.toContain('discuss-sheet')
   })
 
-  it('窄屏抽屉盖住画布，并且顶上有关闭按钮', () => {
+  it('窄屏会话单独一块，控制区仍能关闭', () => {
     const narrow = mediaBlock(css, '(max-width: 760px)')
-    const overlay = ruleBody(narrow, '.side-stack')
-    expect(overlay).toContain('position: absolute')
-    expect(overlay).toContain('side-drawer-in')
+    expect(narrow).toContain('side-drawer-in')
+    expect(narrow).not.toContain('position: absolute')
     expect(css).toContain('translateX(100%)')
     expect(app).toContain('关闭')
     expect(app).toContain('closeDrawer')
+    expect(app).toContain('control-pane')
+    expect(app).toContain('session-pane')
   })
 })
 

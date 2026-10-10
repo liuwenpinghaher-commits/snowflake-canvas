@@ -1,4 +1,5 @@
 :root {
+  font-size: 14px;
   font-family: "Source Han Sans SC", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #1c1915;
   background: #f3efe6;
@@ -41,7 +42,7 @@ button.on {
   flex-direction: column;
 }
 
-/* 顶栏只有一行：左边书和字数，右边保存状态、正本状态、新建念头、更多。 */
+/* 顶栏只有一行：左边当前书和字数，右边保存状态、正本状态、新建念头、版本、书籍、设置。 */
 .topbar {
   position: relative;
   z-index: 25;
@@ -56,6 +57,7 @@ button.on {
   padding: 0 16px;
   border-bottom: 1px solid #ddd4c6;
   background: #fffdf8;
+  font-size: 14px;
 }
 
 .top-book {
@@ -75,15 +77,16 @@ button.on {
 
 .top-book button,
 .top-actions > button,
-.top-actions .more-menu > button {
+.top-actions .named-menu > button {
   height: 32px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
 .top-words {
   flex: none;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -162,7 +165,7 @@ button.on {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   color: #5e574e;
 }
 
@@ -181,7 +184,7 @@ button.on {
   border: 1px solid #d9d0c3;
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(40, 30, 20, 0.1);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   color: #3f3830;
 }
@@ -195,8 +198,7 @@ button.on {
 }
 
 @media (max-width: 640px) {
-  .top-chip:not(.is-bad):not(.is-busy) + .top-chip,
-  .top-books {
+  .top-chip:not(.is-bad):not(.is-busy) + .top-chip {
     display: none;
   }
 
@@ -227,11 +229,15 @@ button.on {
   border-color: #6b3f2a;
 }
 
-.more-menu {
+.named-menu {
   position: relative;
 }
 
-.more-menu-pop {
+.named-menu > button {
+  font-size: 14px;
+}
+
+.named-menu-pop {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -246,10 +252,17 @@ button.on {
   border: 1px solid #d9d0c3;
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(40, 30, 20, 0.12);
+  font-size: 14px;
 }
 
-.more-menu-pop .snap-select,
-.more-menu-pop .file-pick {
+.named-menu-pop button,
+.named-menu-pop select,
+.named-menu-pop label {
+  font-size: 14px;
+}
+
+.named-menu-pop .snap-select,
+.named-menu-pop .file-pick {
   width: 100%;
   max-width: none;
 }
@@ -426,9 +439,10 @@ button.on {
   border-radius: 0;
   background: #f6f1e8;
   color: #6a3d28;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
   line-height: 1;
+  touch-action: manipulation;
 }
 
 .snow-expand:hover {
@@ -444,7 +458,7 @@ button.on {
   border: 1px dashed #b7ad9e;
   color: #6b645b;
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .side {
@@ -458,7 +472,7 @@ button.on {
   overflow: hidden;
 }
 
-/* 抽屉三层：卡头（约 72px）、字段区（默认 40%，可拖 28–62%）、讨论占剩下全部。 */
+/* 左栏控制卡：卡头和字段。讨论不在这一栏。 */
 .drawer-head {
   flex: none;
   display: flex;
@@ -470,10 +484,17 @@ button.on {
 }
 
 .card-head .card-head-top button {
-  height: 22px;
+  height: 28px;
   padding: 0 8px;
   font-size: 12px;
   line-height: 1;
+}
+
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
 
 .card-head-top {
@@ -492,7 +513,7 @@ button.on {
 .discuss-heading {
   margin: 0;
   min-width: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -537,77 +558,52 @@ button.on {
   min-height: 120px;
 }
 
-.split-resizer {
-  position: relative;
-  flex: none;
-  height: 9px;
-  cursor: row-resize;
-  touch-action: none;
-  background: #f7f4ee;
-  border-top: 1px solid #eee6da;
-  border-bottom: 1px solid #eee6da;
-}
-
-.split-resizer::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  width: 36px;
-  height: 3px;
-  border-radius: 2px;
-  transform: translateX(-50%);
-  background: #c8bfb0;
-}
-
-.split-resizer:hover::after,
-.split-resizer:active::after,
-.split-resizer:focus-visible::after {
-  background: #8c4a32;
-}
-
-.split-resizer:focus-visible {
-  outline: 2px solid #8c4a32;
-  outline-offset: -2px;
-}
-
 .side-editor {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-/* 窄屏：抽屉从右边盖住画布。画布仍占扣除顶栏后的全部高度，不再砍成 55vh。 */
+/* 窄屏：字段收成底部横条，会话单独一块，不再从右边盖住整块画布。 */
 @media (max-width: 760px) {
   .workspace {
-    position: relative;
+    flex-direction: column;
   }
 
   .canvas-wrap {
+    order: 0;
     flex: 1 1 auto;
     width: 100%;
-    height: 100%;
+    height: auto;
     min-height: 0;
   }
 
-  .side-stack {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(380px, 100%);
-    max-width: 100%;
+  .session-pane {
+    order: 1;
+    width: 100%;
     height: auto;
-    z-index: 30;
+    flex: 0 1 38vh;
+    min-height: 180px;
+    max-height: 46vh;
+    border-left: none;
+    border-top: 1px solid #ddd4c6;
     @media (prefers-reduced-motion: no-preference) {
       animation: side-drawer-in 160ms ease-out;
     }
   }
 
-  .side {
+  .control-pane {
+    order: 2;
     width: 100%;
-    height: 100%;
-    box-shadow: -8px 0 24px rgba(40, 30, 20, 0.12);
+    height: auto;
+    flex: 0 0 auto;
+    max-height: 32vh;
+    border-right: none;
+    border-top: 1px solid #ddd4c6;
+  }
+
+  .control-pane.is-folded {
+    max-height: none;
   }
 }
 
@@ -632,7 +628,7 @@ button.on {
 .hint {
   margin: 8px 0;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -642,7 +638,7 @@ button.on {
   gap: 6px;
   align-items: center;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .cm-host {
@@ -664,7 +660,7 @@ button.on {
   flex-basis: 100%;
   margin: 0;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -681,7 +677,7 @@ button.on {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .modal-back {
@@ -704,7 +700,7 @@ button.on {
 
 .modal h2 {
   margin: 0 0 8px;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .modal p {
@@ -729,7 +725,7 @@ button.on {
 
 .fold-panel legend {
   padding: 0 4px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .fold-panel .hint {
@@ -742,7 +738,7 @@ button.on {
   gap: 14px;
   align-items: center;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .fold-choice label {
@@ -756,7 +752,7 @@ button.on {
   flex-direction: column;
   gap: 4px;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .fold-field input,
@@ -833,67 +829,96 @@ button.on {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   max-height: none;
   overflow: hidden;
-  padding: 8px 10px 10px;
+  padding: 0;
   border: none;
   border-radius: 0;
   background: #fffdf8;
   box-shadow: none;
 }
 
-.discuss-dock .discuss-popover {
-  gap: 4px;
-  padding: 4px 10px 6px;
-}
-
-.discuss-dock .discuss-history {
+.session-tabs {
+  flex: none;
+  display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
-}
-
-.discuss-dock .discuss-history select {
-  height: 32px;
-  padding: 2px 8px;
-}
-
-.discuss-dock .discuss-history button {
-  padding: 2px 8px;
-}
-
-.discuss-dock .discuss-history label {
-  flex: 1 1 auto;
   min-width: 0;
+  min-height: 40px;
+  padding: 0 10px;
+  border-bottom: 1px solid #eee6da;
+  font-size: 14px;
+}
+
+.session-tabs .session-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 32px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.session-tabs button.session-tab {
+  flex: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 8px;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+
+.session-tabs select {
+  min-width: 0;
+  width: 0;
+  flex: 1 1 auto;
+  height: 32px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
 }
 
 .discuss-dock .discuss-compose {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "hint hint"
-    "input send";
-  gap: 6px;
-  align-items: end;
+  flex: none;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #eee6da;
 }
 
-.discuss-dock .compose-hint {
-  grid-area: hint;
+.discuss-input-shell {
+  position: relative;
 }
 
 .discuss-dock .discuss-compose textarea {
-  grid-area: input;
-  height: calc(3 * 1.5em + 14px);
+  display: block;
+  width: 100%;
+  height: calc(2 * 1.5em + 16px);
   min-height: 0;
+  margin: 0;
+  padding: 8px 76px 8px 10px;
   font-size: 14px;
   line-height: 1.5;
-  resize: vertical;
+  resize: none;
 }
 
 .discuss-dock .discuss-compose-bar {
-  grid-area: send;
-  margin-top: 0;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.discuss-dock .discuss-compose-bar button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 14px;
 }
 
 .discuss-popover textarea,
@@ -908,79 +933,19 @@ button.on {
   background: #fffdf8;
 }
 
-.discuss-history {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.discuss-history label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1 1 auto;
-  font-size: 13px;
-  color: #5e574e;
-}
-
-.history-label-text {
-  flex: none;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.history-sizer span {
-  display: inline-block;
-}
-
-.discuss-history select {
-  min-width: 0;
+.discuss-popover .session-tabs select {
   width: 0;
+  min-width: 0;
   flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 14px;
 }
 
-.discuss-history > .history-btn,
-.history-more > button,
-.history-more-pop button {
+.discuss-notice {
   flex: none;
-  white-space: nowrap;
-}
-
-.history-more {
-  position: relative;
-  flex: none;
-}
-
-.history-more-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  min-width: max-content;
-  padding: 8px;
-  background: #fffdf8;
-  border: 1px solid #d9d0c3;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(40, 30, 20, 0.12);
-}
-
-.history-sizer {
-  position: fixed;
-  left: -10000px;
-  top: 0;
-  visibility: hidden;
-  white-space: nowrap;
-  pointer-events: none;
+  flex-basis: auto;
+  margin: 0;
+  padding: 4px 10px;
 }
 
 .discuss-chat {
@@ -989,6 +954,7 @@ button.on {
   min-height: 0;
   min-width: 0;
   overflow: auto;
+  padding: 0 10px;
 }
 
 .log-row {
@@ -1272,15 +1238,8 @@ button.on {
 .side-face-note {
   margin: 0;
   color: #8c4a32;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.compose-hint {
-  margin: 0;
-  color: #3f3830;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .snow-card.is-conflict,
@@ -1302,18 +1261,67 @@ button.on {
   line-height: 18px;
 }
 
-.side-stack {
+.control-pane {
+  width: 320px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid #ddd4c6;
+  background: #fffdf8;
+}
+
+.control-pane .side-fields {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+.control-pane.is-folded .side-fields {
+  display: none;
+}
+
+.session-pane {
+  position: relative;
   width: min(380px, 100%);
   flex: none;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   height: 100%;
+  border-left: 1px solid #ddd4c6;
+  background: #fffdf8;
 }
 
 @media (min-width: 761px) {
-  .side-stack {
+  .session-pane {
     position: relative;
+  }
+
+  .control-pane.is-folded {
+    width: 48px;
+  }
+
+  .control-pane.is-folded .card-head-title,
+  .control-pane.is-folded .card-head-meta,
+  .control-pane.is-folded .card-head-layer,
+  .control-pane.is-folded .card-head-actions button:not(.control-fold) {
+    display: none;
+  }
+
+  .control-pane.is-folded .control-fold {
+    writing-mode: vertical-rl;
+    height: auto;
+    padding: 8px 2px;
+  }
+
+  .control-pane.is-folded .drawer-head {
+    min-height: 0;
+    padding: 8px 4px;
   }
 }
 
@@ -1351,7 +1359,7 @@ button.on {
   background: #8c4a32;
 }
 
-.side-stack > .side {
+.session-pane > .discuss-dock {
   width: 100%;
   flex: 1 1 auto;
 }
@@ -1376,7 +1384,7 @@ button.on {
 }
 
 .conflict-choice-line {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   max-height: 6lh;
   overflow: auto;
@@ -1456,7 +1464,7 @@ button.on {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: 12px;
   color: #5e574e;
   white-space: nowrap;
 }
@@ -1532,7 +1540,7 @@ button.on {
   border-radius: 4px 8px 8px 4px;
   box-shadow: inset 4px 0 0 rgba(0, 0, 0, 0.18);
   color: #fffdf8;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.2;
   writing-mode: vertical-rl;
@@ -1550,7 +1558,7 @@ button.on {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   overflow-wrap: anywhere;
 }
@@ -1616,7 +1624,7 @@ button.on {
 .profile-sub {
   margin: 0;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1679,7 +1687,7 @@ button.on {
   grid-template-columns: auto 1fr;
   gap: 4px 12px;
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .profile-facts dt,
@@ -1695,7 +1703,7 @@ button.on {
 
 .profile-layers h3 {
   margin: 0 0 6px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -1703,7 +1711,7 @@ button.on {
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .profile-layers li {
@@ -1721,14 +1729,14 @@ button.on {
 .profile-muted {
   margin: 0;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .profile-danger {
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid #eee6da;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .profile-danger p {
@@ -1767,7 +1775,7 @@ button.danger-quiet {
   margin: 0 0 16px;
   padding: 0;
   list-style: none;
-  font-size: 13px;
+  font-size: 14px;
   color: #5e574e;
 }
 
@@ -1837,7 +1845,7 @@ button.danger-quiet {
 
 .wizard-import {
   margin-top: 8px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .wizard-preview {
@@ -1856,7 +1864,7 @@ button.danger-quiet {
   flex-basis: 100%;
   margin: 0;
   color: #5e574e;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .wizard-bar {

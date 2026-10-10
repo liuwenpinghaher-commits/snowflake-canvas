@@ -3,15 +3,7 @@ import { join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import {
-  DRAWER_SPLIT_DEFAULT,
-  DRAWER_SPLIT_KEY,
-  DRAWER_SPLIT_MAX,
-  DRAWER_SPLIT_MIN,
-  LINE_HEIGHT_DEFAULT,
-  readDrawerSplit,
-  readLineHeight,
-} from '../src/App.tsx'
+import { LINE_HEIGHT_DEFAULT, readLineHeight } from '../src/App.tsx'
 import { readImportFile, statsOfDocument } from '../src/books.ts'
 import { MarkdownText } from '../src/markdown-lite.tsx'
 
@@ -63,31 +55,21 @@ describe('讨论 Markdown 补表格、引用、删除线、任务列表', () => 
   })
 })
 
-describe('抽屉三层，字段区可拖 28–62%', () => {
-  it('键名、范围和非法值', () => {
-    expect(DRAWER_SPLIT_KEY).toBe('snowflake-drawer-split')
-    expect(DRAWER_SPLIT_MIN).toBe(28)
-    expect(DRAWER_SPLIT_MAX).toBe(62)
-    expect(DRAWER_SPLIT_DEFAULT).toBe(40)
-    expect(readDrawerSplit(null)).toBe(40)
-    expect(readDrawerSplit('27')).toBe(40)
-    expect(readDrawerSplit('63')).toBe(40)
-    expect(readDrawerSplit('50%')).toBe(40)
-    expect(readDrawerSplit('28')).toBe(28)
-    expect(readDrawerSplit('61.6')).toBe(62)
-  })
-
-  it('卡头、字段区、拖条、讨论按顺序排', () => {
+describe('控制卡和会话分开，字段和讨论之间不再拖高', () => {
+  it('卡头和字段在左栏，讨论在右侧会话，源码里不再挂拖高把手', () => {
     const app = read('src/App.tsx')
-    const head = app.indexOf('className="drawer-head card-head"')
-    const fields = app.indexOf('className="side-fields"')
-    const split = app.indexOf('<SplitResizer')
-    const dock = app.indexOf('className="discuss-dock"')
-    expect(head).toBeGreaterThan(0)
-    expect(fields).toBeGreaterThan(head)
-    expect(split).toBeGreaterThan(fields)
-    expect(dock).toBeGreaterThan(split)
+    const control = app.slice(app.indexOf('control-pane'), app.indexOf('session-pane'))
+    const session = app.slice(app.indexOf('session-pane'))
+    expect(control).toContain('className="drawer-head card-head"')
+    expect(control).toContain('<SideEditor')
+    expect(control).not.toContain('<CardDiscuss')
+    expect(session).toContain('<CardDiscuss')
+    expect(session).not.toContain('<SideEditor')
+    expect(app).not.toContain('<SplitResizer')
+    expect(app).not.toContain('split-resizer')
+    expect(app).not.toContain('aria-label="调节字段区和讨论区的高度"')
     expect(app).not.toContain('side-fields-toggle')
+    expect(app).toContain('讨论行高')
   })
 })
 

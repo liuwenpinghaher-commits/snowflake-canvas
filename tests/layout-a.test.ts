@@ -99,34 +99,41 @@ describe('讨论标题用卡片标题，没有标题就用层名', () => {
   })
 })
 
-describe('顶栏只留常用按钮，其余进更多', () => {
+describe('顶栏常用按钮留在外面，其余分进版本、书籍、设置', () => {
   const app = read('src/App.tsx')
-  const resident = app.slice(app.indexOf('className="top-actions"'), app.indexOf('<MoreMenu>'))
-  const menu = app.slice(app.indexOf('<MoreMenu>'), app.indexOf('</MoreMenu>'))
-  const moreFn = app.slice(app.indexOf('function MoreMenu'), app.indexOf('export default function App'))
+  const header = app.slice(app.indexOf('<header className="topbar">'), app.indexOf('</header>'))
+  const resident = header.slice(header.indexOf('className="top-actions"'), header.indexOf('<NamedMenu'))
+  const version = header.slice(header.indexOf('label="版本"'), header.indexOf('label="书籍"'))
+  const books = header.slice(header.indexOf('label="书籍"'), header.indexOf('label="设置"'))
+  const settings = header.slice(header.indexOf('label="设置"'))
+  const menuFn = app.slice(app.indexOf('function NamedMenu'), app.indexOf('export default function App'))
 
-  it('顶栏一行：当前书、书籍、字数、保存状态、正本状态、新建念头；新建书和留下这一版进更多', () => {
-    const bar = app.slice(app.indexOf('<header className="topbar">'), app.indexOf('<MoreMenu>'))
-    expect(bar).toContain('aria-label="当前书"')
-    expect(bar).toContain('书籍')
-    expect(bar).toContain('className="top-words"')
-    expect(bar).toContain('保存状态')
-    expect(bar).toContain('正本状态')
+  it('顶栏一行：当前书、字数、保存状态、正本状态、新建念头，以及版本、书籍、设置', () => {
+    expect(header).toContain('aria-label="当前书"')
+    expect(header).toContain('className="top-words"')
+    expect(header).toContain('保存状态')
+    expect(header).toContain('正本状态')
     expect(resident).toContain('新建念头')
-    expect(bar).not.toContain('<h1>')
-    expect(bar).not.toContain('top-hint')
+    expect(header).not.toContain('<h1>')
+    expect(header).not.toContain('top-hint')
     expect(resident).not.toContain('MSG_KEEP_SNAPSHOT')
     expect(resident).not.toContain('新建分组')
     expect(resident).not.toContain('回退到这一版')
     expect(resident).not.toContain('撤销')
     expect(resident).not.toContain('选择正本')
-    expect(menu).toContain('MSG_KEEP_SNAPSHOT')
-    expect(menu).toContain('新建书')
-    expect(menu).toContain('书籍管理')
-    expect(menu).toContain('版本 ${version}')
+    expect(header).toContain('label="版本"')
+    expect(header).toContain('label="书籍"')
+    expect(header).toContain('label="设置"')
+    expect(header).not.toMatch(/>\s*更多\s*</)
+    expect(version).toContain('MSG_KEEP_SNAPSHOT')
+    expect(version).toContain('版本 ${version}')
+    expect(books).toContain('新建书')
+    expect(books).toContain('书籍管理')
+    expect(settings).toContain('讨论行高')
+    expect(settings).toContain('操作说明')
   })
 
-  it('更多里仍有分组、删除、快照、回退、撤销和条件按钮，键盘能开关', () => {
+  it('三个菜单里仍有分组、删除、快照、回退、撤销和条件按钮，键盘能开关', () => {
     for (const label of [
       '新建分组',
       '删除',
@@ -139,14 +146,14 @@ describe('顶栏只留常用按钮，其余进更多', () => {
       '打开正本',
       '选快照回退',
     ]) {
-      expect(menu).toContain(label)
+      expect(header).toContain(label)
     }
-    expect(moreFn).toContain("event.key !== 'ArrowDown'")
-    expect(moreFn).toContain("event.key !== 'Escape'")
-    expect(moreFn).toContain("addEventListener('pointerdown'")
-    expect(menu).toContain('disabled={!canEdit || !state.activeId}')
-    expect(menu).toContain('disabled={!canEdit || !view.canUndo}')
-    expect(menu).toContain('disabled={!canEdit || snapName.length === 0}')
+    expect(menuFn).toContain("event.key !== 'ArrowDown'")
+    expect(menuFn).toContain("event.key !== 'Escape'")
+    expect(menuFn).toContain("addEventListener('pointerdown'")
+    expect(settings).toContain('disabled={!canEdit || !state.activeId}')
+    expect(settings).toContain('disabled={!canEdit || !view.canUndo}')
+    expect(version).toContain('disabled={!canEdit || snapName.length === 0}')
   })
 })
 

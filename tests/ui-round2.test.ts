@@ -80,7 +80,10 @@ describe('界面审查第 2 轮：其余条目', () => {
     expect(app).not.toContain('role="menu"')
     expect(app).not.toContain('aria-haspopup')
     expect(app).toContain('aria-expanded={open}')
-    expect(app).toContain('aria-controls="more-menu-pop"')
+    expect(app).toContain('aria-controls={id}')
+    expect(app).toContain('id="version-menu-pop"')
+    expect(app).toContain('id="books-menu-pop"')
+    expect(app).toContain('id="settings-menu-pop"')
     expect(discuss).not.toContain('role="menu"')
     expect(discuss).not.toContain('aria-haspopup')
     if (discuss.includes('history-more-pop')) {

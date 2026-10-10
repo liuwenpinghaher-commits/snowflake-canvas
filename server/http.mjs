@@ -1725,11 +1725,25 @@ for (const book of sortedBooks()) {
   }
 }
 
+function staticCacheHeader(filePath) {
+  const normalized = String(filePath).replace(/\\/g, '/')
+  const base = normalized.split('/').pop() || ''
+  if (base === 'index.html' || base.endsWith('.html')) return 'no-store'
+  if (/\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(?:js|css)$/.test(normalized)) {
+    return 'public, max-age=31536000, immutable'
+  }
+  return 'no-cache'
+}
+
 await app.register(fastifyStatic, {
   root: distDir,
   prefix: '/',
   decorateReply: false,
   index: ['index.html'],
+  cacheControl: false,
+  setHeaders(reply, filePath) {
+    reply.header('Cache-Control', staticCacheHeader(filePath))
+  },
 })
 
 app.setNotFoundHandler((request, reply) => {
@@ -1739,6 +1753,7 @@ app.setNotFoundHandler((request, reply) => {
   }
   if (request.url === '/' || request.url.startsWith('/xuehua')) {
     const file = request.url.startsWith('/xuehua') ? join(distDir, 'xuehua', 'index.html') : join(distDir, 'index.html')
+    reply.header('Cache-Control', 'no-store')
     reply.type('text/html')
     return reply.send(createReadStream(file))
   }

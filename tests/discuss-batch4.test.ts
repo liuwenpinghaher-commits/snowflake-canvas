@@ -139,12 +139,13 @@ function fakeTarget(hits: Record<string, { 'data-id'?: string }>) {
 }
 
 describe('浮窗与右侧编辑器共存，关浮窗不中断回复', () => {
-  it('点 .side 不关浮窗；点画布空白、别的卡、顶栏仍关', () => {
+  it('点字段区或会话不关浮窗；点画布空白、别的卡、顶栏仍关', () => {
     const onClose = vi.fn()
     const handle = (target: unknown) => {
       if (pointerCloses(target, 'card-a')) onClose()
     }
-    handle(fakeTarget({ '.side': {} }))
+    handle(fakeTarget({ '.control-pane': {} }))
+    handle(fakeTarget({ '.session-pane': {} }))
     handle(fakeTarget({ '[data-discuss-popover]': {} }))
     handle(fakeTarget({ '.react-flow__node': { 'data-id': 'card-a' } }))
     expect(onClose).not.toHaveBeenCalled()

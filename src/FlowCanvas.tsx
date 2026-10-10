@@ -77,6 +77,9 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
             onPointerDown={(event) => {
               event.stopPropagation()
             }}
+            onPointerUp={(event) => {
+              event.stopPropagation()
+            }}
             onMouseDown={(event) => {
               event.stopPropagation()
             }}
@@ -330,7 +333,7 @@ export default function FlowCanvas({
       if (event.isComposing) return
       const active = document.activeElement
       if (!(active instanceof Element)) return
-      if (active.closest('.discuss-dock, [data-discuss-popover], .side')) return
+      if (active.closest('.discuss-dock, [data-discuss-popover], .control-pane, .session-pane')) return
       if (!active.classList.contains('react-flow__node-snowCard')) return
       const id = active.getAttribute('data-id')
       if (!id) return
@@ -433,7 +436,11 @@ export default function FlowCanvas({
         edges={flowEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onNodeClick={(_, node) => onSelect(node.id)}
+        onNodeClick={(event, node) => {
+          const target = event.target
+          if (target instanceof Element && target.closest('.snow-expand')) return
+          onSelect(node.id)
+        }}
         onNodeDoubleClick={(event, node) => {
           if (node.type !== 'snowCard') return
           event.preventDefault()
