@@ -218,6 +218,7 @@ export interface PersistSnapshot {
 export interface PersistController {
   start(): Promise<void>
   refresh(): Promise<void>
+  reloadRemote(): Promise<void>
   selectDirectory(): Promise<void>
   requestPermission(): Promise<void>
   claimWrite(): Promise<void>
@@ -1151,6 +1152,25 @@ class Controller implements PersistController {
     this.needPermission = false
     this.needChoice = false
     await this.openDirectory('refresh')
+  }
+
+  // 讨论沉淀写在服务器上。这里把服务器上的这一版再读回来，不在页面上先改一版假成功。
+  async reloadRemote(): Promise<void> {
+    if (!this.remoteMode || !this.ports.remote) return
+    if (this.writing || this.queueDirty) return
+    let loaded: { etag: string; bytes: Uint8Array } | null
+    try {
+      loaded = await this.ports.remote.load()
+    } catch {
+      return
+    }
+    if (!loaded || this.writing || this.queueDirty) return
+    const parsed = parseCompleteDocument(loaded.bytes)
+    if (!parsed) return
+    this.remoteEtag = loaded.etag
+    this.lastBytes = parsed.bytes
+    this.state = { ...parsed.state, activeId: this.state.activeId }
+    this.emit()
   }
 
   async selectDirectory(): Promise<void> {

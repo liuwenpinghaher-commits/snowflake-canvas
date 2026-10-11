@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MarkdownText, stripMarkdown } from './markdown-lite.tsx'
 import { bookScopedPath } from './books.ts'
+import { ARCHIVE_GROUPS, ARC_KEYS, PERSON_ZONES, RENWUGUSHI_KEYS, cardFace, type CanvasEdge, type Card, type Entity, type SedimentAction } from './document.ts'
+import { MANY_PERSONS_HINT, fieldLabel, projectedPersons } from './person-form.ts'
 
 function api(path: string): string {
   const base = import.meta.env.BASE_URL || '/'
@@ -205,6 +207,7 @@ export function AssistantActions({
   onAdopt,
   onCopy,
   onWriteBrain,
+  onSediment,
 }: {
   item: ChatMessage
   copied: boolean
@@ -213,6 +216,7 @@ export function AssistantActions({
   onAdopt: () => void
   onCopy: () => void
   onWriteBrain: () => void
+  onSediment?: () => void
 }) {
   if (item.role !== 'assistant' || !item.content.trim()) return null
   return (
@@ -221,6 +225,9 @@ export function AssistantActions({
       <div className="log-actions">
         <button type="button" onClick={onAdopt}>
           采纳进本念头
+        </button>
+        <button type="button" onClick={() => onSediment?.()}>
+          沉淀到…
         </button>
         <button type="button" onClick={onCopy}>
           {copied ? '已复制' : '复制'}
@@ -308,16 +315,34 @@ function HistoryBar({
   )
 }
 
+const SEDIMENT_FIELDS = [
+  ...PERSON_ZONES[0].keys,
+  ...PERSON_ZONES[1].keys.filter((key) => key !== 'arc'),
+  ...ARC_KEYS.map((key) => `arc.${key}`),
+  ...ARCHIVE_GROUPS.flatMap((group) => group.keys).filter((key) => key !== 'philosophy'),
+  ...RENWUGUSHI_KEYS,
+]
+
 export default function CardDiscuss({
   cardId,
   cardBody,
   onClose,
   onCommitBody,
+  entities = [],
+  edges = [],
+  cards = {},
+  focusSessionId,
+  onSedimentDone,
 }: {
   cardId: string
   cardBody: string
   onClose: () => void
   onCommitBody: (cardId: string, body: string) => Promise<void>
+  entities?: Entity[]
+  edges?: CanvasEdge[]
+  cards?: Record<string, Card>
+  focusSessionId?: string
+  onSedimentDone?: () => void
 }) {
   const [sessions, setSessions] = useState<DiscussSession[]>([])
   const [sessionId, setSessionId] = useState('')
@@ -330,6 +355,7 @@ export default function CardDiscuss({
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [writingBrain, setWritingBrain] = useState<Record<string, true>>({})
+  const [sedimentFor, setSedimentFor] = useState<ChatMessage | null>(null)
   const writingRef = useRef(new Set<string>())
   const chatRef = useRef<HTMLDivElement>(null)
   const draftRef = useRef<HTMLTextAreaElement>(null)
@@ -565,7 +591,7 @@ export default function CardDiscuss({
       }
       const list = Array.isArray(payload.sessions) ? payload.sessions : []
       const running = liveRunFor(cardId)
-      const remembered = running?.sessionId || sessionStorage.getItem(storageKey(cardId)) || ''
+      const remembered = focusSessionId || running?.sessionId || sessionStorage.getItem(storageKey(cardId)) || ''
       const picked = list.some((item) => item.sessionId === remembered) ? remembered : payload.sessionId
       if (picked !== payload.sessionId) {
         const selected = await fetch(api('/api/discuss/session'), {
@@ -595,7 +621,7 @@ export default function CardDiscuss({
     return () => {
       cancelled = true
     }
-  }, [cardId])
+  }, [cardId, focusSessionId])
 
   async function openSession(nextSessionId: string) {
     if (!nextSessionId) return
@@ -935,6 +961,7 @@ export default function CardDiscuss({
                 writing={writingBrain[item.key] === true}
                 finished={!(busy && index === messages.length - 1)}
                 onAdopt={() => void adopt(item)}
+                onSediment={() => setSedimentFor(item)}
                 onCopy={() => void copyText(item.content, item.key)}
                 onWriteBrain={() => void writeBrain(item)}
               />
@@ -947,6 +974,24 @@ export default function CardDiscuss({
           </button>
         ) : null}
       </div>
+      {sedimentFor ? (
+        <SedimentPanel
+          cardId={cardId}
+          sessionId={sessionId}
+          message={sedimentFor}
+          entities={entities}
+          edges={edges}
+          cards={cards}
+          onCancel={() => setSedimentFor(null)}
+          onDone={() => {
+            setSedimentFor(null)
+            onSedimentDone?.()
+          }}
+          onKeep={() => {
+            onSedimentDone?.()
+          }}
+        />
+      ) : null}
       {notice ? (
         <p className="status-line discuss-notice" role="status">
           {notice}
@@ -979,5 +1024,164 @@ export default function CardDiscuss({
         </div>
       </div>
     </section>
+  )
+}
+
+function SedimentPanel({
+  cardId,
+  sessionId,
+  message,
+  entities,
+  edges,
+  cards,
+  onCancel,
+  onDone,
+  onKeep,
+}: {
+  cardId: string
+  sessionId: string
+  message: ChatMessage
+  entities: Entity[]
+  edges: CanvasEdge[]
+  cards: Record<string, Card>
+  onCancel: () => void
+  onDone: () => void
+  onKeep: () => void
+}) {
+  const people = projectedPersons(entities, edges, cardId)
+  const [pickedId, setPickedId] = useState('')
+  const chosen = people.length === 1 ? people[0] : people.find((person) => person.id === pickedId)
+  const blocked = !chosen
+  const [fieldKey, setFieldKey] = useState('')
+  const [action, setAction] = useState<SedimentAction>('append')
+  const [quote, setQuote] = useState(() => adoptionText(message.content))
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const requestRef = useRef<string | null>(null)
+  const idea = cards[cardId]
+  const ideaName = idea ? cardFace(idea).title.trim() || '未命名念头' : '当前念头'
+
+  async function submit() {
+    if (!chosen || !fieldKey || fieldKey === 'philosophy' || !quote.trim() || !sessionId) return
+    const requestId = requestRef.current ?? crypto.randomUUID()
+    requestRef.current = requestId
+    setBusy(true)
+    try {
+      const response = await fetch(api('/api/sediment'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cardId,
+          sessionId,
+          entityId: chosen.id,
+          fieldKey,
+          action,
+          quote,
+          requestId,
+          ...(message.serverKey ? { adoptionKey: message.serverKey } : {}),
+        }),
+      })
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; status?: string }
+      if (payload.error === '百科没写上' || payload.status === 'failed') {
+        setError('百科没写上')
+        onKeep()
+        return
+      }
+      if (!response.ok || payload.ok !== true) {
+        requestRef.current = null
+        setError(typeof payload.error === 'string' && payload.error ? payload.error : '沉淀没有写上')
+        return
+      }
+      requestRef.current = null
+      setError('')
+      onDone()
+    } catch {
+      setError('沉淀没有写上')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form
+      className="sediment-panel"
+      aria-label="沉淀到"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void submit()
+      }}
+    >
+      <p>把这句话沉淀到</p>
+      {blocked ? (
+        <p className="cast-warn" role="status">
+          {MANY_PERSONS_HINT}
+        </p>
+      ) : null}
+      {people.length > 1 ? (
+        <div className="sediment-people">
+          {people.map((person) => (
+            <button
+              key={person.id}
+              type="button"
+              className={pickedId === person.id ? 'on' : ''}
+              onClick={() => setPickedId(person.id)}
+            >
+              {person.name || '未命名'}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <label>
+        目标实体
+        <input aria-label="目标实体" value={chosen?.name ?? ''} disabled readOnly />
+      </label>
+      <label>
+        目标字段
+        <select aria-label="目标字段" value={fieldKey} disabled={blocked} onChange={(event) => setFieldKey(event.target.value)}>
+          <option value="">选一个字段</option>
+          {SEDIMENT_FIELDS.map((key) => (
+            <option key={key} value={key}>
+              {fieldLabel(key)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <fieldset disabled={blocked}>
+        <legend>方式</legend>
+        <label>
+          <input type="radio" name="sediment-action" checked={action === 'append'} onChange={() => setAction('append')} />
+          追加
+        </label>
+        <label>
+          <input type="radio" name="sediment-action" checked={action === 'replace'} onChange={() => setAction('replace')} />
+          替换
+        </label>
+        <label>
+          <input type="radio" name="sediment-action" checked={action === 'negate'} onChange={() => setAction('negate')} />
+          否定
+        </label>
+      </fieldset>
+      <label>
+        挂到念头
+        <input aria-label="挂到念头" value={ideaName} disabled readOnly />
+      </label>
+      <label>
+        摘录
+        <textarea aria-label="摘录" value={quote} disabled={blocked} rows={3} onChange={(event) => setQuote(event.target.value)} />
+      </label>
+      {error ? (
+        <p className="cast-warn" role="status">
+          {error}
+        </p>
+      ) : null}
+      <div className="sediment-actions">
+        <button type="submit" disabled={blocked || busy || !fieldKey || !quote.trim() || !sessionId}>
+          {error === '百科没写上' ? '重试' : '沉淀'}
+        </button>
+        <button type="button" onClick={onCancel}>
+          取消
+        </button>
+      </div>
+    </form>
   )
 }

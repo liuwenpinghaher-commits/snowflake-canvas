@@ -6,6 +6,7 @@ import FlowCanvas from './FlowCanvas.tsx'
 import SideEditor from './SideEditor.tsx'
 import ConflictChoice from './ConflictChoice.tsx'
 import BooksPage, { type NewBookInput } from './BooksPage.tsx'
+import CastPage from './CastPage.tsx'
 import {
   DEFAULT_BOOK_NAME,
   MSG_BOOK_UNSAVED,
@@ -280,7 +281,8 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState<string | null>(null)
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
-  const [page, setPage] = useState<'canvas' | 'books'>('canvas')
+  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter'>('canvas')
+  const [discussFocus, setDiscussFocus] = useState<{ cardId: string; sessionId?: string } | null>(null)
   const [wizardOnOpen, setWizardOnOpen] = useState(false)
   const [controlFolded, setControlFolded] = useState(false)
   const [lineHeight, setLineHeight] = useState(() => readStored(LINE_HEIGHT_KEY, readLineHeight, LINE_HEIGHT_DEFAULT))
@@ -419,6 +421,13 @@ export default function App() {
     } finally {
       setBookBusy(false)
     }
+  }
+
+  const openIdea = (cardId: string, sessionId?: string) => {
+    setPage('canvas')
+    setDismissedId(null)
+    setDiscussFocus(sessionId ? { cardId, sessionId } : { cardId })
+    ctlRef.current?.select(cardId)
   }
 
   const openBooks = (wizard: boolean) => {
@@ -719,6 +728,27 @@ export default function App() {
           </NamedMenu>
         </div>
       </header>
+      <nav className="primary-nav" aria-label="页面">
+        {(
+          [
+            ['canvas', '画布'],
+            ['cast', '人物'],
+            ['relation', '关系'],
+            ['encyclopedia', '百科'],
+            ['chapter', '章节'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={page === id ? 'on' : ''}
+            aria-current={page === id ? 'page' : undefined}
+            onClick={() => setPage(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       <div className="status-strip">
         {view.notices.map((notice) =>
           notice.kind === 'error' ? (
@@ -742,6 +772,23 @@ export default function App() {
           </p>
         ) : null}
       </div>
+      {page === 'cast' ? (
+        <CastPage
+          state={state}
+          canEdit={canEdit}
+          onApply={(recipe) => {
+            void ctlRef.current?.mutate(recipe, UNDOABLE)
+          }}
+          onOpenIdea={openIdea}
+        />
+      ) : null}
+      {page === 'relation' || page === 'encyclopedia' || page === 'chapter' ? (
+        <section className="later-page" aria-label={page === 'relation' ? '关系' : page === 'encyclopedia' ? '百科' : '章节'}>
+          <h2>{page === 'relation' ? '关系' : page === 'encyclopedia' ? '百科' : '章节'}</h2>
+          <p>这一页下一刀才做。</p>
+        </section>
+      ) : null}
+      {page === 'canvas' || page === 'books' ? (
       <main className="workspace">
         <h1 className="sr-only">{currentBook?.name || '未命名书'}</h1>
         {noCards || hintOpen ? (
@@ -810,6 +857,10 @@ export default function App() {
                       void ctlRef.current?.confirmCandidate(id)
                     }}
                     onDismissCandidates={() => ctlRef.current?.dismissCandidates()}
+                    onApply={(recipe) => {
+                      void ctlRef.current?.mutate(recipe, UNDOABLE)
+                    }}
+                    onOpenIdea={openIdea}
                   />
                 </div>
               </div>
@@ -868,6 +919,13 @@ export default function App() {
                 cardId={state.activeId}
                 cardBody={activeCard.body}
                 onClose={closeDrawer}
+                entities={state.entities ?? []}
+                edges={state.canvas.edges}
+                cards={state.snowflake.cards}
+                focusSessionId={discussFocus?.cardId === state.activeId ? discussFocus.sessionId : undefined}
+                onSedimentDone={() => {
+                  void ctlRef.current?.reloadRemote()
+                }}
                 onCommitBody={async (cardId, text) => {
                   await ctlRef.current?.mutate((current) => {
                     const next = adoptIntoCard(current, cardId, text, adoptFieldRef.current)
@@ -890,6 +948,7 @@ export default function App() {
           </aside>
         ) : null}
       </main>
+      ) : null}
       {page === 'books' ? (
         <BooksPage
           books={books}

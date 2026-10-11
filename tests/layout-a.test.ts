@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import {
   BODY_LINE_CAP,
   COLUMN_GAP,
-  EXPAND_CHROME_PX,
   discussCardName,
   estimateSnowCardHeight,
   shiftOverlappingCards,
@@ -23,38 +22,31 @@ function card(partial: Partial<ShiftBox> & Pick<ShiftBox, 'id' | 'x' | 'y' | 'he
   }
 }
 
-describe('卡片正文按 12 行封顶', () => {
-  it('收起最多约 12 行，展开不再把正文永远锁在 12 行', () => {
-    expect(BODY_LINE_CAP).toBe(12)
+describe('画布卡面按 3 行摘要估高', () => {
+  it('正文最多按 3 行计入，卡面不再为展开条留样式', () => {
+    expect(BODY_LINE_CAP).toBe(3)
     const css = read('src/index.css')
     expect(css).not.toContain('line-clamp')
     const bodyStart = css.indexOf('.snow-body {')
     expect(bodyStart).toBeGreaterThan(-1)
     const body = css.slice(bodyStart, css.indexOf('}', bodyStart))
+    expect(body).toContain('max-height: calc(1.5em * 3)')
     expect(body).not.toContain('max-height: 160px')
     expect(body).not.toContain('max-height: calc(1.5em * 12)')
     expect(body).not.toContain('overflow-y: auto')
-    const collapsedStart = css.indexOf('.snow-body.is-collapsed')
-    expect(collapsedStart).toBeGreaterThan(bodyStart)
-    const collapsed = css.slice(collapsedStart, css.indexOf('}', collapsedStart))
-    expect(collapsed).toContain('max-height: calc(1.5em * 12)')
-    expect(collapsed).not.toContain('overflow-y: auto')
-    const expandStart = css.indexOf('.snow-expand {')
-    expect(expandStart).toBeGreaterThan(-1)
-    const expand = css.slice(expandStart, css.indexOf('}', expandStart))
-    expect(expand).toContain('min-height: 36px')
-    expect(expand).toContain('width: calc(100% + 24px)')
+    expect(css).not.toContain('.snow-body.is-collapsed')
+    expect(css).not.toContain('.snow-expand {')
     const title = css.slice(css.indexOf('.snow-title {'), css.indexOf('}', css.indexOf('.snow-title {')))
     expect(title).not.toContain('overflow: hidden')
   })
 
-  it('字符行数不再决定展开条；只有实测溢出才按 12 行收起并加上展开条', () => {
+  it('估高不随展开态变高，正文超过 3 行也不再加高', () => {
     const line = '一二三四五六七八九十'
     const body = (n: number) => Array.from({ length: n }, () => line).join('\n')
     const input = (n: number, expanded = false, overflows = false) => ({
       title: '标题',
       body: body(n),
-      meta: '',
+      meta: '3 字',
       width: 280,
       expanded,
       overflows,
@@ -68,36 +60,25 @@ describe('卡片正文按 12 行封顶', () => {
     expect(gate).not.toContain('innerWidth')
     expect(gate).not.toContain('fontPx')
     const h2 = estimateSnowCardHeight(input(2))
-    const h12 = estimateSnowCardHeight(input(12))
+    const h3 = estimateSnowCardHeight(input(3))
     const h20 = estimateSnowCardHeight(input(20))
-    expect(h2).toBeLessThan(h12)
-    expect(h20).toBeGreaterThan(h12)
-    expect(estimateSnowCardHeight(input(20, true))).toBe(h20)
-    expect(estimateSnowCardHeight(input(12, true))).toBe(h12)
-    const h20collapsed = estimateSnowCardHeight(input(20, false, true))
-    const h20expanded = estimateSnowCardHeight(input(20, true, true))
-    expect(h20collapsed).toBe(estimateSnowCardHeight(input(13, false, true)))
-    expect(h20collapsed - h12).toBe(EXPAND_CHROME_PX)
-    expect(h20expanded).toBeGreaterThan(h20collapsed)
-    expect(h20expanded).toBeGreaterThan(estimateSnowCardHeight(input(13, true, true)))
+    expect(h2).toBeLessThan(h3)
+    expect(h20).toBe(h3)
+    expect(estimateSnowCardHeight(input(20, true))).toBe(estimateSnowCardHeight(input(20, false)))
+    expect(estimateSnowCardHeight(input(20, true, true))).toBe(estimateSnowCardHeight(input(20, false, false)))
+    expect(estimateSnowCardHeight(input(20, false, true))).toBe(h20)
   })
 
-  it('超过 12 行才出现展开全文，按钮在卡片底部而不是再包一层', () => {
+  it('卡面没有展开全文或收起，折叠不在画布上', () => {
     const flow = read('src/FlowCanvas.tsx')
     const snow = flow.slice(flow.indexOf('function SnowCard('), flow.indexOf('function SnowGroup('))
-    expect(snow).toContain('measureSnowBodyOverflow(')
-    expect(snow).toContain('snowExpandLabel(')
-    expect(snow).toContain('ref={bodyRef}')
-    const labels = read('src/card-layout.ts')
-    expect(labels).toContain("'展开全文'")
-    expect(labels).toContain("'收起'")
-    expect(snow).toContain('aria-expanded')
-    expect(snow).toContain('stopPropagation()')
-    expect(snow).toContain('className="snow-expand nodrag nopan nowheel"')
-    expect(snow.indexOf('snow-expand')).toBeGreaterThan(snow.indexOf('snow-body'))
-    expect(snow.indexOf('{expandLabel}')).toBeGreaterThan(snow.indexOf('snow-body'))
-    expect(snow).not.toContain('function SnowCardBody')
-    expect(flow).toContain('expandedIds')
+    expect(snow).not.toContain('snowExpandLabel(')
+    expect(snow).not.toContain('展开全文')
+    expect(snow).not.toContain('收起')
+    expect(snow).not.toContain('measureSnowBodyOverflow(')
+    expect(snow).not.toContain('className="snow-expand nodrag nopan nowheel"')
+    expect(flow).not.toContain('expandedIds')
+    expect(read('src/card-layout.ts')).not.toContain('snowExpandLabel')
   })
 
   it('节点高度跟着内容走，分组尺寸不走这套算法', () => {

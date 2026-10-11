@@ -409,49 +409,7 @@ button.on {
   overflow-wrap: break-word;
   overflow-x: hidden;
   overflow-y: hidden;
-}
-
-/* 只在收起时截到约 12 行。展开不加 max-height，高度一次落到全文。
-   不用高度过渡：重叠避让按实测高度改位置，过渡会连着推很多次。 */
-.snow-body.is-collapsed {
-  max-height: calc(1.5em * 12);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1.5em), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1.5em), transparent 100%);
-}
-
-.snow-card:has(.snow-expand) {
-  padding-bottom: 0;
-}
-
-.snow-expand {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  box-sizing: border-box;
-  width: calc(100% + 24px);
-  min-height: 36px;
-  height: 36px;
-  margin: -8px -12px 0;
-  padding: 0 12px;
-  border: 0;
-  border-top: 1px solid #e4d9cc;
-  border-radius: 0;
-  background: #f6f1e8;
-  color: #6a3d28;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1;
-  touch-action: manipulation;
-}
-
-.snow-expand:hover {
-  background: #efe4d6;
-}
-
-.snow-expand:focus-visible {
-  outline: 2px solid #8c4a32;
-  outline-offset: -2px;
+  max-height: calc(1.5em * 3);
 }
 
 .snow-group {
@@ -1941,4 +1899,103 @@ button.danger-quiet {
 
 .layer-next-hint {
   margin-bottom: 6px;
+}
+
+.primary-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid #ddd4c6;
+  background: #fffdf8;
+}
+
+.primary-nav button[aria-current='page'] {
+  border-color: #8c4a32;
+  background: #f3e2d6;
+}
+
+.later-page,
+.cast-page {
+  padding: 16px 20px 40px;
+  overflow: auto;
+}
+
+.cast-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.cast-table th,
+.cast-table td {
+  border-bottom: 1px solid #e4d9cc;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.cast-detail td {
+  background: #fffdf8;
+}
+
+.person-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.person-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid #eee6da;
+}
+
+.person-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.person-field textarea,
+.sediment-panel textarea,
+.sediment-panel input,
+.sediment-panel select,
+.person-idea select {
+  font: inherit;
+  color: inherit;
+  background: #fffdf8;
+  border: 1px solid #6b645b;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.cast-warn {
+  color: #8c2f2f;
+}
+
+.trace-badge {
+  margin-left: 6px;
+}
+
+.sediment-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid #e4d9cc;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.sediment-panel fieldset {
+  border: 1px solid #e4d9cc;
+  display: flex;
+  gap: 12px;
+}
+
+.cm-host[hidden] {
+  display: none;
 }

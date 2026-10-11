@@ -20,6 +20,8 @@ import {
   type Card,
   type Layer,
 } from './document.ts'
+import { PersonZones } from './CastPage.tsx'
+import { entityForPersonCard, gradeVisibility } from './person-form.ts'
 import { nextStepHint, pipelineGroupLabel, pipelineGroupProgress } from './card-layout.ts'
 import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
@@ -113,6 +115,8 @@ export default function SideEditor({
   onExpand,
   onConfirmCandidate,
   onDismissCandidates,
+  onApply,
+  onOpenIdea,
 }: {
   cardId: string | null
   card: Card | null
@@ -127,6 +131,8 @@ export default function SideEditor({
   onExpand: (cardId: string, fieldKey: string | null) => void
   onConfirmCandidate: (id: string) => void
   onDismissCandidates: () => void
+  onApply: (recipe: (state: AppState) => AppState) => void
+  onOpenIdea: (cardId: string, sessionId?: string) => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -273,7 +279,12 @@ export default function SideEditor({
       card.layer !== '正文草稿' &&
       card.layer !== '一句话',
   )
-  const editable = Boolean(card) && canType
+  const personLayer = Boolean(
+    card && (card.layer === 'renwubiao' || card.layer === 'renwugushi' || card.layer === 'renwudangan'),
+  )
+  const personEntity = cardId && personLayer ? entityForPersonCard(documentState, cardId) : undefined
+  const visibility = gradeVisibility(personEntity?.fields.grade?.value ?? card?.fields.grade)
+  const editable = Boolean(card) && canType && !personLayer
 
   cardTextRef.current = text
   const stateSeq = writeSeqOf(documentState)
@@ -361,7 +372,18 @@ export default function SideEditor({
         </div>
       ) : null}
 
-      {card ? (
+      {card && personLayer && personEntity ? (
+        <div className="person-side" data-grade={visibility.level}>
+          <PersonZones
+            state={documentState}
+            entity={personEntity}
+            cardId={cardId}
+            canEdit={canType}
+            onApply={onApply}
+            onOpenIdea={onOpenIdea}
+          />
+        </div>
+      ) : card ? (
         <>
           <p className="hint">
             {upcoming
@@ -419,7 +441,7 @@ export default function SideEditor({
         </p>
       )}
 
-      <div className="cm-host" ref={hostRef} aria-label="卡片编辑器" />
+      <div className="cm-host" ref={hostRef} aria-label="卡片编辑器" hidden={personLayer} />
 
       {card ? (
         <>

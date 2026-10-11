@@ -1,13 +1,9 @@
 import { LAYERS, fieldKeys, layerLabel } from './document.ts'
 import type { Card, Layer } from './document.ts'
 
-// 收起时正文最多按 12 行显示，开头留在卡片上，底部留出展开条。
-// 展开条出不出现只看渲染后的正文高度。下面的字数估算只给首帧占位，不决定按钮。
-export const BODY_LINE_CAP = 12
+// 画布卡面是固定摘要：标题 + 最多 3 行正文 + 顶上的 meta。没有展开全文。
+export const BODY_LINE_CAP = 3
 export const COLUMN_GAP = 16
-export const EXPAND_BAR_PX = 36
-const CARD_PAD_BOTTOM = 10
-export const EXPAND_CHROME_PX = EXPAND_BAR_PX - CARD_PAD_BOTTOM
 
 const TITLE_PX = 16
 const TITLE_LH = 1.25
@@ -66,40 +62,20 @@ export function snowBodyLineCapPx(fontSize: string, lineHeight: string): number 
   return linePx * BODY_LINE_CAP
 }
 
-// 先去掉收起时的限高，再读全文高度。限高还在时，有的浏览器会把 scrollHeight 报成可见高度。
-export function snowExpandLabel(overflows: boolean, expanded: boolean): '展开全文' | '收起' | null {
-  if (!overflows) return null
-  return expanded ? '收起' : '展开全文'
-}
-
-export function measureSnowBodyOverflow(bodyEl: HTMLElement): boolean {
-  const style = getComputedStyle(bodyEl)
-  const cap = snowBodyLineCapPx(style.fontSize, style.lineHeight)
-  const previous = bodyEl.style.maxHeight
-  bodyEl.style.maxHeight = 'none'
-  const scrollHeight = bodyEl.scrollHeight
-  bodyEl.style.maxHeight = previous
-  return snowBodyOverflows(scrollHeight, cap)
-}
-
 export function estimateSnowCardHeight(input: {
   title: string
   body: string
   meta: string
   width: number
   expanded?: boolean
-  // 渲染测过、确认超过 12 行之后才传入。不传就按全文估高，不加展开条。
   overflows?: boolean
 }): number {
   const inner = contentWidth(input.width)
   const titleLines = Math.max(1, wrappedLines(input.title.trim() || '还没有写下内容', inner, TITLE_PX))
-  const rawBodyLines = wrappedLines(input.body, inner, BODY_PX)
-  const overflows = input.overflows === true
-  const bodyLines = overflows && !input.expanded ? BODY_LINE_CAP : rawBodyLines
+  const bodyLines = Math.min(wrappedLines(input.body, inner, BODY_PX), BODY_LINE_CAP)
   let height = 4 + 1 + 20 + 12 * 1.4 + 8
   height += titleLines * TITLE_PX * TITLE_LH
   if (bodyLines > 0) height += 4 + bodyLines * BODY_PX * BODY_LH
-  if (overflows) height += EXPAND_CHROME_PX
   return Math.ceil(height)
 }
 

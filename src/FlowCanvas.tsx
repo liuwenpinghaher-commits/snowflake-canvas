@@ -13,7 +13,7 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import { estimateSnowCardHeight, measureSnowBodyOverflow, shiftOverlappingCards, snowExpandLabel, type ShiftBox } from './card-layout.ts'
+import { estimateSnowCardHeight, shiftOverlappingCards, type ShiftBox } from './card-layout.ts'
 import { bodyTextForCard, cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
 
 type CardData = {
@@ -26,41 +26,15 @@ type CardData = {
   body: string
   meta: string
   width: number
-  expanded: boolean
   boxHeight: number
   onHeight: (id: string, height: number) => void
-  onToggleExpand: (id: string) => void
 }
 type GroupData = { text: string; conflict: boolean }
 
 function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
   const cardRef = useRef<HTMLDivElement>(null)
-  const bodyRef = useRef<HTMLDivElement>(null)
   const title = data.title.trim()
   const body = data.body.trim()
-  const [overflows, setOverflows] = useState(false)
-  const expanded = data.expanded && overflows
-  const expandLabel = snowExpandLabel(overflows, expanded)
-  useLayoutEffect(() => {
-    const el = bodyRef.current
-    if (!el || !body) {
-      setOverflows(false)
-      return
-    }
-    let measuring = false
-    const measure = () => {
-      const node = bodyRef.current
-      if (!node || measuring) return
-      measuring = true
-      const next = measureSnowBodyOverflow(node)
-      measuring = false
-      setOverflows((current) => (current === next ? current : next))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [body, data.width])
   useLayoutEffect(() => {
     const el = cardRef.current
     if (!el) return
@@ -74,7 +48,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
     const observer = new ResizeObserver(report)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [id, data.body, data.boxHeight, data.expanded, data.layerLabel, data.meta, data.onHeight, data.title, data.width, overflows])
+  }, [id, data.body, data.boxHeight, data.layerLabel, data.meta, data.onHeight, data.title, data.width])
   return (
     <div className="snow-node">
       <div
@@ -89,42 +63,8 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         </div>
         <div className="snow-copy">
           <div className="snow-title">{title || '还没有写下内容'}</div>
-          {body ? (
-            <div ref={bodyRef} className={overflows && !expanded ? 'snow-body is-collapsed' : 'snow-body'}>
-              {body}
-            </div>
-          ) : null}
+          {body ? <div className="snow-body">{body}</div> : null}
         </div>
-        {expandLabel ? (
-          <button
-            type="button"
-            className="snow-expand nodrag nopan nowheel"
-            aria-expanded={expanded}
-            onPointerDown={(event) => {
-              event.stopPropagation()
-            }}
-            onPointerUp={(event) => {
-              event.stopPropagation()
-            }}
-            onMouseDown={(event) => {
-              event.stopPropagation()
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
-            }}
-            onClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              data.onToggleExpand(id)
-            }}
-            onDoubleClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
-          >
-            {expandLabel}
-          </button>
-        ) : null}
         <Handle type="target" position={Position.Left} />
         {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
       </div>
@@ -150,9 +90,7 @@ function toFlowNode(
   flashId: string | null,
   conflict: boolean,
   measured: number | undefined,
-  expanded: boolean,
   onHeight: (id: string, height: number) => void,
-  onToggleExpand: (id: string) => void,
 ): Node {
   if (node.type === 'group') {
     return {
@@ -175,7 +113,6 @@ function toFlowNode(
     body: bodyText,
     meta: face.meta,
     width: node.width,
-    expanded,
   })
   const height = measured ?? estimated
   return {
@@ -196,10 +133,8 @@ function toFlowNode(
       body: bodyText,
       meta: face.meta,
       width: node.width,
-      expanded,
       boxHeight: height,
       onHeight,
-      onToggleExpand,
     },
     style: { width: node.width, height },
   }
@@ -253,18 +188,6 @@ export default function FlowCanvas({
   }, [nodesReady, nodes, paneWidth, paneHeight, getNodesBounds, setViewport])
 
   const [heights, setHeights] = useState<Record<string, number>>({})
-  // 展开记在本页内存里，按卡片 id。换选中的卡不会把已经展开的收回。刷新后回到全部收起。
-  const [expandedIds, setExpandedIds] = useState<Record<string, true>>({})
-  const toggleExpanded = useCallback((cardId: string) => {
-    setExpandedIds((current) => {
-      if (current[cardId]) {
-        const next = { ...current }
-        delete next[cardId]
-        return next
-      }
-      return { ...current, [cardId]: true }
-    })
-  }, [])
   const heightsRef = useRef(heights)
   heightsRef.current = heights
   const nodesRef = useRef(nodes)
@@ -384,9 +307,7 @@ export default function FlowCanvas({
       flashCardId,
       conflictIds?.has(node.id) ?? false,
       measured,
-      expandedIds[node.id] === true,
       onHeight,
-      toggleExpanded,
     )
     const held = dragged[node.id]
     return held ? { ...flow, position: held } : flow
@@ -464,9 +385,7 @@ export default function FlowCanvas({
         edges={flowEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onNodeClick={(event, node) => {
-          const target = event.target
-          if (target instanceof Element && target.closest('.snow-expand')) return
+        onNodeClick={(_event, node) => {
           onSelect(node.id)
         }}
         onNodeDoubleClick={(event, node) => {
