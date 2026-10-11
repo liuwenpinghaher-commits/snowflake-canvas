@@ -1450,7 +1450,7 @@ function keepCardMeta(previous: Card, next: Card): Card {
   return card
 }
 
-function cloneEntity(entity: Entity): Entity {
+export function cloneEntity(entity: Entity): Entity {
   const fields: Record<string, EntityField> = {}
   for (const [key, field] of Object.entries(entity.fields)) {
     if (key === 'philosophy') continue

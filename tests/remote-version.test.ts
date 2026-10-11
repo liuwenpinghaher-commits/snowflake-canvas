@@ -7,6 +7,7 @@ import {
   serializeDocument,
   setCardBody,
   type AppState,
+  type Entity,
 } from '../src/document.ts'
 import {
   MSG_CANON_MISMATCH,
@@ -345,6 +346,54 @@ describe('同一张卡两边都改过', () => {
     await ctl.mutate((state) => setCardBody(state, 'c2', '乙-我的'))
     expect(server.puts).toEqual(['"1"'])
   })
+})
+
+function ned(slug?: string): Entity {
+  const entity: Entity = {
+    id: 'ned',
+    entityType: 'person',
+    name: '奈德',
+    views: {},
+    fields: {},
+    arc: { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
+    premise: false,
+  }
+  if (slug) entity.slug = slug
+  return entity
+}
+
+describe('两个标签页名不一样', () => {
+  for (const pick of ['mine', 'server'] as const) {
+    it(`页名分歧时保存不得成功，选出「${pick === 'mine' ? '用我的' : '用服务器的'}」后文档只留下那一个页名`, async () => {
+      const server = fakeServer({ ...createDocument(`slug-${pick}`), entities: [ned('world/ned-stark')] })
+      const ctl = createPersistController(ports(), () => {})
+      await ctl.start()
+      server.edit((state) => ({ ...state, entities: [ned('world/ned-remote')] }))
+
+      await ctl.mutate((state) => ({ ...state, entities: [ned('world/ned-local')] }))
+      const blocked = ctl.snapshot()
+      expect(server.puts).toEqual(['"1"'])
+      expect(server.version).toBe(2)
+      expect(server.state().entities?.[0]?.slug).toBe('world/ned-remote')
+      expect(blocked.view.conflicts.map((item) => item.cardId)).toEqual(['entity-slug:ned'])
+      expect(blocked.view.conflicts[0]?.serverText).toContain('页名')
+      expect(blocked.view.conflicts[0]?.serverText).toContain('world/ned-remote')
+      expect(blocked.view.conflicts[0]?.mineText).toContain('页名')
+      expect(blocked.view.conflicts[0]?.mineText).toContain('world/ned-local')
+      expect(blocked.state.entities?.[0]?.slug).toBeUndefined()
+      expect(blocked.view.messages).toContain(MSG_CARD_CONFLICT)
+
+      await ctl.resolveCardConflict('entity-slug:ned', pick)
+      const chosen = pick === 'mine' ? 'world/ned-local' : 'world/ned-remote'
+      expect(server.puts).toEqual(['"1"', '"1"', '"2"'])
+      expect(server.version).toBe(3)
+      expect(server.state().entities?.[0]?.slug).toBe(chosen)
+      const saved = ctl.snapshot()
+      expect(saved.state.entities?.[0]?.slug).toBe(chosen)
+      expect(saved.view.conflicts).toEqual([])
+      expect(saved.view.messages).not.toContain(MSG_CARD_CONFLICT)
+    })
+  }
 })
 
 describe('合并后无悬空边', () => {

@@ -1,5 +1,6 @@
 import {
   applyComposition,
+  cloneEntity,
   collectPersonEntities,
   commitCardText,
   createDocument,
@@ -253,7 +254,13 @@ type OpenReason = 'refresh' | 'pick' | 'claim-button' | 'download' | 'open-file'
 type WriteResult =
   | { ok: true; logged: boolean; bytes: Uint8Array; merged?: boolean }
   | { ok: false; conflict?: false; mismatch?: boolean }
-  | { ok: false; conflict: true; pending: CardConflict[]; provisional: Uint8Array | null }
+  | {
+      ok: false
+      conflict: true
+      pending: CardConflict[]
+      entityConflicts: EntitySlugConflict[]
+      provisional: Uint8Array | null
+    }
 
 // 一次写入里，合并后又遇到 412 时最多再合并重发几轮。
 const REMOTE_MERGE_ROUNDS = 3
@@ -467,7 +474,7 @@ export interface ConflictChoiceRecord {
 }
 
 export type MergeOutcome =
-  | { kind: 'merged'; bytes: Uint8Array; conflicts: CardConflict[] }
+  | { kind: 'merged'; bytes: Uint8Array; conflicts: CardConflict[]; entityConflicts: EntitySlugConflict[] }
   | { kind: 'mismatch' }
 
 function sideKey(side: ConflictSide): string {
@@ -483,6 +490,82 @@ export interface EntitySlugConflict {
   field: 'slug'
   local: string
   remote: string
+}
+
+export const ENTITY_SLUG_CONFLICT_PREFIX = 'entity-slug:'
+
+export function entitySlugConflictId(entityId: string): string {
+  return `${ENTITY_SLUG_CONFLICT_PREFIX}${entityId}`
+}
+
+// 选择失效的条件是两边页名任一变了。只记一边的话，远端页名换过仍会沿用旧选择。
+export function entitySlugServerKey(local: string, remote: string): string {
+  return JSON.stringify({ field: 'slug', local, remote })
+}
+
+function parseEntitySlugServerKey(serverKey: string): { local: string; remote: string } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(serverKey)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as { field?: unknown; local?: unknown; remote?: unknown }
+  if (record.field !== 'slug' || typeof record.local !== 'string' || typeof record.remote !== 'string') return null
+  if (!record.local || !record.remote) return null
+  return { local: record.local, remote: record.remote }
+}
+
+function entitySlugCardConflict(conflict: EntitySlugConflict): CardConflict {
+  return {
+    cardId: entitySlugConflictId(conflict.entityId),
+    serverKey: entitySlugServerKey(conflict.local, conflict.remote),
+    server: {
+      card: { layer: 'situation', body: `页名 ${conflict.remote}`, fields: {} },
+      node: null,
+      edges: [],
+    },
+  }
+}
+
+function settleEntitySlugs(
+  entities: Entity[],
+  conflicts: readonly EntitySlugConflict[],
+  choices: ReadonlyMap<string, ConflictChoiceRecord>,
+): { entities: Entity[]; entityConflicts: EntitySlugConflict[] } {
+  if (conflicts.length === 0) return { entities, entityConflicts: [] }
+  const chosen = new Map<string, string>()
+  const entityConflicts: EntitySlugConflict[] = []
+  for (const conflict of conflicts) {
+    const serverKey = entitySlugServerKey(conflict.local, conflict.remote)
+    const choice = choices.get(entitySlugConflictId(conflict.entityId))
+    if (choice && choice.serverKey === serverKey) {
+      chosen.set(conflict.entityId, choice.pick === 'server' ? conflict.remote : conflict.local)
+    } else {
+      entityConflicts.push(conflict)
+    }
+  }
+  if (chosen.size === 0) return { entities, entityConflicts }
+  return {
+    entities: entities.map((entity) => {
+      const slug = chosen.get(entity.id)
+      return slug ? { ...entity, slug } : entity
+    }),
+    entityConflicts,
+  }
+}
+
+function applyEntitySlug(state: AppState, entityId: string, slug: string): AppState {
+  let found = false
+  const entities = (state.entities ?? []).map((entity) => {
+    if (entity.id !== entityId) return entity
+    found = true
+    const next = cloneEntity(entity)
+    next.slug = slug
+    return next
+  })
+  return found ? { ...state, entities } : state
 }
 
 function slugText(value: unknown): string | undefined {
@@ -556,26 +639,6 @@ function mergeSedimentLists(
   return order.map((requestId) => mergeSedimentEvent(baseMap.get(requestId), remoteMap.get(requestId), localMap.get(requestId)))
 }
 
-function copyEntity(entity: Entity): Entity {
-  const fields: Record<string, EntityField> = {}
-  for (const [key, field] of Object.entries(entity.fields)) {
-    if (key === 'philosophy') continue
-    fields[key] = { value: field.value, events: [...field.events] }
-  }
-  const copy: Entity = {
-    id: entity.id,
-    entityType: entity.entityType,
-    name: entity.name,
-    views: { ...entity.views },
-    fields,
-    arc: { ...entity.arc },
-    premise: entity.premise === true,
-  }
-  const slug = slugText(entity.slug)
-  if (slug) copy.slug = slug
-  return copy
-}
-
 function mergeEventIds(base: readonly string[], remote: readonly string[], local: readonly string[]): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -594,7 +657,7 @@ function mergeEntityRecord(
   sediment: readonly SedimentEvent[],
   conflicts: EntitySlugConflict[],
 ): Entity {
-  if (!remote || !local) return copyEntity((local ?? remote) as Entity)
+  if (!remote || !local) return cloneEntity((local ?? remote) as Entity)
   const fields: Record<string, EntityField> = {}
   const keys = new Set<string>()
   for (const side of [base, remote, local]) {
@@ -678,6 +741,7 @@ export function mergeSedimentAndEntities(
 
 // 三方合并：base 是本页上次成功写入的正本，remote 是服务器当前正本，local 是本页画布。
 // 两边都改过的卡按 choices 里作者的选择取一边；选择时看到的服务器版本已经变了，或还没选，就先留本页的，并列进 conflicts。
+// 实体页名两边不同也按 choices 取一边。没选，或选择对不上当前两边页名时，合并文档不写 slug，并列进 entityConflicts。
 export function mergeDocuments(
   baseBytes: Uint8Array,
   remoteBytes: Uint8Array,
@@ -741,8 +805,9 @@ export function mergeDocuments(
     { entities: remote.state.entities, sediment: remote.state.sediment },
     { entities: local.state.entities, sediment: local.state.sediment },
   )
-  const entities = ledger.entities
   const sediment = ledger.sediment
+  const settled = settleEntitySlugs(ledger.entities, ledger.conflicts, choices)
+  const entities = settled.entities
   const chapters = pickJson(base.state.chapters ?? [], remote.state.chapters ?? [], local.state.chapters ?? [])
   const pendingProseScenes = pickJson(
     base.state.pendingProseScenes ?? [],
@@ -754,6 +819,7 @@ export function mergeDocuments(
     mergedCards,
     endpointIds(entities, chapters),
   )
+  const entityConflicts: EntitySlugConflict[] = settled.entityConflicts
   return {
     kind: 'merged',
     bytes: documentToBytes({
@@ -766,6 +832,7 @@ export function mergeDocuments(
       activeId: local.state.activeId,
     }),
     conflicts,
+    entityConflicts,
   }
 }
 
@@ -806,10 +873,12 @@ function nodePlace(node: CanvasNode | null | undefined): string {
   return node ? `位置 ${Math.round(node.x)},${Math.round(node.y)}` : '无位置'
 }
 
-// 只接受不用作者选边就能合并的结果；有两边都改过的卡或正本对不上时返回 null。
+// 只接受不用作者选边就能合并的结果。有两边都改过的卡、两边页名不同，或正本对不上时返回 null。
 function mergeRemoteDocuments(baseBytes: Uint8Array, remoteBytes: Uint8Array, localBytes: Uint8Array): Uint8Array | null {
   const outcome = mergeDocuments(baseBytes, remoteBytes, localBytes)
-  return outcome.kind === 'merged' && outcome.conflicts.length === 0 ? outcome.bytes : null
+  if (outcome.kind !== 'merged') return null
+  if (outcome.conflicts.length > 0 || outcome.entityConflicts.length > 0) return null
+  return outcome.bytes
 }
 
 export function createMemoryChannel(): ChannelBus {
@@ -1236,7 +1305,7 @@ class Controller implements PersistController {
   private undoStack: AppState[] = []
   private remoteMode = false
   private remoteEtag = ''
-  // 两边都改过、还等作者选边的卡。非空时本页只改内存，不发写请求。
+  // 两边都改过、还等作者选边的卡，以及页名两边不同、还没选的实体。非空时本页只改内存，不发写请求。
   private readonly pendingConflicts = new Map<string, CardConflict>()
   // 作者已经选过的边，带着选择时看到的服务器版本；下一次写成功后清空。
   private readonly conflictChoices = new Map<string, ConflictChoiceRecord>()
@@ -1568,7 +1637,19 @@ class Controller implements PersistController {
     if (!entry || !this.acceptsEdits()) return
     this.conflictChoices.set(cardId, { pick, serverKey: entry.serverKey })
     this.pendingConflicts.delete(cardId)
-    if (pick === 'server') {
+    if (cardId.startsWith(ENTITY_SLUG_CONFLICT_PREFIX)) {
+      const sides = parseEntitySlugServerKey(entry.serverKey)
+      const entityId = cardId.slice(ENTITY_SLUG_CONFLICT_PREFIX.length)
+      const next = sides ? applyEntitySlug(this.state, entityId, pick === 'server' ? sides.remote : sides.local) : this.state
+      if (!sides || next === this.state) {
+        this.pendingConflicts.set(cardId, entry)
+        this.conflictChoices.delete(cardId)
+        this.emit()
+        return
+      }
+      if (pick === 'server') this.undoStack = []
+      this.state = next
+    } else if (pick === 'server') {
       this.undoStack = []
       this.state = applyConflictSide(this.state, cardId, entry.server)
     }
@@ -1848,12 +1929,19 @@ class Controller implements PersistController {
         }
         if (!saved.conflict || !saved.etag) return { ok: false }
         if (!saved.bytes || !base || round >= REMOTE_MERGE_ROUNDS) {
-          return { ok: false, conflict: true, pending: [], provisional: null }
+          return { ok: false, conflict: true, pending: [], entityConflicts: [], provisional: null }
         }
         const outcome = mergeDocuments(base, saved.bytes, sending, this.conflictChoices)
         if (outcome.kind === 'mismatch') return { ok: false, mismatch: true }
-        if (outcome.conflicts.length > 0) {
-          return { ok: false, conflict: true, pending: outcome.conflicts, provisional: outcome.bytes }
+        const entityConflicts: EntitySlugConflict[] = outcome.entityConflicts
+        if (outcome.conflicts.length > 0 || entityConflicts.length > 0) {
+          return {
+            ok: false,
+            conflict: true,
+            pending: outcome.conflicts,
+            entityConflicts,
+            provisional: outcome.bytes,
+          }
         }
         base = saved.bytes
         sending = outcome.bytes
@@ -1990,7 +2078,7 @@ class Controller implements PersistController {
         return false
       }
       if ('conflict' in result && result.conflict) {
-        this.takeConflict(sent, bytes, result.pending, result.provisional)
+        this.takeConflict(sent, bytes, result.pending, result.entityConflicts, result.provisional)
         if (this.pendingConflicts.size === 0) this.actionNotice = MSG_VERSION_MOVED
         this.failed = false
         this.stopped = false
@@ -2028,16 +2116,26 @@ class Controller implements PersistController {
     const parsed = parseCompleteDocument(again.bytes)
     if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
     for (const conflict of again.conflicts) this.pendingConflicts.set(conflict.cardId, conflict)
+    this.adoptEntityConflicts(again.entityConflicts, true)
+  }
+
+  private adoptEntityConflicts(conflicts: readonly EntitySlugConflict[], overwrite: boolean): void {
+    for (const conflict of conflicts) {
+      const card = entitySlugCardConflict(conflict)
+      if (overwrite || !this.pendingConflicts.has(card.cardId)) this.pendingConflicts.set(card.cardId, card)
+    }
   }
 
   private takeConflict(
     sent: AppState,
     sentBytes: Uint8Array,
     pending: CardConflict[],
+    entityConflicts: EntitySlugConflict[],
     provisional: Uint8Array | null,
   ): void {
     this.pendingConflicts.clear()
     for (const conflict of pending) this.pendingConflicts.set(conflict.cardId, conflict)
+    this.adoptEntityConflicts(entityConflicts, true)
     if (!provisional) return
     // 合进了别处的改动，旧的撤销步骤会把它们一起抹掉。
     this.undoStack = []
@@ -2049,6 +2147,7 @@ class Controller implements PersistController {
         for (const conflict of again.conflicts) {
           if (!this.pendingConflicts.has(conflict.cardId)) this.pendingConflicts.set(conflict.cardId, conflict)
         }
+        this.adoptEntityConflicts(again.entityConflicts, false)
       }
     }
     const parsed = parseCompleteDocument(next)
@@ -2621,6 +2720,15 @@ class Controller implements PersistController {
   private conflictViews(): CardConflictView[] {
     const views: CardConflictView[] = []
     for (const conflict of this.pendingConflicts.values()) {
+      if (conflict.cardId.startsWith(ENTITY_SLUG_CONFLICT_PREFIX)) {
+        const sides = parseEntitySlugServerKey(conflict.serverKey)
+        views.push({
+          cardId: conflict.cardId,
+          serverText: sides ? `页名 ${sides.remote}` : conflictSummary(conflict.server.card, conflict.server.node),
+          mineText: sides ? `页名 ${sides.local}` : '页名还没选',
+        })
+        continue
+      }
       const mineCard = this.state.snowflake.cards[conflict.cardId]
       const mineNode = this.state.canvas.nodes.find((node) => node.id === conflict.cardId)
       let serverText = conflictSummary(conflict.server.card, conflict.server.node)

@@ -17,6 +17,8 @@ import {
   createMemoryChannel,
   createPersistController,
   documentToBytes,
+  entitySlugConflictId,
+  entitySlugServerKey,
   formatLocalStart,
   mergeDocuments,
   mergeSedimentAndEntities,
@@ -772,15 +774,16 @@ describe('沉淀和实体合并', () => {
       { entityId: 'ned', field: 'slug', local: 'world/ned-local', remote: 'world/ned-remote' },
     ])
     expect(merged.entities[0]?.slug).toBeUndefined()
-    const outcome = mergeDocuments(
-      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-stark')], sediment: [] }),
-      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-remote')], sediment: [] }),
-      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-local')], sediment: [] }),
-    )
+    const base = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-stark')], sediment: [] })
+    const remote = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-remote')], sediment: [] })
+    const local = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-local')], sediment: [] })
+    const outcome = mergeDocuments(base, remote, local)
     expect(outcome.kind).toBe('merged')
-    if (outcome.kind === 'merged') {
-      expect(parseCompleteDocument(outcome.bytes)?.state.entities?.[0]?.slug).toBeUndefined()
-    }
+    if (outcome.kind !== 'merged') return
+    expect(outcome.entityConflicts).toEqual([
+      { entityId: 'ned', field: 'slug', local: 'world/ned-local', remote: 'world/ned-remote' },
+    ])
+    expect(parseCompleteDocument(outcome.bytes)?.state.entities?.[0]?.slug).toBeUndefined()
 
     const kept = mergeSedimentAndEntities(
       { entities: [nedEntity()], sediment: [] },
@@ -789,5 +792,39 @@ describe('沉淀和实体合并', () => {
     )
     expect(kept.conflicts).toEqual([])
     expect(kept.entities[0]?.slug).toBe('world/ned-remote')
+  })
+
+  it('选出一边后合并文档只留下被选中的页名，对不上的旧选择作废', () => {
+    const base = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-stark')], sediment: [] })
+    const remote = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-remote')], sediment: [] })
+    const local = documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-local')], sediment: [] })
+    const serverKey = entitySlugServerKey('world/ned-local', 'world/ned-remote')
+    for (const pick of ['mine', 'server'] as const) {
+      const outcome = mergeDocuments(
+        base,
+        remote,
+        local,
+        new Map([[entitySlugConflictId('ned'), { pick, serverKey }]]),
+      )
+      expect(outcome.kind).toBe('merged')
+      if (outcome.kind !== 'merged') continue
+      expect(outcome.entityConflicts).toEqual([])
+      expect(parseCompleteDocument(outcome.bytes)?.state.entities?.[0]?.slug).toBe(
+        pick === 'mine' ? 'world/ned-local' : 'world/ned-remote',
+      )
+    }
+
+    const stale = mergeDocuments(
+      base,
+      remote,
+      local,
+      new Map([[entitySlugConflictId('ned'), { pick: 'mine', serverKey: entitySlugServerKey('world/ned-local', 'world/ned-old') }]]),
+    )
+    expect(stale.kind).toBe('merged')
+    if (stale.kind !== 'merged') return
+    expect(stale.entityConflicts).toEqual([
+      { entityId: 'ned', field: 'slug', local: 'world/ned-local', remote: 'world/ned-remote' },
+    ])
+    expect(parseCompleteDocument(stale.bytes)?.state.entities?.[0]?.slug).toBeUndefined()
   })
 })

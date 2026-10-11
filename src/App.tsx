@@ -26,6 +26,7 @@ import {
 } from './books.ts'
 import { createBrowserPorts, triggerDownload } from './persist-browser.ts'
 import {
+  ENTITY_SLUG_CONFLICT_PREFIX,
   MSG_CARD_CONFLICT,
   MSG_KEEP_SNAPSHOT,
   MSG_SAVE_AS,
@@ -774,6 +775,15 @@ export default function App() {
           </p>
         ) : null}
       </div>
+      {view.conflicts
+        .filter((item) => item.cardId.startsWith(ENTITY_SLUG_CONFLICT_PREFIX))
+        .map((conflict) => (
+          <ConflictChoice
+            key={conflict.cardId}
+            conflict={conflict}
+            onPick={(pick) => void ctlRef.current?.resolveCardConflict(conflict.cardId, pick)}
+          />
+        ))}
       {page === 'cast' ? (
         <CastPage
           state={state}

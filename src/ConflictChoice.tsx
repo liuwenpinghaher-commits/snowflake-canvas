@@ -1,4 +1,4 @@
-import type { CardConflictView, ConflictPick } from './persist.ts'
+import { ENTITY_SLUG_CONFLICT_PREFIX, type CardConflictView, type ConflictPick } from './persist.ts'
 
 export default function ConflictChoice({
   conflict,
@@ -7,9 +7,11 @@ export default function ConflictChoice({
   conflict: CardConflictView
   onPick: (pick: ConflictPick) => void
 }) {
+  const pageName = conflict.cardId.startsWith(ENTITY_SLUG_CONFLICT_PREFIX)
+  const title = pageName ? '这个页名两边不一样，选一边留下' : '这张卡两边都改过，选一边留下'
   return (
-    <section className="conflict-choice" aria-label="这张卡两边都改过">
-      <p className="conflict-choice-head">这张卡两边都改过，选一边留下</p>
+    <section className="conflict-choice" aria-label={pageName ? '这个页名两边不一样' : '这张卡两边都改过'}>
+      <p className="conflict-choice-head">{title}</p>
       <p className="conflict-choice-line" title={conflict.serverText}>
         <span className="conflict-choice-side">服务器</span>
         {conflict.serverText}
