@@ -41,12 +41,14 @@ export default function CastPage({
   onApply,
   onOpenIdea,
   focus = null,
+  onPlaceOnCanvas,
 }: {
   state: AppState
   canEdit: boolean
   onApply: (recipe: (state: AppState) => AppState) => void
   onOpenIdea: OpenIdea
   focus?: CastFocus
+  onPlaceOnCanvas?: (entityId: string) => void
 }) {
   const [openRows, setOpenRows] = useState<Record<string, true>>(() =>
     focus?.entityId ? { [focus.entityId]: true } : {},
@@ -136,6 +138,7 @@ export default function CastPage({
                   onApply={onApply}
                   onOpenIdea={onOpenIdea}
                   focusFieldKey={focus?.entityId === entity.id ? focus.fieldKey : null}
+                  onPlaceOnCanvas={onPlaceOnCanvas}
                 />
               )
             })}
@@ -156,6 +159,7 @@ function PersonRow({
   onApply,
   onOpenIdea,
   focusFieldKey = null,
+  onPlaceOnCanvas,
 }: {
   state: AppState
   entity: Entity
@@ -166,16 +170,27 @@ function PersonRow({
   onApply: (recipe: (state: AppState) => AppState) => void
   onOpenIdea: OpenIdea
   focusFieldKey?: string | null
+  onPlaceOnCanvas?: (entityId: string) => void
 }) {
   const name = readPersonField(state, entity, 'name') || entity.name
   const sentence = readPersonField(state, entity, 'sentence')
   return (
     <>
-      <tr className="cast-summary">
+      <tr
+        className="cast-summary"
+        draggable={canEdit}
+        onDragStart={(event) => {
+          event.dataTransfer.setData('text/plain', `place-entity:${entity.id}`)
+          event.dataTransfer.effectAllowed = 'copy'
+        }}
+      >
         <td>{name || '未命名'}</td>
         <td>{visibility.level}</td>
         <td>{sentence}</td>
         <td>
+          <button type="button" disabled={!canEdit} onClick={() => onPlaceOnCanvas?.(entity.id)}>
+            放到画布
+          </button>
           {visibility.summaryOnly ? null : (
             <button type="button" aria-expanded={open} onClick={onToggle}>
               {open ? '收起' : '展开'}

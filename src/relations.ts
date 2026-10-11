@@ -124,6 +124,14 @@ function relationEnabled(relation: RelationKind | undefined, filter: RelationFil
   return chosen.includes(relation)
 }
 
+export function entityCanvasPaint(entityType: EntityType): { shape: 'square'; color: string } {
+  return { shape: 'square', color: ENTITY_COLORS[entityType] }
+}
+
+export function edgeKindLabel(kind: EdgeKind, relation?: RelationKind): string {
+  return edgeLabel(kind, relation) ?? ''
+}
+
 function edgeLabel(kind: EdgeKind, relation?: RelationKind): string | undefined {
   if (kind === 'appears-in') return '出场'
   if (kind === 'relates') return relation

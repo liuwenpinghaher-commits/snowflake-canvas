@@ -9,6 +9,7 @@ import BooksPage, { type NewBookInput } from './BooksPage.tsx'
 import CastPage from './CastPage.tsx'
 import ChapterPage from './ChapterPage.tsx'
 import RelationPage from './RelationPage.tsx'
+import { defaultRelationFilter, type RelationFilter } from './relations.ts'
 import {
   DEFAULT_BOOK_NAME,
   MSG_BOOK_UNSAVED,
@@ -43,18 +44,28 @@ import {
   type PersistSnapshot,
 } from './persist.ts'
 import {
+  RELATION_KINDS,
   addGroup,
+  appearanceDecision,
+  canvasEndpointId,
   cardFace,
   changeToLaterLayer,
+  chooseCanvasLink,
+  confirmAppearance,
   createCard,
   defaultFieldKey,
   deleteSelection,
   layerLabel,
-  linkCards,
+  legalEdgeKinds,
+  LINK_KIND_LABEL,
   moveNode,
+  placeEntityOnCanvas,
   adoptIntoCard,
   spawnChild,
+  type AppearanceDecision,
+  type FootnoteTarget,
   type Layer,
+  type LinkKind,
 } from './document.ts'
 import { createPersonEntity } from './person-form.ts'
 
@@ -71,6 +82,13 @@ export const LINE_HEIGHTS = [1.4, 1.5, 1.7] as const
 export const LINE_HEIGHT_DEFAULT = 1.5
 
 const HINT_SEEN_KEY = 'snowflake-hint-seen'
+
+function relationFilterFor(mode: 'project' | 'relate' | 'appear'): RelationFilter {
+  const base = defaultRelationFilter()
+  if (mode === 'project') return { ...base, ideaLayer: true, groups: { ...base.groups, 'projects-onto': true } }
+  if (mode === 'relate') return { ...base, ideaLayer: true, groups: { ...base.groups, relates: true, 'relates-entity': true } }
+  return { ...base, groups: { ...base.groups, 'appears-in': true } }
+}
 
 export function readLineHeight(raw: string | null | undefined): number {
   const value = Number(raw)
@@ -286,6 +304,12 @@ export default function App() {
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
   const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter'>('canvas')
+  const [linkAsk, setLinkAsk] = useState<{ from: string; to: string } | null>(null)
+  const [pickingRelation, setPickingRelation] = useState(false)
+  const [appearanceAsk, setAppearanceAsk] = useState<Exclude<AppearanceDecision, { kind: 'ignore' }> | null>(null)
+  const [relationNav, setRelationNav] = useState(0)
+  const [relationFocus, setRelationFocus] = useState<string | null>(null)
+  const [relationMode, setRelationMode] = useState<'project' | 'relate' | 'appear' | null>(null)
   const [discussFocus, setDiscussFocus] = useState<{
     cardId: string
     sessionId?: string
@@ -443,6 +467,29 @@ export default function App() {
   const openPersonField = (entityId: string, fieldKey: string) => {
     setCastFocus({ entityId, fieldKey })
     setPage('cast')
+  }
+
+  const openFootnote = (target: FootnoteTarget) => {
+    if (target.view === 'card') {
+      setPage('canvas')
+      setDismissedId(null)
+      ctlRef.current?.select(target.cardId)
+      return
+    }
+    if (target.view === 'cast') {
+      setCastFocus({ entityId: target.entityId, fieldKey: '' })
+      setPage('cast')
+      return
+    }
+    setRelationFocus(target.focusId)
+    setRelationMode(target.mode)
+    setRelationNav((current) => current + 1)
+    setPage('relation')
+  }
+
+  const placeOnCanvas = (entityId: string, x?: number, y?: number) => {
+    setPage('canvas')
+    void ctlRef.current?.mutate((current) => placeEntityOnCanvas(current, entityId, x, y), UNDOABLE)
   }
 
   const openBooks = (wizard: boolean) => {
@@ -759,6 +806,24 @@ export default function App() {
             className={page === id ? 'on' : ''}
             aria-current={page === id ? 'page' : undefined}
             onClick={() => setPage(id)}
+            onDragOver={
+              id === 'canvas'
+                ? (event) => {
+                    event.preventDefault()
+                  }
+                : undefined
+            }
+            onDrop={
+              id === 'canvas'
+                ? (event) => {
+                    const raw = event.dataTransfer.getData('text/plain')
+                    if (!raw.startsWith('place-entity:')) return
+                    event.preventDefault()
+                    if (!canEdit) return
+                    placeOnCanvas(raw.slice('place-entity:'.length))
+                  }
+                : undefined
+            }
           >
             {label}
           </button>
@@ -805,9 +870,22 @@ export default function App() {
           }}
           onOpenIdea={openIdea}
           focus={castFocus}
+          onPlaceOnCanvas={(entityId) => placeOnCanvas(entityId)}
         />
       ) : null}
-      {page === 'relation' ? <RelationPage state={state} /> : null}
+      {page === 'relation' ? (
+        <RelationPage
+          key={relationNav}
+          state={state}
+          initialFilter={relationMode ? relationFilterFor(relationMode) : undefined}
+          focusId={relationFocus}
+          onOpenPerson={(entityId) => {
+            setCastFocus({ entityId, fieldKey: '' })
+            setPage('cast')
+          }}
+          onOpenEncyclopedia={() => setPage('encyclopedia')}
+        />
+      ) : null}
       {page === 'encyclopedia' ? (
         <section className="later-page" aria-label="百科">
           <h2>百科</h2>
@@ -897,6 +975,16 @@ export default function App() {
                     }}
                     onOpenIdea={openIdea}
                     onOpenField={openPersonField}
+                    onPovLeave={(cardId, text) => {
+                      void (async () => {
+                        const ctl = ctlRef.current
+                        if (!ctl) return
+                        await ctl.commitText(cardId, 'pov', text)
+                        const decision = appearanceDecision(ctl.snapshot().state, cardId, text)
+                        if (decision.kind === 'ignore') return
+                        setAppearanceAsk(decision)
+                      })()
+                    }}
                   />
                 </div>
               </div>
@@ -926,8 +1014,17 @@ export default function App() {
             }}
             onLink={(fromId, toId) => {
               if (!canEdit) return
-              void ctlRef.current?.mutate((current) => linkCards(current, fromId, toId), UNDOABLE)
+              const current = ctlRef.current?.snapshot().state
+              if (!current) return
+              setPickingRelation(false)
+              setLinkAsk({ from: canvasEndpointId(current, fromId), to: canvasEndpointId(current, toId) })
             }}
+            onFootnote={openFootnote}
+            onPlaceEntity={(entityId, x, y) => {
+              if (!canEdit) return
+              placeOnCanvas(entityId, x, y)
+            }}
+            documentState={state}
             onCreateAt={(x, y) => {
               if (!canEdit) return
               void ctlRef.current?.mutate(
@@ -1021,6 +1118,98 @@ export default function App() {
                 下载
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {linkAsk ? (
+        <div className="modal-back" role="presentation">
+          <div className="modal" role="dialog" aria-label="这条线是什么">
+            <h2>这条线是什么</h2>
+            {legalEdgeKinds(state, linkAsk.from, linkAsk.to).length === 0 ? (
+              <p>这两端不能连</p>
+            ) : (
+              <div className="kind-options">
+                {pickingRelation
+                  ? RELATION_KINDS.map((relation) => (
+                      <button
+                        key={relation}
+                        type="button"
+                        onClick={() => {
+                          const ask = linkAsk
+                          setLinkAsk(null)
+                          setPickingRelation(false)
+                          void ctlRef.current?.mutate((current) => chooseCanvasLink(current, ask.from, ask.to, 'relates', relation), UNDOABLE)
+                        }}
+                      >
+                        {relation}
+                      </button>
+                    ))
+                  : legalEdgeKinds(state, linkAsk.from, linkAsk.to).map((kind: LinkKind) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        onClick={() => {
+                          if (kind === 'relates') {
+                            setPickingRelation(true)
+                            return
+                          }
+                          const ask = linkAsk
+                          setLinkAsk(null)
+                          void ctlRef.current?.mutate((current) => chooseCanvasLink(current, ask.from, ask.to, kind), UNDOABLE)
+                        }}
+                      >
+                        {LINK_KIND_LABEL[kind]}
+                      </button>
+                    ))}
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setLinkAsk(null)
+                  setPickingRelation(false)
+                }}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {appearanceAsk ? (
+        <div className="modal-back" role="presentation">
+          <div className="modal" role="dialog" aria-label={appearanceAsk.kind === 'missing' ? '没有这个人' : '要不要建成出场？'}>
+            {appearanceAsk.kind === 'missing' ? (
+              <>
+                <h2>没有这个人</h2>
+                <div className="modal-actions">
+                  <button type="button" onClick={() => setAppearanceAsk(null)}>
+                    知道了
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>要不要建成出场？</h2>
+                <div className="modal-actions">
+                  <button type="button" onClick={() => setAppearanceAsk(null)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ask = appearanceAsk
+                      setAppearanceAsk(null)
+                      if (ask.kind !== 'offer') return
+                      void ctlRef.current?.mutate((current) => confirmAppearance(current, ask.cardId, ask.entityId), UNDOABLE)
+                    }}
+                  >
+                    确认
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}

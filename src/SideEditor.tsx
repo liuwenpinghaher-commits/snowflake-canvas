@@ -15,6 +15,7 @@ import {
   isChoiceField,
   laterLayers,
   layerLabel,
+  markBookPremise,
   nextLayer,
   type AppState,
   type Card,
@@ -118,6 +119,7 @@ export default function SideEditor({
   onApply,
   onOpenIdea,
   onOpenField,
+  onPovLeave,
 }: {
   cardId: string | null
   card: Card | null
@@ -135,6 +137,7 @@ export default function SideEditor({
   onApply: (recipe: (state: AppState) => AppState) => void
   onOpenIdea: (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
   onOpenField: (entityId: string, fieldKey: string) => void
+  onPovLeave?: (cardId: string, text: string) => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -146,6 +149,7 @@ export default function SideEditor({
   const appliedRef = useRef<{ editable: boolean; cardId: string | null; fieldKey: string | null } | null>(null)
   const cardTextRef = useRef('')
   const onCommitRef = useRef(onCommit)
+  const onPovLeaveRef = useRef(onPovLeave)
   const canTypeRef = useRef(canType)
   const [fieldOverride, setFieldOverride] = useState<{
     cardId: string
@@ -161,6 +165,7 @@ export default function SideEditor({
   }, [cardId])
 
   onCommitRef.current = onCommit
+  onPovLeaveRef.current = onPovLeave
   canTypeRef.current = canType
 
   const fieldKey =
@@ -230,6 +235,12 @@ export default function SideEditor({
           EditorView.domEventHandlers({
             compositionstart() {
               composingRef.current = true
+              return false
+            },
+            blur(_event, editor) {
+              const target = appliedRef.current
+              if (!target?.cardId || target.fieldKey !== 'pov') return false
+              onPovLeaveRef.current?.(target.cardId, editor.state.doc.toString())
               return false
             },
             compositionend(_event, editor) {
@@ -420,6 +431,21 @@ export default function SideEditor({
           {card.layer === 'changci' ? (
             <p className="hint">主动时写目标、冲突、挫折；反应时写反应、两难、决定。这些都可以空着。</p>
           ) : null}
+          {card.layer === 'changci' && cardId ? (
+            <label className="fold-field field-row">
+              视角
+              <input
+                aria-label="视角"
+                key={`${cardId}:${card.fields.pov ?? ''}`}
+                defaultValue={card.fields.pov ?? ''}
+                disabled={!canType}
+                onBlur={(event) => {
+                  if (!canType) return
+                  onPovLeave?.(cardId, event.target.value)
+                }}
+              />
+            </label>
+          ) : null}
           {fieldKeys(card.layer).some((key) => !isChoiceField(key)) || extraFieldKeys(card).length > 0 ? (
             <FieldButtons
               card={card}
@@ -506,7 +532,12 @@ export default function SideEditor({
             />
           ) : null}
           {card && card.layer === 'situation' && cardId ? (
-            <IdeaGrowthList state={documentState} ideaId={cardId} onOpen={onOpenField} />
+            <>
+              <button type="button" disabled={!canType} onClick={() => onApply((current) => markBookPremise(current, cardId))}>
+                标为全书前提
+              </button>
+              <IdeaGrowthList state={documentState} ideaId={cardId} onOpen={onOpenField} />
+            </>
           ) : null}
         </>
       ) : null}

@@ -330,6 +330,11 @@ export interface BookChapter {
   id: string
   title: string
   scenes: BookScene[]
+  /** 节拍表尺长和每一格上的场 id。缺省时界面按 60 格空表显示，不另存一份。 */
+  beats?: {
+    length: 40 | 60 | 80 | 120
+    slots: string[][]
+  }
 }
 
 export interface PendingProseScene {
@@ -362,6 +367,8 @@ export interface CanvasNode {
   height: number
   text?: string
   color?: string
+  /** 有这个字段才是画布上的实体节点。坐标跟节点一起走现有保存，不另放一份。 */
+  entityId?: string
 }
 
 export interface CanvasEdge {
@@ -636,6 +643,7 @@ function keptExtraKey(layer: Layer, key: string): boolean {
   if (key === 'adopted' && fieldKeys(layer).length > 0) return true
   if (layer === 'renwubiao') return key === 'legacyFullSummary' || key === 'legacyNotes'
   if (layer === '场景表') return key === 'legacySummary'
+  if (layer === 'changci' && key === 'pov') return true
   return false
 }
 
@@ -1059,6 +1067,13 @@ export function changeToLaterLayer(state: AppState, cardId: string, layer: Layer
 export function deleteSelection(state: AppState, id: string): AppState {
   const node = state.canvas.nodes.find((item) => item.id === id)
   if (!node) return state
+  if (node.entityId) {
+    return {
+      ...state,
+      activeId: state.activeId === id ? null : state.activeId,
+      canvas: { ...state.canvas, nodes: state.canvas.nodes.filter((item) => item.id !== id) },
+    }
+  }
   if (node.type === 'group') {
     return {
       ...state,
@@ -1106,10 +1121,15 @@ export function commitCardText(
     card = { ...current, layer: '一句话', body: text, fields: { sentence: text } }
   } else {
     const fields = fieldsFor(current.layer, current.fields)
-    const key = allowedFieldKey(current, fieldKey)
-    if (key === 'philosophy') return state
-    if (key) fields[key] = text
-    if (keptExtraKey(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
+    if (current.layer === 'changci' && fieldKey === 'pov') {
+      if (text.trim()) fields.pov = text.trim()
+      else delete fields.pov
+    } else {
+      const key = allowedFieldKey(current, fieldKey)
+      if (key === 'philosophy') return state
+      if (key) fields[key] = text
+      if (keptExtraKey(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
+    }
     card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
   const painted = paintCard(state, cardId, card)
@@ -1190,6 +1210,7 @@ function pickNode(node: CanvasNode): CanvasNode {
   }
   if (node.text !== undefined) out.text = node.text
   if (node.color !== undefined) out.color = node.color
+  if (node.entityId) out.entityId = node.entityId
   return out
 }
 
@@ -1612,7 +1633,7 @@ function sceneOf(state: AppState, id: string): BookScene | undefined {
   return undefined
 }
 
-function edgeAllowed(state: AppState, from: string, to: string, kind: EdgeKind, extra?: EdgeExtra): boolean {
+export function edgeAllowed(state: AppState, from: string, to: string, kind: EdgeKind, extra?: EdgeExtra): boolean {
   const fromCard = state.snowflake.cards[from]
   const toCard = state.snowflake.cards[to]
   const fromEntity = (state.entities ?? []).find((entity) => entity.id === from)
@@ -1676,6 +1697,238 @@ export function addEdge(state: AppState, from: string, to: string, kind: EdgeKin
   if (kind === 'relates' && extra?.relation === '派生' && extra.derivedFrom) edge.derivedFrom = extra.derivedFrom
   if (kind === 'projects-onto') edge.sedimentEvents = []
   return { ...state, canvas: { ...state.canvas, edges: [...state.canvas.edges, edge] } }
+}
+
+export const LINK_KIND_LABEL = {
+  'grows-from': '生长',
+  relates: '关系',
+  foreshadow: '伏笔',
+  'projects-onto': '投影',
+  'appears-in': '出场',
+  'relates-entity': '实体关系',
+} as const
+
+export type LinkKind = keyof typeof LINK_KIND_LABEL
+
+const LINK_KIND_ORDER: readonly LinkKind[] = ['grows-from', 'relates', 'foreshadow', 'projects-onto', 'appears-in', 'relates-entity']
+
+/** 拖线面板用。chapter-in 不在这里。不合法的 kind 不会出现。 */
+export function legalEdgeKinds(state: AppState, from: string, to: string): LinkKind[] {
+  if (!from || !to || from === to) return []
+  const kinds: LinkKind[] = []
+  for (const kind of LINK_KIND_ORDER) {
+    if (kind === 'relates') {
+      if (edgeAllowed(state, from, to, 'relates', { relation: '互补' })) kinds.push(kind)
+      continue
+    }
+    if (kind === 'foreshadow') {
+      if (edgeAllowed(state, from, to, 'foreshadow', { foreshadow: '计划' })) kinds.push(kind)
+      continue
+    }
+    if (edgeAllowed(state, from, to, kind)) kinds.push(kind)
+  }
+  return kinds
+}
+
+export function chooseCanvasLink(state: AppState, from: string, to: string, kind: LinkKind, relation?: RelationKind): AppState {
+  if (!legalEdgeKinds(state, from, to).includes(kind)) return state
+  if (kind === 'relates') {
+    if (!relation || !isRelationKind(relation)) return state
+    return addEdge(state, from, to, 'relates', { relation })
+  }
+  if (kind === 'grows-from') return addEdge(state, from, to, 'grows-from')
+  if (kind === 'projects-onto') return addEdge(state, from, to, 'projects-onto')
+  if (kind === 'foreshadow') return addEdge(state, from, to, 'foreshadow')
+  if (kind === 'appears-in') return addEdge(state, from, to, 'appears-in')
+  return addEdge(state, from, to, 'relates-entity')
+}
+
+export function entityNodeId(entityId: string): string {
+  return `entity:${entityId}`
+}
+
+export function canvasEndpointId(state: AppState, nodeId: string): string {
+  const node = state.canvas.nodes.find((item) => item.id === nodeId)
+  return node?.entityId ?? nodeId
+}
+
+export function placeEntityOnCanvas(state: AppState, entityId: string, x?: number, y?: number): AppState {
+  const entity = (state.entities ?? []).find((item) => item.id === entityId)
+  if (!entity) return state
+  const id = entityNodeId(entityId)
+  const existing = state.canvas.nodes.find((node) => node.id === id || node.entityId === entityId)
+  if (existing) {
+    if (x === undefined || y === undefined) return state
+    return moveNode(state, existing.id, x, y)
+  }
+  const placed = state.canvas.nodes.filter((node) => node.entityId).length
+  const node: CanvasNode = {
+    id,
+    type: 'text',
+    x: x ?? 80 + placed * 36,
+    y: y ?? 80 + placed * 28,
+    width: 160,
+    height: 160,
+    text: entity.name,
+    entityId,
+  }
+  return { ...state, canvas: { ...state.canvas, nodes: [...state.canvas.nodes, node] } }
+}
+
+export function premiseCardId(state: AppState): string | null {
+  const theme = (state.entities ?? []).find((entity) => entity.entityType === 'theme' && entity.premise)
+  if (!theme?.id.startsWith('premise:')) return null
+  const cardId = theme.id.slice('premise:'.length)
+  const card = state.snowflake.cards[cardId]
+  if (!card || card.layer !== 'situation') return null
+  return cardId
+}
+
+export function premiseMark(state: AppState, cardId: string): '前提' | null {
+  return premiseCardId(state) === cardId ? '前提' : null
+}
+
+export function markBookPremise(state: AppState, cardId: string): AppState {
+  const card = state.snowflake.cards[cardId]
+  if (!card || card.layer !== 'situation') return state
+  const id = `premise:${cardId}`
+  const sentence = { value: card.body, events: [] as string[] }
+  let found = false
+  const entities = (state.entities ?? []).map((entity) => {
+    if (entity.id !== id) return entity.premise ? { ...entity, premise: false } : entity
+    found = true
+    return {
+      ...entity,
+      entityType: 'theme' as const,
+      name: firstLine(card.body) || '前提',
+      premise: true,
+      fields: { ...entity.fields, sentence: { value: card.body, events: entity.fields.sentence?.events ?? [] } },
+    }
+  })
+  if (!found) {
+    entities.push({
+      id,
+      entityType: 'theme',
+      name: firstLine(card.body) || '前提',
+      views: {},
+      fields: { sentence },
+      arc: emptyArc(),
+      premise: true,
+    })
+  }
+  return { ...state, entities }
+}
+
+export type FootnoteTarget =
+  | { view: 'card'; cardId: string }
+  | { view: 'cast'; entityId: string }
+  | { view: 'relation'; focusId: string; mode: 'project' | 'relate' | 'appear' }
+
+export interface FootnoteSegment {
+  text: string
+  target: FootnoteTarget
+}
+
+function entityById(state: AppState, id: string): Entity | undefined {
+  return (state.entities ?? []).find((entity) => entity.id === id)
+}
+
+/**
+ * 出场口径：场次卡（场景表或场次）数从这张卡连出的 appears-in；
+ * 实体节点数指向这个实体的 appears-in。没有的段不写进这一行。
+ */
+export function cardFootnotes(state: AppState, nodeId: string): FootnoteSegment[] {
+  const node = state.canvas.nodes.find((item) => item.id === nodeId)
+  const entityId = node?.entityId
+  const card = state.snowflake.cards[nodeId]
+  const self = new Set<string>([nodeId])
+  if (entityId) self.add(entityId)
+  const segments: FootnoteSegment[] = []
+  if (card) {
+    const sources = state.canvas.edges.filter((edge) => edge.kind === 'grows-from' && edge.toNode === nodeId && state.snowflake.cards[edge.fromNode])
+    if (sources.length > 0) {
+      const labels = sources.map((edge) => {
+        const title = cardFace(state.snowflake.cards[edge.fromNode]!).title.trim()
+        return title || edge.fromNode
+      })
+      segments.push({ text: `生长自 ${labels.join('、')}`, target: { view: 'card', cardId: sources[0]!.fromNode } })
+    }
+    const projections = state.canvas.edges.filter((edge) => edge.kind === 'projects-onto' && edge.fromNode === nodeId && entityById(state, edge.toNode))
+    if (projections.length > 0) {
+      segments.push({
+        text: `投影 ${projections.length}`,
+        target: { view: 'relation', focusId: projections[0]!.toNode, mode: 'project' },
+      })
+    }
+  }
+  const sceneCard = card && (card.layer === '场景表' || card.layer === 'changci')
+  if (sceneCard) {
+    const appearances = state.canvas.edges.filter((edge) => edge.kind === 'appears-in' && edge.fromNode === nodeId && entityById(state, edge.toNode))
+    if (appearances.length > 0) {
+      const entity = entityById(state, appearances[0]!.toNode)!
+      const target: FootnoteTarget =
+        entity.entityType === 'person'
+          ? { view: 'cast', entityId: entity.id }
+          : { view: 'relation', focusId: entity.id, mode: 'appear' }
+      segments.push({ text: `出场 ${appearances.length} 场`, target })
+    }
+  } else if (entityId) {
+    const appearances = state.canvas.edges.filter((edge) => edge.kind === 'appears-in' && edge.toNode === entityId && state.snowflake.cards[edge.fromNode])
+    if (appearances.length > 0) {
+      segments.push({
+        text: `出场 ${appearances.length} 场`,
+        target: { view: 'card', cardId: appearances[0]!.fromNode },
+      })
+    }
+  }
+  const relations = state.canvas.edges.filter((edge) => {
+    if (edge.kind !== 'relates' && edge.kind !== 'relates-entity') return false
+    const other = self.has(edge.fromNode) ? edge.toNode : self.has(edge.toNode) ? edge.fromNode : ''
+    if (!other) return false
+    return Boolean(state.snowflake.cards[other] || entityById(state, other))
+  })
+  if (relations.length > 0) {
+    const edge = relations[0]!
+    const other = self.has(edge.fromNode) ? edge.toNode : edge.fromNode
+    segments.push({ text: `关系 ${relations.length} 条`, target: { view: 'relation', focusId: other, mode: 'relate' } })
+  }
+  return segments
+}
+
+export function footnoteLine(state: AppState, nodeId: string): string {
+  return cardFootnotes(state, nodeId).map((segment) => segment.text).join(' · ')
+}
+
+function personCalled(state: AppState, entity: Entity): string {
+  const fieldName = entity.fields.name?.value?.trim() ?? ''
+  if (fieldName) return fieldName
+  const cardId = entity.views.renwubiao
+  const cardName = cardId ? (state.snowflake.cards[cardId]?.fields.name ?? '').trim() : ''
+  if (cardName) return cardName
+  return entity.name.trim()
+}
+
+export type AppearanceDecision =
+  | { kind: 'ignore' }
+  | { kind: 'missing'; name: string }
+  | { kind: 'offer'; cardId: string; entityId: string; name: string }
+
+export function appearanceDecision(state: AppState, cardId: string, pov: string): AppearanceDecision {
+  const card = state.snowflake.cards[cardId]
+  if (!card || (card.layer !== '场景表' && card.layer !== 'changci')) return { kind: 'ignore' }
+  const name = pov.trim()
+  if (!name) return { kind: 'ignore' }
+  const person = (state.entities ?? []).find((entity) => entity.entityType === 'person' && personCalled(state, entity) === name)
+  if (!person) return { kind: 'missing', name }
+  const exists = state.canvas.edges.some((edge) => edge.kind === 'appears-in' && edge.fromNode === cardId && edge.toNode === person.id)
+  if (exists) return { kind: 'ignore' }
+  return { kind: 'offer', cardId, entityId: person.id, name }
+}
+
+export function confirmAppearance(state: AppState, cardId: string, entityId: string): AppState {
+  const card = state.snowflake.cards[cardId]
+  if (!card || (card.layer !== '场景表' && card.layer !== 'changci')) return state
+  return addEdge(state, cardId, entityId, 'appears-in')
 }
 
 function orderEvents(events: readonly SedimentEvent[]): SedimentEvent[] {

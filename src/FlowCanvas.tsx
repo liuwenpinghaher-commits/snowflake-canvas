@@ -9,12 +9,28 @@ import {
   getViewportForBounds,
   useReactFlow,
   useStore,
+  type Edge,
   type Node,
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
 import { estimateSnowCardHeight, shiftOverlappingCards, type ShiftBox } from './card-layout.ts'
-import { bodyTextForCard, cardFace, laterLayers, layerLabel, type CanvasEdge, type CanvasNode, type Card } from './document.ts'
+import {
+  bodyTextForCard,
+  cardFace,
+  cardFootnotes,
+  laterLayers,
+  layerLabel,
+  premiseMark,
+  type AppState,
+  type CanvasEdge,
+  type CanvasNode,
+  type Card,
+  type Entity,
+  type FootnoteSegment,
+  type FootnoteTarget,
+} from './document.ts'
+import { entityCanvasPaint } from './relations.ts'
 
 type CardData = {
   layerLabel: string
@@ -28,8 +44,48 @@ type CardData = {
   width: number
   boxHeight: number
   onHeight: (id: string, height: number) => void
+  premise: boolean
+  footnotes: FootnoteSegment[]
+  footnoteKey: string
+  onFootnote: (target: FootnoteTarget) => void
 }
 type GroupData = { text: string; conflict: boolean }
+type EntityData = {
+  name: string
+  color: string
+  shape: 'square'
+  footnotes: FootnoteSegment[]
+  onFootnote: (target: FootnoteTarget) => void
+}
+
+function FootnoteRow({
+  segments,
+  onOpen,
+}: {
+  segments: FootnoteSegment[]
+  onOpen: (target: FootnoteTarget) => void
+}) {
+  if (segments.length === 0) return null
+  return (
+    <div className="snow-footnotes" aria-label="卡面脚注">
+      {segments.map((segment, index) => (
+        <span key={segment.text}>
+          {index > 0 ? ' · ' : null}
+          <button
+            type="button"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpen(segment.target)
+            }}
+          >
+            {segment.text}
+          </button>
+        </span>
+      ))}
+    </div>
+  )
+}
 
 function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
   const cardRef = useRef<HTMLDivElement>(null)
@@ -48,7 +104,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
     const observer = new ResizeObserver(report)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [id, data.body, data.boxHeight, data.layerLabel, data.meta, data.onHeight, data.title, data.width])
+  }, [id, data.body, data.boxHeight, data.footnoteKey, data.layerLabel, data.meta, data.onHeight, data.premise, data.title, data.width])
   return (
     <div className="snow-node">
       <div
@@ -57,6 +113,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         data-color={data.color}
       >
         {data.conflict ? <div className="conflict-badge">待选</div> : null}
+        {data.premise ? <div className="premise-badge">前提</div> : null}
         <div className="snow-kicker">
           <div className="snow-layer">{data.layerLabel}</div>
           {data.meta ? <div className="snow-meta">{data.meta}</div> : null}
@@ -65,6 +122,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
           <div className="snow-title">{title || '还没有写下内容'}</div>
           {body ? <div className="snow-body">{body}</div> : null}
         </div>
+        <FootnoteRow segments={data.footnotes} onOpen={data.onFootnote} />
         <Handle type="target" position={Position.Left} />
         {data.canGrow ? <Handle type="source" position={Position.Right} /> : null}
       </div>
@@ -81,7 +139,20 @@ function SnowGroup({ data }: NodeProps<Node<GroupData, 'snowGroup'>>) {
   )
 }
 
-const nodeTypes = { snowCard: SnowCard, snowGroup: SnowGroup }
+function SnowEntity({ data }: NodeProps<Node<EntityData, 'snowEntity'>>) {
+  return (
+    <div className="snow-node">
+      <div className="snow-entity" data-shape={data.shape} style={{ background: data.color, borderColor: data.color }}>
+        <div className="snow-entity-name">{data.name}</div>
+        <FootnoteRow segments={data.footnotes} onOpen={data.onFootnote} />
+      </div>
+      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Right} />
+    </div>
+  )
+}
+
+const nodeTypes = { snowCard: SnowCard, snowGroup: SnowGroup, snowEntity: SnowEntity }
 
 function toFlowNode(
   node: CanvasNode,
@@ -91,6 +162,9 @@ function toFlowNode(
   conflict: boolean,
   measured: number | undefined,
   onHeight: (id: string, height: number) => void,
+  premise: boolean,
+  footnotes: FootnoteSegment[],
+  onFootnote: (target: FootnoteTarget) => void,
 ): Node {
   if (node.type === 'group') {
     return {
@@ -135,9 +209,46 @@ function toFlowNode(
       width: node.width,
       boxHeight: height,
       onHeight,
+      premise,
+      footnotes,
+      footnoteKey: footnotes.map((segment) => segment.text).join('|'),
+      onFootnote,
     },
     style: { width: node.width, height },
   }
+}
+
+function entityFlowNode(
+  node: CanvasNode,
+  entity: Entity | undefined,
+  activeId: string | null,
+  footnotes: FootnoteSegment[],
+  onFootnote: (target: FootnoteTarget) => void,
+): Node {
+  const paint = entity ? entityCanvasPaint(entity.entityType) : null
+  return {
+    id: node.id,
+    type: 'snowEntity',
+    position: { x: node.x, y: node.y },
+    width: node.width,
+    height: node.height,
+    selected: node.id === activeId,
+    zIndex: 1,
+    data: {
+      name: entity?.name.trim() || node.text || '未命名',
+      color: paint?.color ?? 'transparent',
+      shape: 'square',
+      footnotes,
+      onFootnote,
+    },
+    style: { width: node.width, height: node.height },
+  }
+}
+
+function flowEndpoint(id: string, nodes: readonly CanvasNode[]): string | null {
+  if (nodes.some((node) => node.id === id)) return id
+  const via = nodes.find((node) => node.entityId === id)
+  return via?.id ?? null
 }
 
 export default function FlowCanvas({
@@ -153,6 +264,9 @@ export default function FlowCanvas({
   onSpawn,
   onLink,
   onCreateAt,
+  onFootnote,
+  onPlaceEntity,
+  documentState,
   flashCardId,
 }: {
   nodes: CanvasNode[]
@@ -167,6 +281,9 @@ export default function FlowCanvas({
   onSpawn: (fromId: string, x: number, y: number) => void
   onLink: (fromId: string, toId: string) => void
   onCreateAt: (x: number, y: number) => void
+  onFootnote: (target: FootnoteTarget) => void
+  onPlaceEntity: (entityId: string, x: number, y: number) => void
+  documentState: AppState
   flashCardId: string | null
 }) {
   const { screenToFlowPosition, fitView, getNodesBounds, setViewport } = useReactFlow()
@@ -298,7 +415,18 @@ export default function FlowCanvas({
   const [dragged, setDragged] = useState<Record<string, { x: number; y: number }>>({})
   const draggedRef = useRef(dragged)
   draggedRef.current = dragged
+  const onFootnoteRef = useRef(onFootnote)
+  onFootnoteRef.current = onFootnote
+  const openFootnote = useCallback((target: FootnoteTarget) => {
+    onFootnoteRef.current(target)
+  }, [])
   const flowNodes = nodes.map((node) => {
+    if (node.entityId) {
+      const entity = (documentState.entities ?? []).find((item) => item.id === node.entityId)
+      const flow = entityFlowNode(node, entity, activeId, cardFootnotes(documentState, node.id), openFootnote)
+      const held = dragged[node.id]
+      return held ? { ...flow, position: held } : flow
+    }
     const measured = node.type === 'group' ? undefined : heights[node.id]
     const flow = toFlowNode(
       node,
@@ -308,16 +436,25 @@ export default function FlowCanvas({
       conflictIds?.has(node.id) ?? false,
       measured,
       onHeight,
+      premiseMark(documentState, node.id) === '前提',
+      cardFootnotes(documentState, node.id),
+      openFootnote,
     )
     const held = dragged[node.id]
     return held ? { ...flow, position: held } : flow
   })
-  const flowEdges = edges.map((edge) => ({
-    id: edge.id,
-    source: edge.fromNode,
-    target: edge.toNode,
-    label: edge.label,
-  }))
+  const flowEdges: Edge[] = edges.flatMap((edge): Edge[] => {
+    const source = flowEndpoint(edge.fromNode, nodes)
+    const target = flowEndpoint(edge.toNode, nodes)
+    if (!source || !target) return []
+    if (edge.kind === 'projects-onto') {
+      return [{ id: edge.id, source, target, label: String(edge.sedimentEvents?.length ?? 0), style: { strokeDasharray: '6 4' } }]
+    }
+    if (edge.kind === 'appears-in') {
+      return [{ id: edge.id, source, target, style: { strokeWidth: 1 } }]
+    }
+    return [{ id: edge.id, source, target, label: edge.label }]
+  })
 
   // 拖动途中只挪页面上的位置；松手那一次（dragging 为 false）才写进画布。
   // 松手之后才按新高度解决重叠，拖的那张在拖动过程中不被下移打断。
@@ -392,8 +529,21 @@ export default function FlowCanvas({
           if (node.type !== 'snowCard') return
           event.preventDefault()
         }}
+        onDragOver={(event) => {
+          if ([...event.dataTransfer.types].includes('text/plain')) event.preventDefault()
+        }}
+        onDrop={(event) => {
+          const raw = event.dataTransfer.getData('text/plain')
+          if (!raw.startsWith('place-entity:')) return
+          event.preventDefault()
+          if (!canEdit) return
+          const entityId = raw.slice('place-entity:'.length)
+          const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+          onPlaceEntity(entityId, pos.x, pos.y)
+        }}
+        isValidConnection={(connection) => Boolean(connection.source && connection.target && connection.source !== connection.target)}
         onConnect={(connection) => {
-          if (!connection.source || !connection.target) return
+          if (!connection.source || !connection.target || connection.source === connection.target) return
           onLink(connection.source, connection.target)
         }}
         onConnectEnd={(event, connectionState) => {

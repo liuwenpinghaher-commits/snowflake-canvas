@@ -2,15 +2,14 @@ import { useState, type DragEvent } from 'react'
 import { frontText, type AppState } from './document.ts'
 import {
   BEAT_LENGTHS,
-  DEFAULT_BEAT_LENGTH,
   beatAnchors,
   chapterMark,
-  createBeatSheet,
+  hangSceneOnBeat,
   placeBeat,
-  resizeBeatSheet,
+  readBookBeats,
   sceneAppearanceNames,
+  setBeatLength,
   type BeatLength,
-  type BeatSlot,
 } from './chapter.ts'
 
 function readDrag(event: DragEvent<HTMLElement>): string {
@@ -27,9 +26,10 @@ export default function ChapterPage({
   onApply: (recipe: (state: AppState) => AppState) => void
 }) {
   const [tab, setTab] = useState<'scenes' | 'beats'>('scenes')
-  const [length, setLength] = useState<BeatLength>(DEFAULT_BEAT_LENGTH)
-  const [sheet, setSheet] = useState<BeatSlot[]>(() => createBeatSheet(DEFAULT_BEAT_LENGTH))
   const chapters = state.chapters ?? []
+  const storedBeats = readBookBeats(chapters)
+  const length = storedBeats.length
+  const sheet = storedBeats.slots
   const progress = chapterMark(chapters)
   const beatCards = Object.entries(state.snowflake.cards).filter(([, card]) => card.layer === 'changci')
   const anchors = beatAnchors(length)
@@ -49,18 +49,11 @@ export default function ChapterPage({
   }
 
   function hangScene(sceneId: string, index: number) {
-    setSheet((current) =>
-      current.map((slot, slotIndex) => {
-        const sceneIds = slot.sceneIds.filter((id) => id !== sceneId)
-        if (slotIndex === index) sceneIds.push(sceneId)
-        return { sceneIds }
-      }),
-    )
+    onApply((current) => hangSceneOnBeat(current, sceneId, index))
   }
 
   function chooseLength(next: BeatLength) {
-    setSheet((current) => resizeBeatSheet(current, next))
-    setLength(next)
+    onApply((current) => setBeatLength(current, next))
   }
 
   return (

@@ -116,3 +116,41 @@ export function sceneAppearanceNames(state: AppState, scene: BookScene): string[
 export function chapterMark(chapters: readonly BookChapter[] | undefined): { filled: number; total: number } {
   return outlineProgress(chapters)
 }
+
+function storedLength(value: number): value is BeatLength {
+  return (BEAT_LENGTHS as readonly number[]).includes(value)
+}
+
+/** 旧书没有 beats 时按 60 格空表显示。节拍表只认 slots，大纲进度不看这里。 */
+export function readBookBeats(chapters: readonly BookChapter[] | undefined): { length: BeatLength; slots: BeatSlot[] } {
+  for (const chapter of chapters ?? []) {
+    const beats = chapter.beats
+    if (!beats || !storedLength(beats.length) || !Array.isArray(beats.slots) || beats.slots.length !== beats.length) continue
+    return { length: beats.length, slots: beats.slots.map((sceneIds) => ({ sceneIds: [...sceneIds] })) }
+  }
+  return { length: DEFAULT_BEAT_LENGTH, slots: createBeatSheet(DEFAULT_BEAT_LENGTH) }
+}
+
+export function writeBookBeats(state: AppState, length: BeatLength, slots: readonly BeatSlot[]): AppState {
+  const beats = { length, slots: slots.map((slot) => [...slot.sceneIds]) }
+  return { ...state, chapters: (state.chapters ?? []).map((chapter) => ({ ...chapter, beats })) }
+}
+
+export function hangSceneOnBeat(state: AppState, sceneId: string, index: number): AppState {
+  const known = (state.chapters ?? []).some((chapter) => chapter.scenes.some((scene) => scene.id === sceneId))
+  if (!known) return state
+  const current = readBookBeats(state.chapters)
+  if (index < 0 || index >= current.slots.length) return state
+  const slots = current.slots.map((slot) => ({ sceneIds: slot.sceneIds.filter((id) => id !== sceneId) }))
+  const bucket = slots[index]
+  if (!bucket) return state
+  bucket.sceneIds.push(sceneId)
+  return writeBookBeats(state, current.length, slots)
+}
+
+export function setBeatLength(state: AppState, length: BeatLength): AppState {
+  const current = readBookBeats(state.chapters)
+  if (current.length === length && (state.chapters ?? []).every((chapter) => chapter.beats?.length === length)) return state
+  const slots = current.length === length ? current.slots : resizeBeatSheet(current.slots, length)
+  return writeBookBeats(state, length, slots)
+}

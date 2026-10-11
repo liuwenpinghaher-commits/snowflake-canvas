@@ -330,6 +330,7 @@ function nodeJson(node: CanvasNode): string {
     height: node.height,
     text: node.text ?? '',
     color: node.color ?? '',
+    entityId: node.entityId ?? '',
   })
 }
 
@@ -868,8 +869,33 @@ function cloneScene(scene: BookScene): BookScene {
   return next
 }
 
+function cloneBeats(beats: NonNullable<BookChapter['beats']>): NonNullable<BookChapter['beats']> {
+  return { length: beats.length, slots: beats.slots.map((slot) => [...slot]) }
+}
+
 function cloneChapter(chapter: BookChapter): BookChapter {
-  return { id: chapter.id, title: chapter.title, scenes: chapter.scenes.map(cloneScene) }
+  const next: BookChapter = { id: chapter.id, title: chapter.title, scenes: chapter.scenes.map(cloneScene) }
+  if (chapter.beats) next.beats = cloneBeats(chapter.beats)
+  return next
+}
+
+function beatsSignature(beats: BookChapter['beats'] | undefined): string {
+  if (!beats) return ''
+  return JSON.stringify({ length: beats.length, slots: beats.slots })
+}
+
+function pickBeats(
+  base: BookChapter['beats'] | undefined,
+  remote: BookChapter['beats'] | undefined,
+  local: BookChapter['beats'] | undefined,
+): BookChapter['beats'] | undefined {
+  const baseKey = beatsSignature(base)
+  const remoteKey = beatsSignature(remote)
+  const localKey = beatsSignature(local)
+  if (localKey === remoteKey) return local
+  if (localKey === baseKey) return remote
+  if (remoteKey === baseKey) return local
+  return local
 }
 
 function orderedPresent(
@@ -971,7 +997,10 @@ function mergeChapterLists(
       const only = localScene ?? remoteScene
       return only ? [cloneScene(only)] : []
     })
-    return [{ id, title, scenes }]
+    const beats = pickBeats(previous?.beats, incoming.beats, mine.beats)
+    const chapter: BookChapter = { id, title, scenes }
+    if (beats) chapter.beats = cloneBeats(beats)
+    return [chapter]
   })
   return { chapters, conflicts }
 }
@@ -1407,9 +1436,33 @@ function parseChapterList(value: unknown): BookChapter[] {
         scenes.push(next)
       }
     }
-    chapters.push({ id: item.id, title, scenes })
+    const chapter: BookChapter = { id: item.id, title, scenes }
+    const beats = parseBeats(item.beats)
+    if (beats) chapter.beats = beats
+    chapters.push(chapter)
   }
   return chapters
+}
+
+function isBeatLength(value: unknown): value is 40 | 60 | 80 | 120 {
+  return value === 40 || value === 60 || value === 80 || value === 120
+}
+
+function parseBeats(value: unknown): BookChapter['beats'] | undefined {
+  if (!isRecord(value) || !isBeatLength(value.length)) return undefined
+  const length = value.length
+  if (!Array.isArray(value.slots) || value.slots.length !== length) return undefined
+  const slots: string[][] = []
+  for (const slot of value.slots) {
+    if (!Array.isArray(slot)) return undefined
+    const ids: string[] = []
+    for (const id of slot) {
+      if (typeof id !== 'string' || id.length === 0) return undefined
+      ids.push(id)
+    }
+    slots.push(ids)
+  }
+  return { length, slots }
 }
 
 function parseOriginAnchor(value: unknown): OriginAnchor | undefined {
@@ -1463,6 +1516,7 @@ function parseNode(value: unknown): CanvasNode | null {
     if (typeof value.color !== 'string') return null
     node.color = value.color
   }
+  if (typeof value.entityId === 'string' && value.entityId.length > 0) node.entityId = value.entityId
   return node
 }
 
