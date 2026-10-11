@@ -24,7 +24,10 @@ import {
   withFirstAsk,
   withLast,
   withSession,
+  fetchMessagePage,
 } from './discuss-store.mjs'
+import { getImportProgress, importPlainText, setImportProgress } from './import-book.mjs'
+import { writeSediment } from './sediment.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -1195,6 +1198,27 @@ async function proxyGatewayStream(raw, upstream) {
   }
 }
 
+async function resolveSedimentQuote(sessionId, quote) {
+  const trimmed = quote.trim()
+  let page
+  try {
+    page = await fetchMessagePage(gatewayFetch, sessionId, { limit: 60 })
+  } catch {
+    return { error: `对不上这条消息：${trimmed}` }
+  }
+  const messages = Array.isArray(page.messages) ? page.messages : []
+  const hit = [...messages].reverse().find((item) => item && typeof item.content === 'string' && item.content.trim() === trimmed)
+  if (!hit) return { error: `对不上这条消息：${trimmed}` }
+  const resolved = await resolveAdoptionKey(gatewayFetch, sessionId, {
+    role: hit.role,
+    at: hit.at || '',
+    content: hit.content,
+    messageId: hit.id,
+  })
+  if (!resolved || !resolved.key) return { error: `对不上这条消息：${trimmed}` }
+  return { adoptionKey: resolved.key }
+}
+
 function registerApi(app, prefix) {
   // 画布和讨论接口各挂两份：旧路径落到活动书，/api/books/:bookId/... 落到指定的书。
   const scoped = (method, path, handler) => {
@@ -1279,6 +1303,60 @@ function registerApi(app, prefix) {
     }
     reply.header('Cache-Control', 'no-store')
     return reply.send({ deleted: book.id, activeBookId })
+  })
+
+  app.post(`${prefix}/api/books/:bookId/import`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const text = request.body && typeof request.body.text === 'string' ? request.body.text : undefined
+    if (typeof text !== 'string') {
+      reply.code(400)
+      return reply.send({ error: '导入要带文本字段 text' })
+    }
+    if (text.trim() === '') {
+      const progress = { status: 'failed', chapterCount: 0, ideaCount: 0, pendingCount: 0, error: '导入文本是空的，没有建章' }
+      setImportProgress(book.id, progress)
+      reply.code(400)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ error: progress.error })
+    }
+    setImportProgress(book.id, { status: 'running', chapterCount: 0, ideaCount: 0, pendingCount: 0, error: '' })
+    try {
+      const outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        const imported = importPlainText(current.document, text)
+        await commitEnvelope(book, envelope(current.version + 1, imported.document, current.snapshots))
+        return imported.counts
+      })
+      const progress = {
+        status: 'done',
+        chapterCount: outcome.chapterCount,
+        ideaCount: outcome.ideaCount,
+        pendingCount: outcome.pendingCount,
+        error: '',
+      }
+      setImportProgress(book.id, progress)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send(progress)
+    } catch (error) {
+      const progress = {
+        status: 'failed',
+        chapterCount: 0,
+        ideaCount: 0,
+        pendingCount: 0,
+        error: error instanceof Error ? error.message : '导入没有完成',
+      }
+      setImportProgress(book.id, progress)
+      reply.code(error && error.statusCode ? error.statusCode : 500)
+      return reply.send({ error: progress.error })
+    }
+  })
+
+  app.get(`${prefix}/api/books/:bookId/import`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(getImportProgress(book.id))
   })
 
   scoped('GET', '/canvas', async (request, reply) => {
@@ -1500,6 +1578,40 @@ function registerApi(app, prefix) {
     } catch (error) {
       return discussFailure(reply, error, '采纳记录没有存上')
     }
+  })
+
+  scoped('POST', '/sediment', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        const raw = await readSessionRaw(book)
+        const store = raw && !isLegacyRecord(raw) ? normalizeStore(raw) : { cards: {} }
+        const result = await writeSediment(
+          { document: current.document, store, bookId: book.id, body },
+          { addTimeline, gbrainDisabled, resolveQuote: resolveSedimentQuote },
+        )
+        if (result.statusCode >= 400) return result
+        const nextText = JSON.stringify(result.document)
+        if (nextText !== JSON.stringify(current.document)) {
+          await commitEnvelope(book, envelope(current.version + 1, result.document, current.snapshots))
+        }
+        if (raw && !isLegacyRecord(raw)) {
+          const before = JSON.stringify(normalizeStore(raw))
+          const after = JSON.stringify(normalizeStore(result.store))
+          if (before !== after) await writeSessionStore(book, result.store, knownSessionIds(normalizeStore(raw)))
+        }
+        return result
+      })
+    } catch (error) {
+      return discussFailure(reply, error, '沉淀没有写上')
+    }
+    reply.code(outcome.statusCode)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(outcome.payload)
   })
 
   scoped('POST', '/discuss/stream', async (request, reply) => {

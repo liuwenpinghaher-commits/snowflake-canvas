@@ -26,6 +26,8 @@ import {
   type EntityField,
   type LooseCard,
   type PendingProseScene,
+  type PendingEntity,
+  type OriginAnchor,
   type SedimentEvent,
   ARC_KEYS,
   SEDIMENT_ACTIONS,
@@ -720,6 +722,7 @@ function toAppState(value: unknown): AppState | null {
     sediment,
     chapters,
     pendingProseScenes: parsePendingList(value.pendingProseScenes),
+    pendingEntities: parsePendingEntities(value.pendingEntities),
     activeId: null,
   }
   state = mirrorPhilosophy(state)
@@ -848,6 +851,25 @@ function parseChapterList(value: unknown): BookChapter[] {
   return chapters
 }
 
+function parseOriginAnchor(value: unknown): OriginAnchor | undefined {
+  if (!isRecord(value) || typeof value.chapterId !== 'string' || value.chapterId.length === 0) return undefined
+  const anchor: OriginAnchor = { chapterId: value.chapterId }
+  if (typeof value.sceneId === 'string' && value.sceneId.length > 0) anchor.sceneId = value.sceneId
+  if (typeof value.charOffset === 'number' && Number.isFinite(value.charOffset)) anchor.charOffset = value.charOffset
+  return anchor
+}
+
+function parsePendingEntities(value: unknown): PendingEntity[] {
+  if (!Array.isArray(value)) return []
+  const pending: PendingEntity[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.name !== 'string' || item.name.length === 0) continue
+    if (!Array.isArray(item.cardIds) || !item.cardIds.every((id) => typeof id === 'string' && id.length > 0)) continue
+    pending.push({ name: item.name, cardIds: [...item.cardIds] })
+  }
+  return pending
+}
+
 function parsePendingList(value: unknown): PendingProseScene[] {
   if (!Array.isArray(value)) return []
   const pending: PendingProseScene[] = []
@@ -952,6 +974,8 @@ function parseCard(value: unknown): LooseCard | null {
   if (typeof value.derivedFrom === 'string' && value.derivedFrom.length > 0) card.derivedFrom = value.derivedFrom
   const arc = parseArc(value.arc)
   if (arc) card.arc = arc
+  const originAnchor = parseOriginAnchor(value.originAnchor)
+  if (originAnchor) card.originAnchor = originAnchor
   return card
 }
 

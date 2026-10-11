@@ -40,18 +40,31 @@ export function emptyStore() {
   return { cards: {} }
 }
 
+function copyAdoptionFields(entry, item) {
+  if (!entry.messageId && typeof item.messageId === 'string' && item.messageId) entry.messageId = item.messageId
+  if (!entry.sedimentStatus && (item.sedimentStatus === 'written' || item.sedimentStatus === 'failed')) {
+    entry.sedimentStatus = item.sedimentStatus
+  }
+  if (!entry.requestId && typeof item.requestId === 'string' && item.requestId) entry.requestId = item.requestId
+  if (!entry.text && typeof item.text === 'string' && item.text) entry.text = item.text
+}
+
 function normalizeAdoptions(value) {
   const list = Array.isArray(value) ? value : []
   const out = []
-  const seen = new Set()
+  const seen = new Map()
   for (const item of list) {
     if (!item || typeof item.key !== 'string' || !item.key.trim()) continue
     const key = item.key.trim()
-    if (seen.has(key)) continue
-    seen.add(key)
+    const prev = seen.get(key)
+    if (prev) {
+      copyAdoptionFields(prev, item)
+      continue
+    }
     const entry = { key, adoptedAt: typeof item.adoptedAt === 'string' ? item.adoptedAt : '' }
-    if (typeof item.messageId === 'string' && item.messageId) entry.messageId = item.messageId
+    copyAdoptionFields(entry, item)
     out.push(entry)
+    seen.set(key, entry)
   }
   return out
 }
@@ -225,6 +238,25 @@ export function withAdoption(store, cardId, sessionId, adoption) {
   const record = { key: adoption.key, adoptedAt: adoption.adoptedAt || new Date().toISOString() }
   if (adoption.messageId) record.messageId = String(adoption.messageId)
   entry.adoptions = [...list, record]
+  return next
+}
+
+// 沉淀只在已有采纳上补状态和 requestId。没有这条采纳时补一条，不改「采纳进本念头」的入口。
+export function markAdoptionSediment(store, cardId, sessionId, adoptionKey, patch) {
+  const next = normalizeStore(store)
+  if (!adoptionKey) return next
+  const entry = sessionAt(next, cardId, sessionId)
+  if (!entry) return next
+  const list = entry.adoptions ? [...entry.adoptions] : []
+  const index = list.findIndex((item) => item.key === adoptionKey)
+  const record = index >= 0 ? { ...list[index] } : { key: adoptionKey, adoptedAt: new Date().toISOString() }
+  if (patch && (patch.sedimentStatus === 'written' || patch.sedimentStatus === 'failed')) {
+    record.sedimentStatus = patch.sedimentStatus
+  }
+  if (patch && typeof patch.requestId === 'string' && patch.requestId) record.requestId = patch.requestId
+  if (index >= 0) list[index] = record
+  else list.push(record)
+  entry.adoptions = list
   return next
 }
 

@@ -378,6 +378,17 @@ export interface CanvasEdge {
   sedimentEvents?: string[]
 }
 
+export interface OriginAnchor {
+  chapterId: string
+  sceneId?: string
+  charOffset?: number
+}
+
+export interface PendingEntity {
+  name: string
+  cardIds: string[]
+}
+
 export interface Card {
   layer: Layer
   body: string
@@ -387,6 +398,7 @@ export interface Card {
   /** 正文草稿指向某场的 id。边上的 derivedFrom 是讨论来源，不是这个字段。 */
   derivedFrom?: string
   arc?: ArcCells
+  originAnchor?: OriginAnchor
 }
 
 export interface LooseCard {
@@ -397,6 +409,7 @@ export interface LooseCard {
   premise?: boolean
   derivedFrom?: string
   arc?: ArcCells
+  originAnchor?: OriginAnchor
 }
 
 export interface AppState {
@@ -412,6 +425,7 @@ export interface AppState {
   sediment?: SedimentEvent[]
   chapters?: BookChapter[]
   pendingProseScenes?: PendingProseScene[]
+  pendingEntities?: PendingEntity[]
   activeId: string | null
 }
 
@@ -834,6 +848,7 @@ export function createDocument(fileId: string): AppState {
     sediment: [],
     chapters: [],
     pendingProseScenes: [],
+    pendingEntities: [],
     activeId: null,
   }
 }
@@ -1204,6 +1219,7 @@ export function serializeDocument(state: AppState): {
   sediment?: SedimentEvent[]
   chapters?: BookChapter[]
   pendingProseScenes?: PendingProseScene[]
+  pendingEntities?: PendingEntity[]
 } {
   const cards: Record<string, Card> = {}
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
@@ -1218,12 +1234,20 @@ export function serializeDocument(state: AppState): {
     if (card.premise) stored.premise = true
     if (card.derivedFrom) stored.derivedFrom = card.derivedFrom
     if (card.arc) stored.arc = normalizeArc(card.arc)
+    if (card.originAnchor?.chapterId) {
+      stored.originAnchor = {
+        chapterId: card.originAnchor.chapterId,
+        ...(card.originAnchor.sceneId ? { sceneId: card.originAnchor.sceneId } : {}),
+        ...(typeof card.originAnchor.charOffset === 'number' ? { charOffset: card.originAnchor.charOffset } : {}),
+      }
+    }
     cards[id] = stored
   }
   const entities = (state.entities ?? []).map(cloneEntity)
   const sediment = (state.sediment ?? []).map(cloneSediment)
   const chapters = state.chapters ?? []
   const pending = state.pendingProseScenes ?? []
+  const pendingEntities = (state.pendingEntities ?? []).map((item) => ({ name: item.name, cardIds: [...item.cardIds] }))
   return {
     canvas: {
       nodes: state.canvas.nodes.map(pickNode),
@@ -1237,6 +1261,7 @@ export function serializeDocument(state: AppState): {
     ...(sediment.length > 0 ? { sediment } : {}),
     ...(chapters.length > 0 ? { chapters } : {}),
     ...(pending.length > 0 ? { pendingProseScenes: pending } : {}),
+    ...(pendingEntities.length > 0 ? { pendingEntities } : {}),
   }
 }
 
@@ -1249,6 +1274,7 @@ interface DraftCard {
   premise?: boolean
   derivedFrom?: string
   arc?: ArcCells
+  originAnchor?: OriginAnchor
 }
 
 function mergeText(base: string, extra: string): string {
@@ -1308,6 +1334,7 @@ export function loadCards(
       premise: card.premise,
       derivedFrom: card.derivedFrom,
       arc: card.arc,
+      originAnchor: card.originAnchor,
     })
   }
 
@@ -1395,6 +1422,13 @@ function attachDraftMeta(card: Card, draft: DraftCard): Card {
   if (draft.premise) card.premise = true
   if (draft.derivedFrom) card.derivedFrom = draft.derivedFrom
   if (draft.arc) card.arc = normalizeArc(draft.arc)
+  if (draft.originAnchor?.chapterId) {
+    card.originAnchor = {
+      chapterId: draft.originAnchor.chapterId,
+      ...(draft.originAnchor.sceneId ? { sceneId: draft.originAnchor.sceneId } : {}),
+      ...(typeof draft.originAnchor.charOffset === 'number' ? { charOffset: draft.originAnchor.charOffset } : {}),
+    }
+  }
   return card
 }
 
@@ -1404,6 +1438,13 @@ function keepCardMeta(previous: Card, next: Card): Card {
   if (previous.premise) card.premise = true
   if (previous.derivedFrom) card.derivedFrom = previous.derivedFrom
   if (previous.arc) card.arc = normalizeArc(previous.arc)
+  if (previous.originAnchor?.chapterId) {
+    card.originAnchor = {
+      chapterId: previous.originAnchor.chapterId,
+      ...(previous.originAnchor.sceneId ? { sceneId: previous.originAnchor.sceneId } : {}),
+      ...(typeof previous.originAnchor.charOffset === 'number' ? { charOffset: previous.originAnchor.charOffset } : {}),
+    }
+  }
   return card
 }
 
