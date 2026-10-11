@@ -12,6 +12,7 @@ import {
   migrateEdges,
   mirrorPhilosophy,
   reconcileProse,
+  foldFieldValue,
   serializeDocument,
   type AppState,
   type ArcCells,
@@ -477,6 +478,204 @@ function sideKey(side: ConflictSide): string {
   })
 }
 
+export interface EntitySlugConflict {
+  entityId: string
+  field: 'slug'
+  local: string
+  remote: string
+}
+
+function slugText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function indexByRequest(events: readonly SedimentEvent[]): Map<string, SedimentEvent> {
+  const map = new Map<string, SedimentEvent>()
+  for (const event of events) {
+    if (!event.requestId || map.has(event.requestId)) continue
+    map.set(event.requestId, event)
+  }
+  return map
+}
+
+function pickSide<T>(base: T | undefined, remote: T | undefined, local: T | undefined): T | undefined {
+  const nextRemote = remote === undefined ? base : remote
+  const nextLocal = local === undefined ? base : local
+  return pickJson(base as T, nextRemote as T, nextLocal as T)
+}
+
+function mergeSedimentEvent(
+  base: SedimentEvent | undefined,
+  remote: SedimentEvent | undefined,
+  local: SedimentEvent | undefined,
+): SedimentEvent {
+  const versions = [base, remote, local].filter((item): item is SedimentEvent => item !== undefined)
+  const anchor = local ?? remote ?? base
+  if (!anchor) throw new Error('空的沉淀事件')
+  const pick = <T,>(read: (event: SedimentEvent | undefined) => T | undefined): T | undefined =>
+    pickSide(read(base), read(remote), read(local))
+  const event: SedimentEvent = {
+    id: pick((item) => item?.id) || anchor.id,
+    requestId: anchor.requestId,
+    kind: pick((item) => item?.kind) || anchor.kind,
+    ideaId: pick((item) => item?.ideaId) || anchor.ideaId,
+    at: pick((item) => item?.at) || anchor.at,
+    target: pick((item) => item?.target) || anchor.target,
+    action: pick((item) => item?.action) || anchor.action,
+    quote: pick((item) => item?.quote) ?? anchor.quote,
+    status: versions.some((item) => item.status === 'written') ? 'written' : pick((item) => item?.status) || anchor.status,
+  }
+  const sessionId = pick((item) => item?.sessionId)
+  if (typeof sessionId === 'string' && sessionId) event.sessionId = sessionId
+  const adoptionKey = pick((item) => item?.adoptionKey)
+  if (typeof adoptionKey === 'string' && adoptionKey) event.adoptionKey = adoptionKey
+  if (pick((item) => item?.superseded) === true) event.superseded = true
+  return event
+}
+
+function mergeSedimentLists(
+  base: readonly SedimentEvent[],
+  remote: readonly SedimentEvent[],
+  local: readonly SedimentEvent[],
+): SedimentEvent[] {
+  const baseMap = indexByRequest(base)
+  const remoteMap = indexByRequest(remote)
+  const localMap = indexByRequest(local)
+  const order: string[] = []
+  const seen = new Set<string>()
+  const push = (requestId: string) => {
+    if (!requestId || seen.has(requestId)) return
+    seen.add(requestId)
+    order.push(requestId)
+  }
+  for (const event of base) push(event.requestId)
+  for (const event of remote) push(event.requestId)
+  for (const event of local) push(event.requestId)
+  return order.map((requestId) => mergeSedimentEvent(baseMap.get(requestId), remoteMap.get(requestId), localMap.get(requestId)))
+}
+
+function copyEntity(entity: Entity): Entity {
+  const fields: Record<string, EntityField> = {}
+  for (const [key, field] of Object.entries(entity.fields)) {
+    if (key === 'philosophy') continue
+    fields[key] = { value: field.value, events: [...field.events] }
+  }
+  const copy: Entity = {
+    id: entity.id,
+    entityType: entity.entityType,
+    name: entity.name,
+    views: { ...entity.views },
+    fields,
+    arc: { ...entity.arc },
+    premise: entity.premise === true,
+  }
+  const slug = slugText(entity.slug)
+  if (slug) copy.slug = slug
+  return copy
+}
+
+function mergeEventIds(base: readonly string[], remote: readonly string[], local: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...base, ...remote, ...local]) {
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function mergeEntityRecord(
+  base: Entity | undefined,
+  remote: Entity | undefined,
+  local: Entity | undefined,
+  sediment: readonly SedimentEvent[],
+  conflicts: EntitySlugConflict[],
+): Entity {
+  if (!remote || !local) return copyEntity((local ?? remote) as Entity)
+  const fields: Record<string, EntityField> = {}
+  const keys = new Set<string>()
+  for (const side of [base, remote, local]) {
+    if (!side) continue
+    for (const key of Object.keys(side.fields)) {
+      if (key !== 'philosophy') keys.add(key)
+    }
+  }
+  const byId = new Map(sediment.map((event) => [event.id, event]))
+  for (const key of keys) {
+    const events = mergeEventIds(base?.fields[key]?.events ?? [], remote.fields[key]?.events ?? [], local.fields[key]?.events ?? [])
+    const folded = events.map((eventId) => byId.get(eventId)).filter((event): event is SedimentEvent => event !== undefined)
+    const value =
+      folded.length > 0
+        ? foldFieldValue(folded)
+        : (pickSide(base?.fields[key]?.value ?? '', remote.fields[key]?.value, local.fields[key]?.value) ?? '')
+    fields[key] = { value, events }
+  }
+  const localSlug = slugText(local.slug)
+  const remoteSlug = slugText(remote.slug)
+  let slug: string | undefined
+  if (localSlug && remoteSlug && localSlug !== remoteSlug) {
+    conflicts.push({ entityId: local.id, field: 'slug', local: localSlug, remote: remoteSlug })
+  } else {
+    slug = localSlug || remoteSlug
+  }
+  const entity: Entity = {
+    id: local.id,
+    entityType: pickSide(base?.entityType ?? local.entityType, remote.entityType, local.entityType) ?? local.entityType,
+    name: pickSide(base?.name ?? local.name, remote.name, local.name) ?? local.name,
+    views: { ...(pickSide(base?.views ?? {}, remote.views, local.views) ?? {}) },
+    fields,
+    arc: { ...(pickSide(base?.arc ?? local.arc, remote.arc, local.arc) ?? local.arc) },
+    premise: pickSide(base?.premise ?? false, remote.premise, local.premise) ?? false,
+  }
+  if (slug) entity.slug = slug
+  return entity
+}
+
+function entityUnchanged(left: Entity, right: Entity): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function keepEntity(base: Entity | undefined, remote: Entity | undefined, local: Entity | undefined): boolean {
+  if (!remote && !local) return false
+  if (!remote && local && base && entityUnchanged(local, base)) return false
+  if (!local && remote && base && entityUnchanged(remote, base)) return false
+  return true
+}
+
+// 沉淀按 requestId 并集；实体按 id 对齐。slug 两边不同写入 conflicts，不静默留本地页名。
+export function mergeSedimentAndEntities(
+  base: { entities?: readonly Entity[]; sediment?: readonly SedimentEvent[] },
+  remote: { entities?: readonly Entity[]; sediment?: readonly SedimentEvent[] },
+  local: { entities?: readonly Entity[]; sediment?: readonly SedimentEvent[] },
+): { entities: Entity[]; sediment: SedimentEvent[]; conflicts: EntitySlugConflict[] } {
+  const baseEntities = [...(base.entities ?? [])]
+  const remoteEntities = [...(remote.entities ?? [])]
+  const localEntities = [...(local.entities ?? [])]
+  const sediment = mergeSedimentLists(base.sediment ?? [], remote.sediment ?? [], local.sediment ?? [])
+  const baseMap = new Map(baseEntities.map((entity) => [entity.id, entity]))
+  const remoteMap = new Map(remoteEntities.map((entity) => [entity.id, entity]))
+  const localMap = new Map(localEntities.map((entity) => [entity.id, entity]))
+  const ids: string[] = []
+  const seen = new Set<string>()
+  const consider = (id: string) => {
+    if (seen.has(id)) return
+    if (!keepEntity(baseMap.get(id), remoteMap.get(id), localMap.get(id))) return
+    seen.add(id)
+    ids.push(id)
+  }
+  for (const entity of baseEntities) consider(entity.id)
+  for (const entity of remoteEntities) consider(entity.id)
+  for (const entity of localEntities) consider(entity.id)
+  const conflicts: EntitySlugConflict[] = []
+  const entities = ids.map((id) =>
+    mergeEntityRecord(baseMap.get(id), remoteMap.get(id), localMap.get(id), sediment, conflicts),
+  )
+  return { entities, sediment, conflicts }
+}
+
 // 三方合并：base 是本页上次成功写入的正本，remote 是服务器当前正本，local 是本页画布。
 // 两边都改过的卡按 choices 里作者的选择取一边；选择时看到的服务器版本已经变了，或还没选，就先留本页的，并列进 conflicts。
 export function mergeDocuments(
@@ -537,8 +736,13 @@ export function mergeDocuments(
     mergedCards[item.id] = item.card
   }
   const mergedNodes = orderList(nodes.kept, base.state.canvas.nodes, remote.state.canvas.nodes, local.state.canvas.nodes, (node) => node.id)
-  const entities = pickJson(base.state.entities ?? [], remote.state.entities ?? [], local.state.entities ?? [])
-  const sediment = pickJson(base.state.sediment ?? [], remote.state.sediment ?? [], local.state.sediment ?? [])
+  const ledger = mergeSedimentAndEntities(
+    { entities: base.state.entities, sediment: base.state.sediment },
+    { entities: remote.state.entities, sediment: remote.state.sediment },
+    { entities: local.state.entities, sediment: local.state.sediment },
+  )
+  const entities = ledger.entities
+  const sediment = ledger.sediment
   const chapters = pickJson(base.state.chapters ?? [], remote.state.chapters ?? [], local.state.chapters ?? [])
   const pendingProseScenes = pickJson(
     base.state.pendingProseScenes ?? [],
@@ -776,7 +980,7 @@ function parseEntityList(value: unknown): Entity[] {
       if (typeof item.views.renwugushi === 'string') views.renwugushi = item.views.renwugushi
       if (typeof item.views.renwudangan === 'string') views.renwudangan = item.views.renwudangan
     }
-    entities.push({
+    const entity: Entity = {
       id: item.id,
       entityType: item.entityType,
       name: item.name,
@@ -784,7 +988,9 @@ function parseEntityList(value: unknown): Entity[] {
       fields,
       arc: parseArc(item.arc) ?? { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
       premise: item.premise === true,
-    })
+    }
+    if (typeof item.slug === 'string' && item.slug.trim()) entity.slug = item.slug.trim()
+    entities.push(entity)
   }
   return entities
 }

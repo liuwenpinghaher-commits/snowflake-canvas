@@ -9,7 +9,10 @@ import { normalizeStore, withAdoption, withSession } from '../server/discuss-sto
 import { hanCount, importPlainText, pendingEntities } from '../server/import-book.mjs'
 import { locateAdoption } from '../server/recall.mjs'
 import { clearTimelineMemory, writeSediment } from '../server/sediment.mjs'
-import { parseCompleteDocument } from '../src/persist.ts'
+import { documentToBytes, parseCompleteDocument } from '../src/persist.ts'
+
+const GOT_NAME_WORDS = ['奈德', '丹妮莉丝', '瑟曦', '琼恩·雪诺', '提利昂', '艾莉亚', '珊莎', '布兰', '凯特琳', '小指头', '劳勃']
+const GOT_SAMPLE_NAMES = GOT_NAME_WORDS.slice(0, 4)
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const serverEntry = join(repoRoot, 'server', 'http.mjs')
@@ -22,22 +25,41 @@ function emptyDoc() {
 }
 
 function longText() {
-  const pad = '北境的风雪'.repeat(40)
+  const pad = Array.from({ length: 200 }, () => '字').join(',')
   return [
     '第1章 临冬城',
-    '奈德站在门口。',
+    '奈德站在门口。后来奈德离开。',
     '',
-    '丹妮莉丝的信到了。',
+    '丹妮莉丝的信到了。丹妮莉丝还在海上。',
     pad,
     '',
     '',
-    '瑟曦坐在铁王座前。',
+    '瑟曦坐在铁王座前。众人看见瑟曦。',
     '第2章 长城之外',
-    '琼恩·雪诺守夜。',
+    '琼恩·雪诺守夜。琼恩·雪诺看着北方。',
   ].join('\n')
 }
 
-function personDocument() {
+function personDocument(slug: string | null = 'world/ned-stark') {
+  const entity: {
+    id: string
+    entityType: string
+    name: string
+    views: Record<string, never>
+    fields: Record<string, never>
+    arc: { start: string; door: string; impact: string; deepen: string; turn: string; consequence: string }
+    premise: boolean
+    slug?: string
+  } = {
+    id: 'ned',
+    entityType: 'person',
+    name: '奈德',
+    views: {},
+    fields: {},
+    arc: { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
+    premise: false,
+  }
+  if (typeof slug === 'string' && slug.trim()) entity.slug = slug.trim()
   return {
     canvas: {
       nodes: [{ id: 'card-1', type: 'text', x: 0, y: 0, width: 280, height: 120, text: '念头' }],
@@ -47,17 +69,7 @@ function personDocument() {
       fileId: 'sed-file',
       cards: { 'card-1': { layer: 'situation', body: '念头', fields: {} } },
     },
-    entities: [
-      {
-        id: 'ned',
-        entityType: 'person',
-        name: '奈德',
-        views: {},
-        fields: {},
-        arc: { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
-        premise: false,
-      },
-    ],
+    entities: [entity],
     sediment: [],
   }
 }
@@ -125,11 +137,53 @@ describe('切片 B 沉淀', () => {
     expect(adoptionOf(kept)?.sedimentStatus).toBe('written')
     expect(adoptionOf(kept)?.requestId).toBe('req-ok')
     expect(calls).toHaveLength(1)
+    expect(calls[0].page).toBe('world/ned-stark')
+    expect(calls[0].page.startsWith('snowflake/entity/')).toBe(false)
     expect(calls[0].text).toContain('req-ok')
     expect(calls[0].text).toContain('bookId=book-1')
     expect(calls[0].text).toContain('cardId=card-1')
     expect(calls[0].text).toContain('sessionId=sess-1')
     expect(calls[0].text).toContain('adoptionKey=id:m1')
+  })
+
+  it('没有 slug 时不调用时间线，书内句子留下，重试仍然失败', async () => {
+    let calls = 0
+    const deps = {
+      addTimeline: async () => {
+        calls += 1
+      },
+      gbrainDisabled: async () => false,
+      resolveQuote: async () => ({ adoptionKey: 'unused' }),
+    }
+    const first = await writeSediment(
+      { document: personDocument(null), store: sessionStore(), bookId: 'book-1', body: sedimentBody('req-noslug') },
+      deps,
+    )
+    expect(first.document.entities[0].fields.motivation.value).toBe('只记一次的句子')
+    expect(first.document.sediment[0].status).toBe('failed')
+    expect(first.payload.error).toBe('百科没写上')
+    expect(calls).toBe(0)
+    const second = await writeSediment(
+      { document: first.document, store: first.store, bookId: 'book-1', body: sedimentBody('req-noslug') },
+      deps,
+    )
+    expect(second.document.entities[0].fields.motivation.value).toBe('只记一次的句子')
+    expect(second.document.sediment).toHaveLength(1)
+    expect(second.document.sediment[0].status).toBe('failed')
+    expect(second.payload.error).toBe('百科没写上')
+    expect(calls).toBe(0)
+  })
+
+  it('实体 slug 写进文档后再读回来还在，空白字符串不当页名', () => {
+    const encoded = new TextEncoder().encode(JSON.stringify(personDocument()))
+    const once = parseCompleteDocument(encoded)
+    expect(once?.state.entities?.[0]?.slug).toBe('world/ned-stark')
+    const twice = parseCompleteDocument(documentToBytes(once!.state))
+    expect(twice?.state.entities?.[0]?.slug).toBe('world/ned-stark')
+    const blank = personDocument()
+    blank.entities[0].slug = '   '
+    const parsed = parseCompleteDocument(new TextEncoder().encode(JSON.stringify(blank)))
+    expect(parsed?.state.entities?.[0]?.slug).toBeUndefined()
   })
 
   it('时间线抛错时书内句子还在，状态 failed，addTimeline 只被叫一次', async () => {
@@ -238,12 +292,14 @@ describe('切片 B 导入', () => {
     const text = longText()
     expect(hanCount(text)).toBeGreaterThanOrEqual(200)
     const result = importPlainText(emptyDoc(), text)
-    expect(result.counts).toEqual({ chapterCount: 2, ideaCount: 3, pendingCount: 4 })
+    const names = result.document.pendingEntities.map((item: { name: string }) => item.name)
+    expect(result.counts.chapterCount).toBe(2)
+    expect(result.counts.ideaCount).toBe(3)
+    expect(result.counts.pendingCount).toBe(names.length)
     expect(result.document.chapters).toHaveLength(2)
     expect(result.document.chapters[0].scenes).toHaveLength(2)
     expect(result.document.chapters[1].scenes).toHaveLength(1)
-    const names = result.document.pendingEntities.map((item: { name: string }) => item.name)
-    expect(names).toEqual(expect.arrayContaining(['奈德', '丹妮莉丝', '瑟曦', '琼恩·雪诺']))
+    expect(names).toEqual(expect.arrayContaining(GOT_SAMPLE_NAMES))
     expect(result.document.entities ?? []).toEqual([])
     const cards = Object.values(result.document.snowflake.cards) as Array<{ body: string; layer: string; originAnchor: { chapterId: string; sceneId: string; charOffset: number } }>
     expect(cards).toHaveLength(3)
@@ -258,7 +314,25 @@ describe('切片 B 导入', () => {
     expect(opened).not.toBeNull()
     const again = opened?.state.snowflake.cards[cards.length ? Object.keys(result.document.snowflake.cards)[0] : '']
     expect(again?.originAnchor?.chapterId).toBeTruthy()
-    expect(opened?.state.pendingEntities?.map((item) => item.name)).toEqual(expect.arrayContaining(['奈德', '丹妮莉丝', '瑟曦', '琼恩·雪诺']))
+    expect(opened?.state.pendingEntities?.map((item) => item.name)).toEqual(expect.arrayContaining(GOT_SAMPLE_NAMES))
+  })
+
+  it('阿福出现三次进待确认，王城一次不进，也不出现奈德', () => {
+    const text = '阿福进了门。王城很远。阿福坐下。阿福又站起来。'
+    const result = importPlainText(emptyDoc(), text)
+    const names = result.document.pendingEntities.map((item: { name: string }) => item.name)
+    expect(names).toContain('阿福')
+    expect(names).not.toContain('王城')
+    expect(names).not.toContain('奈德')
+    expect(result.document.entities ?? []).toEqual([])
+  })
+
+  it('生产导入模块不再带旧人名表，时间线也不再拼占位页', async () => {
+    const importer = await readFile(join(repoRoot, 'server/import-book.mjs'), 'utf8')
+    const sediment = await readFile(join(repoRoot, 'server/sediment.mjs'), 'utf8')
+    expect(importer).not.toContain('NAME_WORDS')
+    for (const word of GOT_NAME_WORDS) expect(importer).not.toContain(word)
+    expect(sediment).not.toContain('snowflake/entity/')
   })
 
   it('汉字少于 200 时不切分，一章一场一张卡', () => {
@@ -442,12 +516,16 @@ describe('切片 B 导入接口', () => {
     })
     const posted = (await response.json()) as { status: string; chapterCount: number; ideaCount: number; pendingCount: number; error: string }
     expect(response.status).toBe(200)
-    expect(posted).toMatchObject({ status: 'done', chapterCount: 2, ideaCount: 3, pendingCount: 4, error: '' })
-    const progress = await fetch(`${server.base}/api/books/${book.id}/import`)
-    expect(await progress.json()).toMatchObject({ status: 'done', chapterCount: 2, pendingCount: 4 })
+    expect(posted.status).toBe('done')
+    expect(posted.chapterCount).toBe(2)
+    expect(posted.ideaCount).toBe(3)
+    expect(posted.error).toBe('')
     const saved = JSON.parse(await readFile(join(server.dataDir, 'books', book.id, 'snowflake.json'), 'utf8'))
     const names = (saved.document.pendingEntities as Array<{ name: string }>).map((item) => item.name)
-    expect(names).toEqual(expect.arrayContaining(['奈德', '丹妮莉丝', '瑟曦', '琼恩·雪诺']))
+    expect(names).toEqual(expect.arrayContaining(GOT_SAMPLE_NAMES))
+    expect(posted.pendingCount).toBe(names.length)
+    const progress = await fetch(`${server.base}/api/books/${book.id}/import`)
+    expect(await progress.json()).toMatchObject({ status: 'done', chapterCount: 2, pendingCount: names.length })
     expect(saved.document.entities ?? []).toEqual([])
     await expect(stat(server.argsFile)).rejects.toThrow()
   }, 30_000)

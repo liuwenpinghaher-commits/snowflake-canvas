@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createCard, createDocument, type ComposeSession } from '../src/document.ts'
+import { createCard, createDocument, type ComposeSession, type Entity, type SedimentEvent } from '../src/document.ts'
 import {
   CANONICAL_NAME,
   MSG_FILE_PROTOCOL,
@@ -18,6 +18,8 @@ import {
   createPersistController,
   documentToBytes,
   formatLocalStart,
+  mergeDocuments,
+  mergeSedimentAndEntities,
   parseCompleteDocument,
   tempNameFor,
   type ChannelBus,
@@ -677,5 +679,115 @@ describe('落盘链路', () => {
     expect(source).toContain('opfs-sahpool')
     const app = readFileSync(join(process.cwd(), 'src/App.tsx'), 'utf8')
     expect(app).not.toMatch(/<SideEditor[^>]*key=/)
+  })
+})
+
+function emptyArc() {
+  return { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' }
+}
+
+function nedEntity(slug?: string, field?: { value: string; events: string[] }): Entity {
+  const entity: Entity = {
+    id: 'ned',
+    entityType: 'person',
+    name: '奈德',
+    views: {},
+    fields: field ? { motivation: { value: field.value, events: [...field.events] } } : {},
+    arc: emptyArc(),
+    premise: false,
+  }
+  if (slug) entity.slug = slug
+  return entity
+}
+
+function sedimentEvent(
+  requestId: string,
+  quote: string,
+  at: string,
+  status: SedimentEvent['status'] = 'written',
+): SedimentEvent {
+  return {
+    id: `sed-${requestId}`,
+    requestId,
+    kind: 'discuss',
+    ideaId: 'card-1',
+    sessionId: 'sess-1',
+    adoptionKey: 'id:m1',
+    at,
+    target: { entityType: 'person', entityId: 'ned', fieldKey: 'motivation' },
+    action: 'append',
+    quote,
+    status,
+  }
+}
+
+describe('沉淀和实体合并', () => {
+  it('两个标签页各追加一条沉淀时两条都留下，同一请求不重复', () => {
+    const baseEvent = sedimentEvent('req-base', '最初', '2026-10-11T00:00:00.000Z')
+    const remoteEvent = sedimentEvent('req-remote', '远端一句', '2026-10-11T00:00:01.000Z')
+    const localEvent = sedimentEvent('req-local', '本地一句', '2026-10-11T00:00:02.000Z')
+    const baseEntity = nedEntity('world/ned-stark', { value: '最初', events: [baseEvent.id] })
+    const remoteEntity = nedEntity('world/ned-stark', { value: '最初\n\n远端一句', events: [baseEvent.id, remoteEvent.id] })
+    const localEntity = nedEntity('world/ned-stark', { value: '最初\n\n本地一句', events: [baseEvent.id, localEvent.id] })
+    const merged = mergeSedimentAndEntities(
+      { entities: [baseEntity], sediment: [baseEvent] },
+      { entities: [remoteEntity], sediment: [baseEvent, remoteEvent] },
+      { entities: [localEntity], sediment: [baseEvent, localEvent] },
+    )
+    expect(merged.sediment.map((event) => event.requestId)).toEqual(['req-base', 'req-remote', 'req-local'])
+    expect(merged.conflicts).toEqual([])
+    expect(merged.entities[0]?.fields.motivation?.events).toEqual([baseEvent.id, remoteEvent.id, localEvent.id])
+    expect(merged.entities[0]?.fields.motivation?.value).toBe('最初\n\n远端一句\n\n本地一句')
+
+    const duplicated = mergeSedimentAndEntities(
+      { entities: [nedEntity('world/ned-stark')], sediment: [] },
+      { entities: [nedEntity('world/ned-stark')], sediment: [{ ...remoteEvent, status: 'failed' }] },
+      { entities: [nedEntity('world/ned-stark')], sediment: [{ ...remoteEvent, status: 'written' }] },
+    )
+    expect(duplicated.sediment).toHaveLength(1)
+    expect(duplicated.sediment[0]?.requestId).toBe('req-remote')
+    expect(duplicated.sediment[0]?.status).toBe('written')
+
+    const outcome = mergeDocuments(
+      documentToBytes({ ...createDocument('merge-ledger'), entities: [baseEntity], sediment: [baseEvent] }),
+      documentToBytes({ ...createDocument('merge-ledger'), entities: [remoteEntity], sediment: [baseEvent, remoteEvent] }),
+      documentToBytes({ ...createDocument('merge-ledger'), entities: [localEntity], sediment: [baseEvent, localEvent] }),
+    )
+    expect(outcome.kind).toBe('merged')
+    if (outcome.kind !== 'merged') return
+    expect(parseCompleteDocument(outcome.bytes)?.state.sediment?.map((event) => event.requestId)).toEqual([
+      'req-base',
+      'req-remote',
+      'req-local',
+    ])
+  })
+
+  it('两边 slug 不同时留下冲突，不把本地页名当成已经合并完', () => {
+    const merged = mergeSedimentAndEntities(
+      { entities: [nedEntity('world/ned-stark')], sediment: [] },
+      { entities: [nedEntity('world/ned-remote')], sediment: [] },
+      { entities: [nedEntity('world/ned-local')], sediment: [] },
+    )
+    expect(merged.conflicts).toEqual([
+      { entityId: 'ned', field: 'slug', local: 'world/ned-local', remote: 'world/ned-remote' },
+    ])
+    expect(merged.entities[0]?.slug).toBeUndefined()
+    const outcome = mergeDocuments(
+      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-stark')], sediment: [] }),
+      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-remote')], sediment: [] }),
+      documentToBytes({ ...createDocument('slug-file'), entities: [nedEntity('world/ned-local')], sediment: [] }),
+    )
+    expect(outcome.kind).toBe('merged')
+    if (outcome.kind === 'merged') {
+      expect(parseCompleteDocument(outcome.bytes)?.state.entities?.[0]?.slug).toBeUndefined()
+    }
+
+    const kept = mergeSedimentAndEntities(
+      { entities: [nedEntity()], sediment: [] },
+      { entities: [nedEntity('world/ned-remote')], sediment: [] },
+      { entities: [nedEntity()], sediment: [] },
+    )
+    expect(kept.conflicts).toEqual([])
+    expect(kept.entities[0]?.slug).toBe('world/ned-remote')
   })
 })

@@ -34,9 +34,8 @@ function detailText({ bookId, cardId, sessionId, adoptionKey, requestId }) {
 }
 
 function timelinePage(entity) {
-  if (entity && typeof entity.slug === 'string' && entity.slug.trim()) return entity.slug.trim()
-  if (entity && typeof entity.gbrainSlug === 'string' && entity.gbrainSlug.trim()) return entity.gbrainSlug.trim()
-  return `snowflake/entity/${entity.id}`
+  if (!entity || typeof entity.slug !== 'string') return ''
+  return entity.slug.trim()
 }
 
 function wroteKey(bookId, requestId) {
@@ -96,7 +95,7 @@ function requireBody(body) {
   return { cardId, sessionId, entityId, fieldKey, action, requestId, quote }
 }
 
-// 讨论沉淀：先折叠书内 value，再补时间线。失败不回滚 value。同一 requestId 不折第二次。
+// 讨论沉淀：先折叠书内 value，再补时间线。没有页名或时间线失败都不回滚 value。同一 requestId 不折第二次。
 export async function writeSediment(args, deps) {
   const document = args.document
   const store = args.store
@@ -112,7 +111,15 @@ export async function writeSediment(args, deps) {
     }
     const adoptionKey = existing.adoptionKey || textField(args.body.adoptionKey)
     const entity = (document.entities || []).find((item) => item && item.id === (existing.target?.entityId || entityId))
-    const page = timelinePage(entity || { id: existing.target?.entityId || entityId })
+    const page = timelinePage(entity)
+    const retryCardId = existing.ideaId || cardId
+    const retrySessionId = existing.sessionId || sessionId
+    const retryEntityId = existing.target?.entityId || entityId
+    const retryFieldKey = existing.target?.fieldKey || fieldKey
+    if (!page) {
+      const next = withStatus(document, requestId, 'failed')
+      return finish(next, store, bookId, retryCardId, retrySessionId, retryEntityId, retryFieldKey, adoptionKey, requestId, 'failed')
+    }
     const timeline = await appendTimeline(
       deps,
       bookId,
@@ -120,8 +127,8 @@ export async function writeSediment(args, deps) {
       page,
       detailText({
         bookId,
-        cardId: existing.ideaId || cardId,
-        sessionId: existing.sessionId || sessionId,
+        cardId: retryCardId,
+        sessionId: retrySessionId,
         adoptionKey,
         requestId,
       }),
@@ -172,7 +179,12 @@ export async function writeSediment(args, deps) {
   }
   const folded = applySediment(state, event)
   if (folded === state) return rejected(400, '这句话没有写进账本', document, store)
-  const timeline = await appendTimeline(deps, bookId, requestId, timelinePage(entity), detailText({ bookId, cardId, sessionId, adoptionKey, requestId }))
+  const page = timelinePage(entity)
+  if (!page) {
+    const next = withStatus(folded, requestId, 'failed')
+    return finish(next, store, bookId, cardId, sessionId, entityId, fieldKey, adoptionKey, requestId, 'failed')
+  }
+  const timeline = await appendTimeline(deps, bookId, requestId, page, detailText({ bookId, cardId, sessionId, adoptionKey, requestId }))
   const status = timeline.ok ? 'written' : 'failed'
   const next = withStatus(folded, requestId, status)
   return finish(next, store, bookId, cardId, sessionId, entityId, fieldKey, adoptionKey, requestId, status)

@@ -1,22 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 // 方案 04 里的人名投影落在这个函数上。不要另造 encyclopedia / projectBook。
-// 词表按子串匹配，不新造分词器。测试夹具只要求前四个名字出现。
-export const NAME_WORDS = [
-  '奈德',
-  '丹妮莉丝',
-  '瑟曦',
-  '琼恩·雪诺',
-  '提利昂',
-  '艾莉亚',
-  '珊莎',
-  '布兰',
-  '凯特琳',
-  '小指头',
-  '劳勃',
-]
+// 待确认人名按正文里重复出现的连续汉字计，不新造分词器，也不读旧词表。
 
 const CHAPTER_LINE = /^(?:第\s*[0-9０-９一二三四五六七八九十百千零两]+\s*[章集]|[Cc]hapter\s+\d+)/
+const NAME_LIMIT = 40
+const FUNCTION_HAN = new Set(Array.from('的了是在有和与或也都不就而但却把被让给对从向往到这那其及着过呢吗吧啊呀嘛哦哇哩么啥怎还再更最很只又并之乎者则乃'))
 const EXCERPT_CHARS = 200
 
 const jobs = new Map()
@@ -55,22 +44,78 @@ function cardText(card) {
   return parts.join('\n')
 }
 
-// 同名（归一化后）合成一条待确认实体，带来源卡 id。不创建 Entity，不写 gbrain。
-export function pendingEntities(cards) {
-  const groups = new Map()
-  for (const card of cardRecords(cards)) {
-    const seen = new Set()
-    for (const word of NAME_WORDS) {
-      if (!card.text.includes(word)) continue
-      const key = normalizeName(word)
-      if (seen.has(key)) continue
-      seen.add(key)
-      const group = groups.get(key) ?? { name: word, cardIds: [] }
-      if (!group.cardIds.includes(card.id)) group.cardIds.push(card.id)
-      groups.set(key, group)
+function isHanChar(ch) {
+  return /\p{Script=Han}/u.test(ch)
+}
+
+function isNameDot(ch) {
+  return ch === '·' || ch === '・' || ch === '•' || ch === '．' || ch === '.'
+}
+
+function isPureFunctionName(name) {
+  let hans = 0
+  for (const ch of name) {
+    if (!isHanChar(ch)) continue
+    hans += 1
+    if (!FUNCTION_HAN.has(ch)) return false
+  }
+  return true
+}
+
+// 连续 2 到 6 个汉字，中间最多一个间隔号。章标题行整行不计入。出现次数不足 2 的丢掉。
+export function extractNameCandidates(text) {
+  const normalized = String(text ?? '').replace(/\r\n/gu, '\n').replace(/\r/gu, '\n')
+  const body = normalized
+    .split('\n')
+    .filter((line) => !CHAPTER_LINE.test(line))
+    .join('\n')
+  const chars = Array.from(body)
+  const hits = new Map()
+  let seq = 0
+  for (let start = 0; start < chars.length; start += 1) {
+    if (!isHanChar(chars[start])) continue
+    let han = 0
+    let dots = 0
+    let name = ''
+    for (let index = start; index < chars.length && han < 6; index += 1) {
+      const ch = chars[index]
+      if (isHanChar(ch)) {
+        han += 1
+        name += ch
+      } else if (dots === 0 && han > 0 && isNameDot(ch) && isHanChar(chars[index + 1] || '')) {
+        dots += 1
+        name += ch
+        continue
+      } else {
+        break
+      }
+      if (han < 2 || isPureFunctionName(name)) continue
+      const key = normalizeName(name)
+      const found = hits.get(key)
+      if (found) found.count += 1
+      else hits.set(key, { name, count: 1, first: seq++ })
     }
   }
-  return [...groups.values()]
+  return [...hits.values()]
+    .filter((item) => item.count >= 2)
+    .sort((left, right) => right.count - left.count || left.first - right.first)
+    .slice(0, NAME_LIMIT)
+}
+
+// 同名（归一化后）合成一条待确认实体，带来源卡 id。不创建 Entity，不写 gbrain。
+export function pendingEntities(cards) {
+  const records = cardRecords(cards)
+  const ranked = extractNameCandidates(records.map((card) => card.text).join('\n'))
+  return ranked
+    .map((item) => {
+      const key = normalizeName(item.name)
+      const cardIds = []
+      for (const card of records) {
+        if (!cardIds.includes(card.id) && normalizeName(card.text).includes(key)) cardIds.push(card.id)
+      }
+      return { name: item.name, cardIds }
+    })
+    .filter((item) => item.cardIds.length > 0)
 }
 
 function nid(prefix) {

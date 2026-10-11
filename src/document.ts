@@ -291,6 +291,8 @@ export interface Entity {
   fields: Record<string, EntityField>
   arc: ArcCells
   premise: boolean
+  // 百科页名，例如 world/ned-stark。空字符串不算。
+  slug?: string
 }
 
 export interface SedimentTarget {
@@ -1454,7 +1456,7 @@ function cloneEntity(entity: Entity): Entity {
     if (key === 'philosophy') continue
     fields[key] = { value: field.value, events: [...field.events] }
   }
-  return {
+  const copy: Entity = {
     id: entity.id,
     entityType: entity.entityType,
     name: entity.name,
@@ -1463,6 +1465,8 @@ function cloneEntity(entity: Entity): Entity {
     arc: normalizeArc(entity.arc),
     premise: entity.premise === true,
   }
+  if (typeof entity.slug === 'string' && entity.slug.trim()) copy.slug = entity.slug.trim()
+  return copy
 }
 
 function cloneSediment(event: SedimentEvent): SedimentEvent {
