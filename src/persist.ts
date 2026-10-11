@@ -1,17 +1,36 @@
 import {
   applyComposition,
+  collectPersonEntities,
   commitCardText,
   createDocument,
+  isEdgeKind,
+  isEntityType,
+  isForeshadowState,
+  isRelationKind,
   LAYERS,
   loadCards,
+  migrateEdges,
+  mirrorPhilosophy,
+  reconcileProse,
   serializeDocument,
   type AppState,
+  type ArcCells,
+  type BookChapter,
+  type BookScene,
   type Card,
   type CanvasEdge,
   type CanvasNode,
   type ComposeSession,
   type CompositionEvent,
+  type Entity,
+  type EntityField,
   type LooseCard,
+  type PendingProseScene,
+  type SedimentEvent,
+  ARC_KEYS,
+  SEDIMENT_ACTIONS,
+  SEDIMENT_KINDS,
+  SEDIMENT_STATUSES,
 } from './document.ts'
 import { MSG_EXPAND_NO_CARD, buildExpandRequest, requestExpandCandidates } from './expand.ts'
 import type { ExpandClientOptions, ShownCandidate } from './expand.ts'
@@ -280,7 +299,14 @@ export function parseCompleteDocument(bytes: Uint8Array): { bytes: Uint8Array; s
 function cardJson(card: AppState['snowflake']['cards'][string]): string {
   const fields: Record<string, string> = {}
   for (const key of Object.keys(card.fields).sort()) fields[key] = card.fields[key] ?? ''
-  return JSON.stringify({ layer: card.layer, body: card.body, fields })
+  return JSON.stringify({
+    layer: card.layer,
+    body: card.body,
+    fields,
+    mergeNote: card.mergeNote ?? '',
+    premise: card.premise === true,
+    derivedFrom: card.derivedFrom ?? '',
+  })
 }
 
 function nodeJson(node: CanvasNode): string {
@@ -306,6 +332,9 @@ function edgeJson(edge: CanvasEdge): string {
     fromEnd: edge.fromEnd ?? '',
     toEnd: edge.toEnd ?? '',
     label: edge.label ?? '',
+    kind: edge.kind ?? '',
+    relation: edge.relation ?? '',
+    foreshadow: edge.foreshadow ?? '',
   })
 }
 
@@ -386,9 +415,33 @@ function setOrDelete<T>(map: Map<string, T>, id: string, item: T | null | undefi
 }
 
 // 连线两端都必须是还在的卡片；节点 id 与卡片 id 相同。
-export function dropDanglingEdges(edges: readonly CanvasEdge[], cards: Readonly<Record<string, unknown>>): CanvasEdge[] {
-  const has = (id: string) => Object.prototype.hasOwnProperty.call(cards, id)
+export function dropDanglingEdges(
+  edges: readonly CanvasEdge[],
+  cards: Readonly<Record<string, unknown>>,
+  also?: ReadonlySet<string>,
+): CanvasEdge[] {
+  const has = (id: string) => Object.prototype.hasOwnProperty.call(cards, id) || (also?.has(id) ?? false)
   return edges.filter((edge) => has(edge.fromNode) && has(edge.toNode))
+}
+
+function pickJson<T>(base: T, remote: T, local: T): T {
+  const baseKey = JSON.stringify(base)
+  const remoteKey = JSON.stringify(remote)
+  const localKey = JSON.stringify(local)
+  if (localKey === remoteKey) return local
+  if (localKey === baseKey) return remote
+  if (remoteKey === baseKey) return local
+  return local
+}
+
+function endpointIds(entities: readonly Entity[], chapters: readonly BookChapter[]): Set<string> {
+  const ids = new Set<string>()
+  for (const entity of entities) ids.add(entity.id)
+  for (const chapter of chapters) {
+    ids.add(chapter.id)
+    for (const scene of chapter.scenes) ids.add(scene.id)
+  }
+  return ids
 }
 
 // 一张卡在服务器那边的样子：卡片、同 id 的节点、从这张卡连出且两边改得不一样的连线。null 表示服务器上没有。
@@ -481,15 +534,28 @@ export function mergeDocuments(
     mergedCards[item.id] = item.card
   }
   const mergedNodes = orderList(nodes.kept, base.state.canvas.nodes, remote.state.canvas.nodes, local.state.canvas.nodes, (node) => node.id)
+  const entities = pickJson(base.state.entities ?? [], remote.state.entities ?? [], local.state.entities ?? [])
+  const sediment = pickJson(base.state.sediment ?? [], remote.state.sediment ?? [], local.state.sediment ?? [])
+  const chapters = pickJson(base.state.chapters ?? [], remote.state.chapters ?? [], local.state.chapters ?? [])
+  const pendingProseScenes = pickJson(
+    base.state.pendingProseScenes ?? [],
+    remote.state.pendingProseScenes ?? [],
+    local.state.pendingProseScenes ?? [],
+  )
   const mergedEdges = dropDanglingEdges(
     orderList(edges.kept, base.state.canvas.edges, remote.state.canvas.edges, local.state.canvas.edges, (edge) => edge.id),
     mergedCards,
+    endpointIds(entities, chapters),
   )
   return {
     kind: 'merged',
     bytes: documentToBytes({
       canvas: { nodes: mergedNodes, edges: mergedEdges },
       snowflake: { fileId, cards: mergedCards },
+      entities,
+      sediment,
+      chapters,
+      pendingProseScenes,
       activeId: local.state.activeId,
     }),
     conflicts,
@@ -643,11 +709,153 @@ function toAppState(value: unknown): AppState | null {
     if (!parsed) return null
     loose[id] = parsed
   }
-  return {
-    canvas: { nodes, edges },
-    snowflake: { fileId: snowflake.fileId, cards: loadCards(loose, edges) },
+  const cards = loadCards(loose, edges)
+  const parsedEntities = parseEntityList(value.entities)
+  const sediment = parseSedimentList(value.sediment)
+  const chapters = parseChapterList(value.chapters)
+  let state: AppState = {
+    canvas: { nodes, edges: migrateEdges(edges, cards) },
+    snowflake: { fileId: snowflake.fileId, cards },
+    entities: parsedEntities.length > 0 ? parsedEntities : collectPersonEntities(cards),
+    sediment,
+    chapters,
+    pendingProseScenes: parsePendingList(value.pendingProseScenes),
     activeId: null,
   }
+  state = mirrorPhilosophy(state)
+  state = reconcileProse(state)
+  return state
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
+function parseArc(value: unknown): ArcCells | undefined {
+  if (!isRecord(value)) return undefined
+  const arc = { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' }
+  let any = false
+  for (const key of ARC_KEYS) {
+    const cell = value[key]
+    if (typeof cell === 'string') {
+      arc[key] = cell
+      any = true
+    }
+  }
+  return any ? arc : undefined
+}
+
+function parseEntityField(value: unknown): EntityField | null {
+  if (!isRecord(value) || typeof value.value !== 'string' || !Array.isArray(value.events)) return null
+  if (!value.events.every((item) => typeof item === 'string')) return null
+  return { value: value.value, events: [...value.events] }
+}
+
+function parseEntityList(value: unknown): Entity[] {
+  if (!Array.isArray(value)) return []
+  const entities: Entity[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || item.id.length === 0) continue
+    if (!isEntityType(item.entityType) || typeof item.name !== 'string') continue
+    const fields: Record<string, EntityField> = {}
+    if (isRecord(item.fields)) {
+      for (const [key, field] of Object.entries(item.fields)) {
+        if (key === 'philosophy') continue
+        const parsed = parseEntityField(field)
+        if (parsed) fields[key] = parsed
+      }
+    }
+    const views: Entity['views'] = {}
+    if (isRecord(item.views)) {
+      if (typeof item.views.renwubiao === 'string') views.renwubiao = item.views.renwubiao
+      if (typeof item.views.renwugushi === 'string') views.renwugushi = item.views.renwugushi
+      if (typeof item.views.renwudangan === 'string') views.renwudangan = item.views.renwudangan
+    }
+    entities.push({
+      id: item.id,
+      entityType: item.entityType,
+      name: item.name,
+      views,
+      fields,
+      arc: parseArc(item.arc) ?? { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
+      premise: item.premise === true,
+    })
+  }
+  return entities
+}
+
+function parseSedimentList(value: unknown): SedimentEvent[] {
+  if (!Array.isArray(value)) return []
+  const events: SedimentEvent[] = []
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    if (typeof item.id !== 'string' || typeof item.requestId !== 'string' || typeof item.ideaId !== 'string') continue
+    if (typeof item.at !== 'string' || typeof item.quote !== 'string') continue
+    if (typeof item.kind !== 'string' || !(SEDIMENT_KINDS as readonly string[]).includes(item.kind)) continue
+    if (typeof item.action !== 'string' || !(SEDIMENT_ACTIONS as readonly string[]).includes(item.action)) continue
+    if (typeof item.status !== 'string' || !(SEDIMENT_STATUSES as readonly string[]).includes(item.status)) continue
+    if (!isRecord(item.target) || !isEntityType(item.target.entityType)) continue
+    if (typeof item.target.entityId !== 'string' || typeof item.target.fieldKey !== 'string') continue
+    if (!item.ideaId || !item.requestId) continue
+    const event: SedimentEvent = {
+      id: item.id,
+      requestId: item.requestId,
+      kind: item.kind as SedimentEvent['kind'],
+      ideaId: item.ideaId,
+      at: item.at,
+      target: {
+        entityType: item.target.entityType,
+        entityId: item.target.entityId,
+        fieldKey: item.target.fieldKey,
+      },
+      action: item.action as SedimentEvent['action'],
+      quote: item.quote,
+      status: item.status as SedimentEvent['status'],
+    }
+    if (typeof item.sessionId === 'string') event.sessionId = item.sessionId
+    if (typeof item.adoptionKey === 'string') event.adoptionKey = item.adoptionKey
+    if (item.superseded === true) event.superseded = true
+    events.push(event)
+  }
+  return events
+}
+
+function parseChapterList(value: unknown): BookChapter[] {
+  if (!Array.isArray(value)) return []
+  const chapters: BookChapter[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || item.id.length === 0) continue
+    const title = typeof item.title === 'string' ? item.title : ''
+    const scenes: BookScene[] = []
+    if (Array.isArray(item.scenes)) {
+      for (const scene of item.scenes) {
+        if (!isRecord(scene) || typeof scene.id !== 'string' || scene.id.length === 0) continue
+        const next: BookScene = {
+          id: scene.id,
+          title: typeof scene.title === 'string' ? scene.title : '',
+          ideaIds: stringList(scene.ideaIds),
+          prose: typeof scene.prose === 'string' ? scene.prose : '',
+          beatIds: stringList(scene.beatIds),
+        }
+        if (typeof scene.placeEntityId === 'string' && scene.placeEntityId.length > 0) next.placeEntityId = scene.placeEntityId
+        if (scene.proseFork === true) next.proseFork = true
+        scenes.push(next)
+      }
+    }
+    chapters.push({ id: item.id, title, scenes })
+  }
+  return chapters
+}
+
+function parsePendingList(value: unknown): PendingProseScene[] {
+  if (!Array.isArray(value)) return []
+  const pending: PendingProseScene[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.cardId !== 'string' || item.cardId.length === 0) continue
+    pending.push({ cardId: item.cardId, chapterHint: typeof item.chapterHint === 'string' ? item.chapterHint : '' })
+  }
+  return pending
 }
 
 function parseNode(value: unknown): CanvasNode | null {
@@ -701,6 +909,15 @@ function parseEdge(value: unknown): CanvasEdge | null {
     if (typeof value.label !== 'string') return null
     edge.label = value.label
   }
+  if (value.kind !== undefined && isEdgeKind(value.kind)) edge.kind = value.kind
+  if (value.relation !== undefined && isRelationKind(value.relation)) edge.relation = value.relation
+  if (value.foreshadow !== undefined && isForeshadowState(value.foreshadow)) edge.foreshadow = value.foreshadow
+  if (isRecord(value.derivedFrom) && typeof value.derivedFrom.sessionId === 'string' && typeof value.derivedFrom.adoptionKey === 'string') {
+    edge.derivedFrom = { sessionId: value.derivedFrom.sessionId, adoptionKey: value.derivedFrom.adoptionKey }
+  }
+  if (Array.isArray(value.sedimentEvents) && value.sedimentEvents.every((item) => typeof item === 'string')) {
+    edge.sedimentEvents = [...value.sedimentEvents]
+  }
   return edge
 }
 
@@ -729,7 +946,13 @@ function parseCard(value: unknown): LooseCard | null {
   } else if (value.fields !== undefined && known) {
     return null
   }
-  return { layer: value.layer, body, fields }
+  const card: LooseCard = { layer: value.layer, body, fields }
+  if (typeof value.mergeNote === 'string' && value.mergeNote.length > 0) card.mergeNote = value.mergeNote
+  if (value.premise === true) card.premise = true
+  if (typeof value.derivedFrom === 'string' && value.derivedFrom.length > 0) card.derivedFrom = value.derivedFrom
+  const arc = parseArc(value.arc)
+  if (arc) card.arc = arc
+  return card
 }
 
 function peekFileId(bytes: Uint8Array | null): string | null {

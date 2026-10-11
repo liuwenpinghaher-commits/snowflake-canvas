@@ -26,7 +26,7 @@ import {
 } from '../src/document.ts'
 
 const NODE_KEYS = ['id', 'type', 'x', 'y', 'width', 'height', 'text', 'color']
-const EDGE_KEYS = ['id', 'fromNode', 'toNode', 'fromSide', 'toSide', 'fromEnd', 'toEnd', 'label']
+const EDGE_KEYS = ['id', 'fromNode', 'toNode', 'fromSide', 'toSide', 'fromEnd', 'toEnd', 'label', 'kind']
 
 function cardOf(state: AppState, id: string) {
   const card = state.snowflake.cards[id]

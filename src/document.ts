@@ -27,6 +27,20 @@ export const PERSON_KEYS = [
   'grade',
 ] as const
 
+export const ARC_KEYS = ['start', 'door', 'impact', 'deepen', 'turn', 'consequence'] as const
+export type ArcKey = (typeof ARC_KEYS)[number]
+export type ArcCells = Record<ArcKey, string>
+
+export function emptyArc(): ArcCells {
+  return { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' }
+}
+
+/** 身份与叙事功能。档案区的 key 见 personFieldZones()，仍是 ARCHIVE_GROUPS。 */
+export const PERSON_ZONES = [
+  { zone: '身份', keys: ['name', 'role', 'grade'] },
+  { zone: '叙事功能', keys: ['sentence', 'paragraph', 'motivation', 'goal', 'conflict', 'epiphany', 'arc'] },
+] as const
+
 export const YIYEDAGANG_KEYS = [...PARAGRAPH_KEYS, 'fourPages'] as const
 
 export const RENWUGUSHI_KEYS = ['who', 'length', 'story'] as const
@@ -34,18 +48,22 @@ export const RENWUGUSHI_KEYS = ['who', 'length', 'story'] as const
 export const ARCHIVE_GROUPS = [
   {
     title: '身体',
+    egri: '埃格里·生理',
     keys: ['bodyName', 'age', 'birthday', 'height', 'weight', 'ethnicity', 'hairEyes', 'looks', 'clothes'],
   },
   {
     title: '性格',
+    egri: '埃格里·社会',
     keys: ['humor', 'personality', 'religion', 'politics', 'hobbies', 'taste', 'favColor', 'bag'],
   },
   {
     title: '环境',
+    egri: '埃格里·社会',
     keys: ['home', 'education', 'job', 'family', 'bestFriend', 'maleFriends', 'femaleFriends', 'enemies'],
   },
   {
     title: '心理',
+    egri: '埃格里·心理',
     keys: [
       'bestMemory',
       'worstMemory',
@@ -64,6 +82,22 @@ export const ARCHIVE_GROUPS = [
 ] as const
 
 export const RENWUDANGAN_KEYS = ARCHIVE_GROUPS.flatMap((group) => group.keys)
+
+export function personFieldZones(): { zone: '身份' | '叙事功能' | '档案'; keys: readonly string[] }[] {
+  return [
+    { zone: '身份', keys: PERSON_ZONES[0].keys },
+    { zone: '叙事功能', keys: PERSON_ZONES[1].keys },
+    { zone: '档案', keys: RENWUDANGAN_KEYS },
+  ]
+}
+
+export function mapGrade(raw: string | undefined): string {
+  const text = (raw ?? '').trim()
+  if (!text || text === '主角' || text === '主要') return '主要'
+  if (text === '配角' || text === '次要') return '次要'
+  if (text.includes('NPC')) return 'NPC'
+  return '路人'
+}
 
 export const SCENE_KEYS = ['pov', 'what', 'words', 'chapter', 'title', 'conflict'] as const
 
@@ -207,6 +241,116 @@ export interface ChoiceField {
 export type SideName = 'top' | 'right' | 'bottom' | 'left'
 export type EndName = 'none' | 'arrow'
 
+export const RELATION_KINDS = ['互补', '冲突', '伏笔', '派生', '正文提到'] as const
+export type RelationKind = (typeof RELATION_KINDS)[number]
+export const FORESHADOW_STATES = ['计划', '埋设', '呼应', '回收'] as const
+export type ForeshadowState = (typeof FORESHADOW_STATES)[number]
+
+export const EDGE_KINDS = [
+  'grows-from',
+  'projects-onto',
+  'relates',
+  'foreshadow',
+  'appears-in',
+  'relates-entity',
+  'chapter-in',
+] as const
+export type EdgeKind = (typeof EDGE_KINDS)[number]
+
+export const ENTITY_TYPES = ['person', 'place', 'org', 'concept', 'theme', 'foreshadow-line'] as const
+export type EntityType = (typeof ENTITY_TYPES)[number]
+
+export const SEDIMENT_KINDS = ['discuss', 'manual', 'import'] as const
+export type SedimentKind = (typeof SEDIMENT_KINDS)[number]
+export const SEDIMENT_ACTIONS = ['append', 'replace', 'negate'] as const
+export type SedimentAction = (typeof SEDIMENT_ACTIONS)[number]
+export const SEDIMENT_STATUSES = ['proposed', 'written', 'failed'] as const
+export type SedimentStatus = (typeof SEDIMENT_STATUSES)[number]
+
+export interface DerivedFrom {
+  sessionId: string
+  adoptionKey: string
+}
+
+export interface EntityField {
+  value: string
+  events: string[]
+}
+
+export interface EntityViews {
+  renwubiao?: string
+  renwugushi?: string
+  renwudangan?: string
+}
+
+export interface Entity {
+  id: string
+  entityType: EntityType
+  name: string
+  views: EntityViews
+  fields: Record<string, EntityField>
+  arc: ArcCells
+  premise: boolean
+}
+
+export interface SedimentTarget {
+  entityType: EntityType
+  entityId: string
+  fieldKey: string
+}
+
+export interface SedimentEvent {
+  id: string
+  requestId: string
+  kind: SedimentKind
+  ideaId: string
+  sessionId?: string
+  adoptionKey?: string
+  at: string
+  target: SedimentTarget
+  action: SedimentAction
+  quote: string
+  status: SedimentStatus
+  superseded?: boolean
+}
+
+export interface BookScene {
+  id: string
+  title: string
+  ideaIds: string[]
+  prose: string
+  beatIds: string[]
+  placeEntityId?: string
+  proseFork?: boolean
+}
+
+export interface BookChapter {
+  id: string
+  title: string
+  scenes: BookScene[]
+}
+
+export interface PendingProseScene {
+  cardId: string
+  chapterHint: string
+}
+
+export function isRelationKind(value: unknown): value is RelationKind {
+  return typeof value === 'string' && (RELATION_KINDS as readonly string[]).includes(value)
+}
+
+export function isForeshadowState(value: unknown): value is ForeshadowState {
+  return typeof value === 'string' && (FORESHADOW_STATES as readonly string[]).includes(value)
+}
+
+export function isEdgeKind(value: unknown): value is EdgeKind {
+  return typeof value === 'string' && (EDGE_KINDS as readonly string[]).includes(value)
+}
+
+export function isEntityType(value: unknown): value is EntityType {
+  return typeof value === 'string' && (ENTITY_TYPES as readonly string[]).includes(value)
+}
+
 export interface CanvasNode {
   id: string
   type: 'text' | 'group'
@@ -227,18 +371,32 @@ export interface CanvasEdge {
   fromEnd?: EndName
   toEnd?: EndName
   label?: string
+  kind?: EdgeKind
+  relation?: RelationKind
+  foreshadow?: ForeshadowState
+  derivedFrom?: DerivedFrom
+  sedimentEvents?: string[]
 }
 
 export interface Card {
   layer: Layer
   body: string
   fields: Record<string, string>
+  mergeNote?: string
+  premise?: boolean
+  /** 正文草稿指向某场的 id。边上的 derivedFrom 是讨论来源，不是这个字段。 */
+  derivedFrom?: string
+  arc?: ArcCells
 }
 
 export interface LooseCard {
   layer: string
   body: string
   fields: Record<string, string>
+  mergeNote?: string
+  premise?: boolean
+  derivedFrom?: string
+  arc?: ArcCells
 }
 
 export interface AppState {
@@ -250,6 +408,10 @@ export interface AppState {
     fileId: string
     cards: Record<string, Card>
   }
+  entities?: Entity[]
+  sediment?: SedimentEvent[]
+  chapters?: BookChapter[]
+  pendingProseScenes?: PendingProseScene[]
   activeId: string | null
 }
 
@@ -363,7 +525,10 @@ export function extraFieldKeys(card: Card): string[] {
 
 export function fieldGroups(layer: Layer): { title: string; keys: readonly string[] }[] | null {
   if (layer !== 'renwudangan') return null
-  return ARCHIVE_GROUPS.map((group) => ({ title: group.title, keys: group.keys }))
+  return ARCHIVE_GROUPS.map((group) => ({
+    title: 'egri' in group && group.egri ? `${group.title} · ${group.egri}` : group.title,
+    keys: group.keys,
+  }))
 }
 
 export function laterLayers(layer: Layer): Layer[] {
@@ -665,6 +830,10 @@ export function createDocument(fileId: string): AppState {
   return {
     canvas: { nodes: [], edges: [] },
     snowflake: { fileId, cards: {} },
+    entities: [],
+    sediment: [],
+    chapters: [],
+    pendingProseScenes: [],
     activeId: null,
   }
 }
@@ -739,19 +908,7 @@ export function moveNode(state: AppState, id: string, x: number, y: number): App
 }
 
 export function linkCards(state: AppState, fromId: string, toId: string): AppState {
-  if (fromId === toId) return state
-  if (!state.snowflake.cards[fromId] || !state.snowflake.cards[toId]) return state
-  if (state.canvas.edges.some((edge) => edge.fromNode === fromId && edge.toNode === toId)) return state
-  const edge: CanvasEdge = {
-    id: `e-${fromId}-${toId}`,
-    fromNode: fromId,
-    toNode: toId,
-    fromSide: 'right',
-    toSide: 'left',
-    toEnd: 'arrow',
-    label: '连到后面的层',
-  }
-  return { ...state, canvas: { ...state.canvas, edges: [...state.canvas.edges, edge] } }
+  return addEdge(state, fromId, toId, 'grows-from')
 }
 
 export function spawnChild(
@@ -784,6 +941,7 @@ export function spawnChild(
     toSide: 'left',
     toEnd: 'arrow',
     label: `长成${layerLabel(next)}`,
+    kind: 'grows-from',
   }
   return {
     ...withCard,
@@ -866,7 +1024,7 @@ export function changeToLaterLayer(state: AppState, cardId: string, layer: Layer
   const current = state.snowflake.cards[cardId]
   if (!current) return state
   if (LAYERS.indexOf(layer) <= LAYERS.indexOf(current.layer)) return state
-  const card = planLayerChange(current, layer).card
+  const card = keepCardMeta(current, planLayerChange(current, layer).card)
   const nodes = state.canvas.nodes.map((node) => {
     if (node.id !== cardId) return node
     return { ...node, text: frontText(card), color: LAYER_COLOR[layer] }
@@ -926,17 +1084,20 @@ export function commitCardText(
   if (!current) return state
   let card: Card
   if (current.layer === 'situation' || current.layer === '正文草稿') {
-    card = { layer: current.layer, body: text, fields: {} }
+    card = { ...current, layer: current.layer, body: text, fields: {} }
   } else if (current.layer === '一句话') {
-    card = { layer: '一句话', body: text, fields: { sentence: text } }
+    card = { ...current, layer: '一句话', body: text, fields: { sentence: text } }
   } else {
     const fields = fieldsFor(current.layer, current.fields)
     const key = allowedFieldKey(current, fieldKey)
+    if (key === 'philosophy') return state
     if (key) fields[key] = text
     if (keptExtraKey(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
-    card = { layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
+    card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
-  return paintCard(state, cardId, card)
+  const painted = paintCard(state, cardId, card)
+  if (current.layer === 'renwubiao' && fieldKey === 'motivation') return mirrorPhilosophy(painted)
+  return painted
 }
 
 function additionBeyond(base: string, next: string): string {
@@ -967,7 +1128,7 @@ export function adoptIntoCard(state: AppState, cardId: string, nextBody: string,
   const existing = (current.fields[target] ?? '').replace(/\s+$/u, '')
   const written = existing && existing !== addition && !existing.endsWith(`\n${addition}`) ? `${existing}\n${addition}` : addition || existing
   const fields = fieldsFor(current.layer, { ...current.fields, [target]: written })
-  const card: Card = { layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
+  const card: Card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   if (card.body === current.body && fields[target] === (current.fields[target] ?? '')) return state
   return paintCard(state, cardId, card)
 }
@@ -977,7 +1138,7 @@ export function setCardBody(state: AppState, cardId: string, body: string): AppS
   if (!current || current.body === body) return state
   const card: Card =
     current.layer === '一句话'
-      ? { layer: '一句话', body, fields: { ...current.fields, sentence: body } }
+      ? { ...current, layer: '一句话', body, fields: { ...current.fields, sentence: body } }
       : { ...current, body }
   return paintCard(state, cardId, card)
 }
@@ -1026,22 +1187,43 @@ function pickEdge(edge: CanvasEdge): CanvasEdge {
   if (edge.fromEnd !== undefined) out.fromEnd = edge.fromEnd
   if (edge.toEnd !== undefined) out.toEnd = edge.toEnd
   if (edge.label !== undefined) out.label = edge.label
+  if (edge.kind !== undefined) out.kind = edge.kind
+  if (edge.relation !== undefined) out.relation = edge.relation
+  if (edge.foreshadow !== undefined) out.foreshadow = edge.foreshadow
+  if (edge.derivedFrom !== undefined) {
+    out.derivedFrom = { sessionId: edge.derivedFrom.sessionId, adoptionKey: edge.derivedFrom.adoptionKey }
+  }
+  if (edge.sedimentEvents !== undefined) out.sedimentEvents = [...edge.sedimentEvents]
   return out
 }
 
 export function serializeDocument(state: AppState): {
   canvas: { nodes: CanvasNode[]; edges: CanvasEdge[] }
   snowflake: { fileId: string; cards: Record<string, Card> }
+  entities?: Entity[]
+  sediment?: SedimentEvent[]
+  chapters?: BookChapter[]
+  pendingProseScenes?: PendingProseScene[]
 } {
   const cards: Record<string, Card> = {}
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
     const fields = fieldsFor(card.layer, card.fields)
-    cards[id] = {
+    if (card.layer === 'renwudangan') fields.philosophy = motivationForDossier(state, id)
+    const stored: Card = {
       layer: card.layer,
       body: card.layer === '一句话' ? (fields.sentence ?? card.body) : card.body,
       fields,
     }
+    if (card.mergeNote) stored.mergeNote = card.mergeNote
+    if (card.premise) stored.premise = true
+    if (card.derivedFrom) stored.derivedFrom = card.derivedFrom
+    if (card.arc) stored.arc = normalizeArc(card.arc)
+    cards[id] = stored
   }
+  const entities = (state.entities ?? []).map(cloneEntity)
+  const sediment = (state.sediment ?? []).map(cloneSediment)
+  const chapters = state.chapters ?? []
+  const pending = state.pendingProseScenes ?? []
   return {
     canvas: {
       nodes: state.canvas.nodes.map(pickNode),
@@ -1051,6 +1233,10 @@ export function serializeDocument(state: AppState): {
       fileId: state.snowflake.fileId,
       cards,
     },
+    ...(entities.length > 0 ? { entities } : {}),
+    ...(sediment.length > 0 ? { sediment } : {}),
+    ...(chapters.length > 0 ? { chapters } : {}),
+    ...(pending.length > 0 ? { pendingProseScenes: pending } : {}),
   }
 }
 
@@ -1059,6 +1245,10 @@ interface DraftCard {
   body: string
   fields: Record<string, string>
   rebuild: boolean
+  mergeNote?: string
+  premise?: boolean
+  derivedFrom?: string
+  arc?: ArcCells
 }
 
 function mergeText(base: string, extra: string): string {
@@ -1089,17 +1279,18 @@ function unknownToSituation(card: DraftCard): Card {
 }
 
 function materialize(card: DraftCard): Card {
-  if (!isLayerName(card.layer)) return unknownToSituation(card)
+  if (!isLayerName(card.layer)) return attachDraftMeta(unknownToSituation(card), card)
   const fields = fieldsFor(card.layer, card.fields)
+  if (card.layer === 'renwubiao') fields.grade = mapGrade(fields.grade)
   if (card.layer === 'situation' || card.layer === '正文草稿') {
-    return { layer: card.layer, body: card.body, fields }
+    return attachDraftMeta({ layer: card.layer, body: card.body, fields }, card)
   }
   if (card.layer === '一句话') {
     const sentence = fields.sentence || card.body
-    return { layer: '一句话', body: sentence, fields: { sentence } }
+    return attachDraftMeta({ layer: '一句话', body: sentence, fields: { sentence } }, card)
   }
   const body = card.rebuild ? bodyFor(card.layer, fields, '') : card.body || bodyFor(card.layer, fields, '')
-  return { layer: card.layer, body, fields }
+  return attachDraftMeta({ layer: card.layer, body, fields }, card)
 }
 
 export function loadCards(
@@ -1113,6 +1304,10 @@ export function loadCards(
       body: card.body,
       fields: { ...card.fields },
       rebuild: false,
+      mergeNote: card.mergeNote,
+      premise: card.premise,
+      derivedFrom: card.derivedFrom,
+      arc: card.arc,
     })
   }
 
@@ -1183,4 +1378,552 @@ export function loadCards(
   const cards: Record<string, Card> = {}
   for (const [id, card] of drafts) cards[id] = materialize(card)
   return cards
+}
+
+function normalizeArc(value: Partial<ArcCells> | undefined): ArcCells {
+  const arc = emptyArc()
+  if (!value) return arc
+  for (const key of ARC_KEYS) {
+    const cell = value[key]
+    arc[key] = typeof cell === 'string' ? cell : ''
+  }
+  return arc
+}
+
+function attachDraftMeta(card: Card, draft: DraftCard): Card {
+  if (draft.mergeNote) card.mergeNote = draft.mergeNote
+  if (draft.premise) card.premise = true
+  if (draft.derivedFrom) card.derivedFrom = draft.derivedFrom
+  if (draft.arc) card.arc = normalizeArc(draft.arc)
+  return card
+}
+
+function keepCardMeta(previous: Card, next: Card): Card {
+  const card: Card = { ...next }
+  if (previous.mergeNote) card.mergeNote = previous.mergeNote
+  if (previous.premise) card.premise = true
+  if (previous.derivedFrom) card.derivedFrom = previous.derivedFrom
+  if (previous.arc) card.arc = normalizeArc(previous.arc)
+  return card
+}
+
+function cloneEntity(entity: Entity): Entity {
+  const fields: Record<string, EntityField> = {}
+  for (const [key, field] of Object.entries(entity.fields)) {
+    if (key === 'philosophy') continue
+    fields[key] = { value: field.value, events: [...field.events] }
+  }
+  return {
+    id: entity.id,
+    entityType: entity.entityType,
+    name: entity.name,
+    views: { ...entity.views },
+    fields,
+    arc: normalizeArc(entity.arc),
+    premise: entity.premise === true,
+  }
+}
+
+function cloneSediment(event: SedimentEvent): SedimentEvent {
+  const copy: SedimentEvent = {
+    id: event.id,
+    requestId: event.requestId,
+    kind: event.kind,
+    ideaId: event.ideaId,
+    at: event.at,
+    target: { ...event.target },
+    action: event.action,
+    quote: event.quote,
+    status: event.status,
+  }
+  if (event.sessionId !== undefined) copy.sessionId = event.sessionId
+  if (event.adoptionKey !== undefined) copy.adoptionKey = event.adoptionKey
+  if (event.superseded) copy.superseded = true
+  return copy
+}
+
+function motivationForDossier(state: AppState, dossierId: string): string {
+  for (const entity of state.entities ?? []) {
+    if (entity.entityType !== 'person' || entity.views.renwudangan !== dossierId) continue
+    if (entity.fields.motivation) return entity.fields.motivation.value
+    const personId = entity.views.renwubiao
+    if (personId) return state.snowflake.cards[personId]?.fields.motivation ?? ''
+    return ''
+  }
+  return state.snowflake.cards[dossierId]?.fields.philosophy ?? ''
+}
+
+function personLabel(card: Card): string {
+  if (card.layer === 'renwubiao') return (card.fields.name ?? '').trim()
+  if (card.layer === 'renwugushi') return (card.fields.who ?? '').trim()
+  if (card.layer === 'renwudangan') return (card.fields.bodyName ?? '').trim()
+  return ''
+}
+
+function seedField(fields: Record<string, EntityField>, key: string, value: string | undefined): void {
+  if (key === 'philosophy') return
+  const text = value ?? ''
+  if (!text.trim()) return
+  if (fields[key]) return
+  fields[key] = { value: text, events: [] }
+}
+
+export function collectPersonEntities(cards: Readonly<Record<string, Card>>): Entity[] {
+  const groups = new Map<string, { renwubiao: string[]; renwugushi: string[]; renwudangan: string[] }>()
+  for (const [id, card] of Object.entries(cards)) {
+    if (card.layer !== 'renwubiao' && card.layer !== 'renwugushi' && card.layer !== 'renwudangan') continue
+    const name = personLabel(card)
+    if (!name) continue
+    const group = groups.get(name) ?? { renwubiao: [], renwugushi: [], renwudangan: [] }
+    group[card.layer].push(id)
+    groups.set(name, group)
+  }
+  const entities: Entity[] = []
+  for (const [name, group] of groups) {
+    const views: EntityViews = {}
+    if (group.renwubiao.length === 1) views.renwubiao = group.renwubiao[0]
+    if (group.renwugushi.length === 1) views.renwugushi = group.renwugushi[0]
+    if (group.renwudangan.length === 1) views.renwudangan = group.renwudangan[0]
+    if (!views.renwubiao && !views.renwugushi && !views.renwudangan) continue
+    const fields: Record<string, EntityField> = {}
+    const viewId = views.renwubiao ?? views.renwugushi ?? views.renwudangan ?? ''
+    let arc = emptyArc()
+    let premise = false
+    for (const id of [views.renwubiao, views.renwugushi, views.renwudangan]) {
+      if (!id) continue
+      const card = cards[id]
+      if (!card) continue
+      if (card.premise) premise = true
+      if (card.arc) arc = normalizeArc(card.arc)
+      for (const [key, value] of Object.entries(card.fields)) seedField(fields, key, value)
+    }
+    entities.push({
+      id: `entity-${viewId}`,
+      entityType: 'person',
+      name,
+      views,
+      fields,
+      arc,
+      premise,
+    })
+  }
+  return entities
+}
+
+export function mirrorPhilosophy(state: AppState): AppState {
+  const cards = { ...state.snowflake.cards }
+  let changed = false
+  for (const entity of state.entities ?? []) {
+    if (entity.entityType !== 'person') continue
+    const dossierId = entity.views.renwudangan
+    if (!dossierId) continue
+    const dossier = cards[dossierId]
+    if (!dossier) continue
+    const motivation = entity.fields.motivation?.value ?? (entity.views.renwubiao ? (cards[entity.views.renwubiao]?.fields.motivation ?? '') : '')
+    if ((dossier.fields.philosophy ?? '') === motivation) continue
+    changed = true
+    cards[dossierId] = { ...dossier, fields: { ...dossier.fields, philosophy: motivation } }
+  }
+  const entities = (state.entities ?? []).map((entity) => {
+    if (!entity.fields.philosophy) return entity
+    const fields = { ...entity.fields }
+    delete fields.philosophy
+    changed = true
+    return { ...entity, fields }
+  })
+  if (!changed) return state
+  return { ...state, entities, snowflake: { ...state.snowflake, cards } }
+}
+
+export function migrateEdges(edges: readonly CanvasEdge[], cards: Readonly<Record<string, Card>>): CanvasEdge[] {
+  return edges.map((edge) => {
+    if (edge.kind && isEdgeKind(edge.kind)) return edge
+    if (edge.foreshadow && isForeshadowState(edge.foreshadow)) return { ...edge, kind: 'foreshadow' }
+    const from = cards[edge.fromNode]
+    const to = cards[edge.toNode]
+    if (from?.layer === 'situation' && to?.layer === 'situation' && edge.relation && isRelationKind(edge.relation)) {
+      return { ...edge, kind: 'relates' }
+    }
+    if ((edge.label ?? '').trim()) return { ...edge, kind: 'grows-from' }
+    return edge
+  })
+}
+
+export interface EdgeExtra {
+  relation?: RelationKind
+  foreshadow?: ForeshadowState
+  derivedFrom?: DerivedFrom
+}
+
+function chapterOf(state: AppState, id: string): BookChapter | undefined {
+  return (state.chapters ?? []).find((chapter) => chapter.id === id)
+}
+
+function sceneOf(state: AppState, id: string): BookScene | undefined {
+  for (const chapter of state.chapters ?? []) {
+    const scene = chapter.scenes.find((item) => item.id === id)
+    if (scene) return scene
+  }
+  return undefined
+}
+
+function edgeAllowed(state: AppState, from: string, to: string, kind: EdgeKind, extra?: EdgeExtra): boolean {
+  const fromCard = state.snowflake.cards[from]
+  const toCard = state.snowflake.cards[to]
+  const fromEntity = (state.entities ?? []).find((entity) => entity.id === from)
+  const toEntity = (state.entities ?? []).find((entity) => entity.id === to)
+  if (kind === 'grows-from') return Boolean(fromCard && toCard)
+  if (kind === 'projects-onto') return fromCard?.layer === 'situation' && Boolean(toEntity)
+  if (kind === 'relates') {
+    return fromCard?.layer === 'situation' && toCard?.layer === 'situation' && isRelationKind(extra?.relation)
+  }
+  if (kind === 'foreshadow') {
+    const fromOk = fromCard?.layer === 'situation'
+    const toOk = toCard?.layer === 'situation' || toEntity?.entityType === 'foreshadow-line'
+    const mark = extra?.foreshadow ?? '计划'
+    return Boolean(fromOk && toOk && isForeshadowState(mark))
+  }
+  if (kind === 'appears-in') {
+    const fromOk = fromCard?.layer === '场景表' || fromCard?.layer === 'changci'
+    const toOk = toEntity?.entityType === 'person' || toEntity?.entityType === 'place' || toEntity?.entityType === 'org'
+    return Boolean(fromOk && toOk)
+  }
+  if (kind === 'relates-entity') return Boolean(fromEntity && toEntity)
+  if (kind === 'chapter-in') {
+    const chapter = chapterOf(state, from)
+    const scene = sceneOf(state, to)
+    if (chapter && scene && chapter.scenes.some((item) => item.id === scene.id)) return true
+    const fromScene = sceneOf(state, from)
+    return Boolean(fromScene && toCard?.layer === 'changci')
+  }
+  return false
+}
+
+export function addEdge(state: AppState, from: string, to: string, kind: 'grows-from'): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'projects-onto'): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'relates', extra: { relation: RelationKind }): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'foreshadow', extra?: { foreshadow?: ForeshadowState }): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'appears-in'): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'relates-entity'): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: 'chapter-in'): AppState
+export function addEdge(state: AppState, from: string, to: string, kind: EdgeKind, extra?: EdgeExtra): AppState {
+  if (from === to || !isEdgeKind(kind)) return state
+  if (!edgeAllowed(state, from, to, kind, extra)) return state
+  if (kind === 'grows-from') {
+    if (state.canvas.edges.some((edge) => edge.fromNode === from && edge.toNode === to)) return state
+  } else if (state.canvas.edges.some((edge) => edge.fromNode === from && edge.toNode === to && edge.kind === kind)) {
+    return state
+  }
+  const edge: CanvasEdge = {
+    id: kind === 'grows-from' ? `e-${from}-${to}` : makeId('e'),
+    fromNode: from,
+    toNode: to,
+    kind,
+  }
+  if (kind === 'grows-from') {
+    edge.fromSide = 'right'
+    edge.toSide = 'left'
+    edge.toEnd = 'arrow'
+    edge.label = '连到后面的层'
+  }
+  if (kind === 'relates' && extra?.relation) edge.relation = extra.relation
+  if (kind === 'foreshadow') edge.foreshadow = extra?.foreshadow ?? '计划'
+  if (kind === 'relates' && extra?.relation === '派生' && extra.derivedFrom) edge.derivedFrom = extra.derivedFrom
+  if (kind === 'projects-onto') edge.sedimentEvents = []
+  return { ...state, canvas: { ...state.canvas, edges: [...state.canvas.edges, edge] } }
+}
+
+export function connectIdeas(state: AppState, fromId: string, toId: string, relation: RelationKind): AppState {
+  if (relation === '伏笔') return addEdge(state, fromId, toId, 'foreshadow', { foreshadow: '计划' })
+  return addEdge(state, fromId, toId, 'relates', { relation })
+}
+
+export function setEdgeRelation(
+  state: AppState,
+  edgeId: string,
+  relation: RelationKind,
+  extra?: { foreshadow?: ForeshadowState; derivedFrom?: DerivedFrom },
+): AppState {
+  const current = state.canvas.edges.find((edge) => edge.id === edgeId)
+  if (!current) return state
+  const kind: EdgeKind = relation === '伏笔' ? 'foreshadow' : 'relates'
+  if (!edgeAllowed(state, current.fromNode, current.toNode, kind, { relation, foreshadow: extra?.foreshadow })) return state
+  const next: CanvasEdge = { ...current, kind }
+  if (kind === 'relates') {
+    next.relation = relation
+    delete next.foreshadow
+    if (relation === '派生' && extra?.derivedFrom) next.derivedFrom = extra.derivedFrom
+    else delete next.derivedFrom
+  } else {
+    next.foreshadow = extra?.foreshadow ?? current.foreshadow ?? '计划'
+    delete next.relation
+    delete next.derivedFrom
+  }
+  if (
+    current.kind === next.kind &&
+    current.relation === next.relation &&
+    current.foreshadow === next.foreshadow &&
+    current.derivedFrom?.sessionId === next.derivedFrom?.sessionId &&
+    current.derivedFrom?.adoptionKey === next.derivedFrom?.adoptionKey
+  ) {
+    return state
+  }
+  return {
+    ...state,
+    canvas: { ...state.canvas, edges: state.canvas.edges.map((edge) => (edge.id === edgeId ? next : edge)) },
+  }
+}
+
+function orderEvents(events: readonly SedimentEvent[]): SedimentEvent[] {
+  return events
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => {
+      if (left.event.at < right.event.at) return -1
+      if (left.event.at > right.event.at) return 1
+      return left.index - right.index
+    })
+    .map((item) => item.event)
+}
+
+function supersededIds(events: readonly SedimentEvent[]): Set<string> {
+  const kill = new Set<string>()
+  const groups = new Map<string, SedimentEvent[]>()
+  for (const event of events) {
+    const key = `${event.target.entityId}\0${event.target.fieldKey}`
+    const list = groups.get(key) ?? []
+    list.push(event)
+    groups.set(key, list)
+  }
+  for (const list of groups.values()) {
+    const ordered = orderEvents(list)
+    const seen = new Set<string>()
+    for (const event of ordered) {
+      if (seen.has(event.requestId)) continue
+      seen.add(event.requestId)
+      if (event.action !== 'negate') continue
+      for (const previous of ordered) {
+        if (previous.id === event.id || previous.requestId === event.requestId) continue
+        if (previous.quote === event.quote) kill.add(previous.id)
+      }
+    }
+  }
+  return kill
+}
+
+export function foldFieldValue(events: readonly SedimentEvent[]): string {
+  const kill = supersededIds(events)
+  const ordered = orderEvents(events)
+  const seen = new Set<string>()
+  let value = ''
+  for (const event of ordered) {
+    if (seen.has(event.requestId)) continue
+    seen.add(event.requestId)
+    if (event.superseded || kill.has(event.id)) continue
+    if (event.action === 'negate') continue
+    if (event.action === 'replace') value = event.quote
+    else value = value ? `${value}\n\n${event.quote}` : event.quote
+  }
+  return value
+}
+
+function markSuperseded(events: readonly SedimentEvent[]): SedimentEvent[] {
+  const kill = supersededIds(events)
+  return events.map((event) => {
+    if (!kill.has(event.id)) {
+      if (!event.superseded) return event
+      const next = { ...event }
+      delete next.superseded
+      return next
+    }
+    return event.superseded ? event : { ...event, superseded: true }
+  })
+}
+
+function isSedimentKind(value: unknown): value is SedimentKind {
+  return typeof value === 'string' && (SEDIMENT_KINDS as readonly string[]).includes(value)
+}
+
+function isSedimentAction(value: unknown): value is SedimentAction {
+  return typeof value === 'string' && (SEDIMENT_ACTIONS as readonly string[]).includes(value)
+}
+
+function isSedimentStatus(value: unknown): value is SedimentStatus {
+  return typeof value === 'string' && (SEDIMENT_STATUSES as readonly string[]).includes(value)
+}
+
+export function applySediment(state: AppState, input: SedimentEvent): AppState {
+  if (!input || typeof input.ideaId !== 'string' || input.ideaId.trim() === '') return state
+  if (typeof input.requestId !== 'string' || input.requestId.trim() === '') return state
+  if (typeof input.quote !== 'string' || input.quote.trim() === '') return state
+  if (!isSedimentKind(input.kind) || !isSedimentAction(input.action) || !isSedimentStatus(input.status)) return state
+  if (!input.target || !isEntityType(input.target.entityType)) return state
+  if (typeof input.target.entityId !== 'string' || input.target.entityId.trim() === '') return state
+  if (typeof input.target.fieldKey !== 'string' || input.target.fieldKey.trim() === '') return state
+  if (input.target.fieldKey === 'philosophy') return state
+  const entities = state.entities ?? []
+  if (!entities.some((entity) => entity.id === input.target.entityId)) return state
+  if ((state.sediment ?? []).some((event) => event.requestId === input.requestId)) return state
+  const event = cloneSediment({ ...input, id: input.id || makeId('sed'), superseded: undefined })
+  const sediment = markSuperseded([...(state.sediment ?? []), event])
+  const nextEntities = entities.map((entity) => {
+    if (entity.id !== event.target.entityId) return entity
+    const list = sediment.filter((item) => item.target.entityId === entity.id && item.target.fieldKey === event.target.fieldKey)
+    const ordered = orderEvents(list)
+    return {
+      ...entity,
+      fields: {
+        ...entity.fields,
+        [event.target.fieldKey]: { value: foldFieldValue(ordered), events: ordered.map((item) => item.id) },
+      },
+    }
+  })
+  const edges = state.canvas.edges.map((edge) => {
+    if (edge.kind !== 'projects-onto' || edge.fromNode !== event.ideaId || edge.toNode !== event.target.entityId) return edge
+    const ids = edge.sedimentEvents ?? []
+    if (ids.includes(event.id)) return edge
+    return { ...edge, sedimentEvents: [...ids, event.id] }
+  })
+  return { ...state, entities: nextEntities, sediment, canvas: { ...state.canvas, edges } }
+}
+
+function appendParagraph(base: string, extra: string): string {
+  if (!extra) return base
+  if (!base) return extra
+  return `${base}\n\n${extra}`
+}
+
+export function mergeCards(state: AppState, targetId: string, dropIds: readonly string[]): AppState {
+  const target = state.snowflake.cards[targetId]
+  if (!target) return state
+  const drops = [...new Set(dropIds.filter((id) => id && id !== targetId && state.snowflake.cards[id]))]
+  if (drops.length === 0) return state
+  const dropSet = new Set(drops)
+  let body = target.body
+  let premise = target.premise === true
+  for (const id of drops) {
+    const card = state.snowflake.cards[id]
+    if (!card) continue
+    body = appendParagraph(body, card.body)
+    if (card.premise) premise = true
+  }
+  for (const entity of state.entities ?? []) {
+    if (!entity.premise) continue
+    const viewIds = [entity.views.renwubiao, entity.views.renwugushi, entity.views.renwudangan]
+    if (viewIds.some((id) => id !== undefined && dropSet.has(id))) premise = true
+  }
+  const noteIds = (target.mergeNote ?? '').split(',').map((item) => item.trim()).filter((item) => item.length > 0)
+  for (const id of drops) {
+    if (!noteIds.includes(id)) noteIds.push(id)
+  }
+  const cards: Record<string, Card> = {}
+  for (const [id, card] of Object.entries(state.snowflake.cards)) {
+    if (dropSet.has(id)) continue
+    if (id === targetId) {
+      const next: Card = { ...card, body, mergeNote: noteIds.join(',') }
+      if (premise) next.premise = true
+      else delete next.premise
+      cards[id] = next
+      continue
+    }
+    if (premise && card.premise) {
+      const next = { ...card }
+      delete next.premise
+      cards[id] = next
+      continue
+    }
+    cards[id] = card
+  }
+  const seen = new Set<string>()
+  const edges: CanvasEdge[] = []
+  for (const edge of state.canvas.edges) {
+    const fromNode = dropSet.has(edge.fromNode) ? targetId : edge.fromNode
+    const toNode = dropSet.has(edge.toNode) ? targetId : edge.toNode
+    if (fromNode === toNode) continue
+    const key = `${edge.kind ?? ''}\0${fromNode}\0${toNode}\0${edge.relation ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    edges.push(fromNode === edge.fromNode && toNode === edge.toNode ? edge : { ...edge, fromNode, toNode })
+  }
+  const sediment = (state.sediment ?? []).map((event) => {
+    const ideaId = dropSet.has(event.ideaId) ? targetId : event.ideaId
+    const entityId = dropSet.has(event.target.entityId) ? targetId : event.target.entityId
+    if (ideaId === event.ideaId && entityId === event.target.entityId) return event
+    return { ...event, ideaId, target: { ...event.target, entityId } }
+  })
+  const entities = (state.entities ?? []).map((entity) => {
+    const views: EntityViews = { ...entity.views }
+    for (const key of ['renwubiao', 'renwugushi', 'renwudangan'] as const) {
+      const viewId = views[key]
+      if (viewId && dropSet.has(viewId)) views[key] = cards[targetId]?.layer === key ? targetId : undefined
+    }
+    return { ...entity, views, premise: premise ? false : entity.premise }
+  })
+  return {
+    ...state,
+    activeId: state.activeId && dropSet.has(state.activeId) ? targetId : state.activeId,
+    canvas: {
+      nodes: state.canvas.nodes.filter((node) => !dropSet.has(node.id)),
+      edges,
+    },
+    snowflake: { ...state.snowflake, cards },
+    entities,
+    sediment,
+  }
+}
+
+export function outlineProgress(chapters: readonly BookChapter[] | undefined): { filled: number; total: number } {
+  let filled = 0
+  let total = 0
+  for (const chapter of chapters ?? []) {
+    for (const scene of chapter.scenes) {
+      total += 1
+      if ((scene.beatIds ?? []).some((id) => id.trim().length > 0)) filled += 1
+    }
+  }
+  return { filled, total }
+}
+
+export function reconcileProse(state: AppState): AppState {
+  const chapters = (state.chapters ?? []).map((chapter) => ({
+    ...chapter,
+    scenes: chapter.scenes.map((scene) => ({ ...scene, beatIds: [...(scene.beatIds ?? [])], ideaIds: [...(scene.ideaIds ?? [])] })),
+  }))
+  const sceneAt = new Map<string, { chapterIndex: number; sceneIndex: number }>()
+  chapters.forEach((chapter, chapterIndex) => {
+    chapter.scenes.forEach((scene, sceneIndex) => sceneAt.set(scene.id, { chapterIndex, sceneIndex }))
+  })
+  const cards = { ...state.snowflake.cards }
+  const pending = [...(state.pendingProseScenes ?? [])]
+  const pendingIds = new Set(pending.map((item) => item.cardId))
+  let changed = false
+  for (const [id, card] of Object.entries(cards)) {
+    if (card.layer !== '正文草稿') continue
+    const sceneId = (card.derivedFrom ?? '').trim()
+    const loc = sceneId ? sceneAt.get(sceneId) : undefined
+    if (!loc) {
+      if (!pendingIds.has(id)) {
+        pending.push({ cardId: id, chapterHint: '' })
+        pendingIds.add(id)
+        changed = true
+      }
+      continue
+    }
+    const scene = chapters[loc.chapterIndex].scenes[loc.sceneIndex]
+    const prose = scene.prose ?? ''
+    const body = card.body ?? ''
+    const proseEmpty = prose.trim() === ''
+    const bodyEmpty = body.trim() === ''
+    if (proseEmpty && !bodyEmpty) {
+      chapters[loc.chapterIndex].scenes[loc.sceneIndex] = { ...scene, prose: body }
+      cards[id] = { ...card, body: '' }
+      changed = true
+      continue
+    }
+    if (!proseEmpty && !bodyEmpty && prose !== body && !scene.proseFork) {
+      chapters[loc.chapterIndex].scenes[loc.sceneIndex] = { ...scene, proseFork: true }
+      changed = true
+    }
+  }
+  if (!changed) return state
+  return { ...state, chapters, pendingProseScenes: pending, snowflake: { ...state.snowflake, cards } }
 }
