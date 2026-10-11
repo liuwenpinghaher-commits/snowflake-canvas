@@ -456,10 +456,11 @@ describe('D4 建议包溯源', () => {
 })
 
 describe('百科占位文案', () => {
-  it('不再写下一刀才做，并说明两个按钮要等百科页', () => {
+  it('百科页已接上，不再留占位文案', () => {
     const app = readFileSync(join(repoRoot, 'src/App.tsx'), 'utf8')
     expect(app).not.toContain('这一页下一刀才做。')
-    expect(app).toContain('百科页还没做。升格卡面到定稿、拉定稿回卡面这两个按钮要等百科页。')
+    expect(app).not.toContain('百科页还没做')
+    expect(app).toContain('<EncyclopediaPage')
     const block = app.slice(app.indexOf("page === 'encyclopedia'"), app.indexOf("page === 'chapter'"))
     expect(block).not.toContain('<button')
     expect(block).not.toContain('gbrain')

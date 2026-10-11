@@ -117,30 +117,9 @@ export function gradeVisibility(grade: string | undefined): GradeVisibility {
   }
 }
 
+// 只认书里的实体。对不上就当没有这个人，不再造 entity-卡号 这种写不进页名的假实体。
 export function entityForPersonCard(state: AppState, cardId: string): Entity | undefined {
-  const found = personEntityForCard(state, cardId)
-  if (found) return found
-  const card = state.snowflake.cards[cardId]
-  if (!card) return undefined
-  if (card.layer !== 'renwubiao' && card.layer !== 'renwugushi' && card.layer !== 'renwudangan') return undefined
-  const fields: Entity['fields'] = {}
-  for (const [key, value] of Object.entries(card.fields)) {
-    if (key === 'philosophy') continue
-    fields[key] = { value, events: [] }
-  }
-  return {
-    id: `entity-${cardId}`,
-    entityType: 'person',
-    name: fields.name?.value || fields.who?.value || fields.bodyName?.value || '',
-    views: {
-      ...(card.layer === 'renwubiao' ? { renwubiao: cardId } : {}),
-      ...(card.layer === 'renwugushi' ? { renwugushi: cardId } : {}),
-      ...(card.layer === 'renwudangan' ? { renwudangan: cardId } : {}),
-    },
-    fields,
-    arc: card.arc ?? emptyArc(),
-    premise: card.premise === true,
-  }
+  return personEntityForCard(state, cardId)
 }
 
 export function personEntityForCard(state: AppState, cardId: string): Entity | undefined {

@@ -80,7 +80,7 @@ function SelectionPanel({
   state: AppState
   open: RelationSelection
   onOpenPerson?: (entityId: string) => void
-  onOpenEncyclopedia?: () => void
+  onOpenEncyclopedia?: (entityId: string) => void
 }) {
   if (open.kind === 'node') {
     const entity = (state.entities ?? []).find((item) => item.id === open.id)
@@ -98,7 +98,7 @@ function SelectionPanel({
             打开人物页
           </button>
         ) : null}
-        <button type="button" onClick={() => onOpenEncyclopedia?.()}>
+        <button type="button" onClick={() => onOpenEncyclopedia?.(entity.id)}>
           打开百科页
         </button>
       </aside>
@@ -130,7 +130,7 @@ export default function RelationPage({
   initialSelection?: RelationSelection | null
   focusId?: string | null
   onOpenPerson?: (entityId: string) => void
-  onOpenEncyclopedia?: () => void
+  onOpenEncyclopedia?: (entityId: string) => void
 }) {
   const [filter, setFilter] = useState<RelationFilter>(() => copyFilter(initialFilter ?? defaultRelationFilter()))
   const [open, setOpen] = useState<RelationSelection | null>(initialSelection)

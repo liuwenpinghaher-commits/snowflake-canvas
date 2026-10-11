@@ -29,6 +29,7 @@ import {
 import { getImportProgress, importPlainText, setImportProgress } from './import-book.mjs'
 import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
+import { finalizedText, pageMissingMessage, parsePageSnapshot, promoteEntityPage, timelineBelow } from './encyclopedia.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 
@@ -1209,6 +1210,31 @@ async function resolveSedimentQuote(sessionId, quote) {
   return { adoptionKey: resolved.key }
 }
 
+
+async function readEncyclopediaSnapshot(slug) {
+  try {
+    const out = await runGbrain(['get', slug, '--include-content', '--content-only', '--json'])
+    const parsed = parsePageSnapshot(out)
+    if (!parsed) throw new Error('gbrain 没有给回页的版本')
+    return parsed
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (pageMissingMessage(message)) return null
+    throw error
+  }
+}
+
+async function putEncyclopediaPage(args) {
+  if (await gbrainDisabled()) throw new Error('gbrain 不可用，没有写入')
+  const argv = ['put', args.slug, '--request-id', args.requestId]
+  // 页已存在时必须带刚读到的版本。新建页时 gbrain 不接受版本号，调用方不会带这个参数。
+  if (typeof args.expectedRevision === 'string' && args.expectedRevision) {
+    argv.push('--expected-revision', args.expectedRevision)
+  }
+  const content = args.content.endsWith('\n') ? args.content : `${args.content}\n`
+  await runGbrain(argv, content)
+}
+
 function registerApi(app, prefix) {
   // 画布和讨论接口各挂两份：旧路径落到活动书，/api/books/:bookId/... 落到指定的书。
   const scoped = (method, path, handler) => {
@@ -1623,6 +1649,59 @@ function registerApi(app, prefix) {
     reply.code(outcome.statusCode)
     reply.header('Cache-Control', 'no-store')
     return reply.send(outcome.payload)
+  })
+
+  app.get(`${prefix}/api/encyclopedia/page`, async (request, reply) => {
+    const slug = textField(request.query?.slug)
+    if (!slug) {
+      reply.code(400)
+      return reply.send({ error: '缺少页名' })
+    }
+    reply.header('Cache-Control', 'no-store')
+    try {
+      if (await gbrainDisabled()) {
+        reply.code(502)
+        return reply.send({ error: 'gbrain 不可用' })
+      }
+      const raw = await runGbrain(['get', slug])
+      return reply.send({ ok: true, slug, finalized: finalizedText(raw), timeline: timelineBelow(raw) })
+    } catch (error) {
+      reply.code(502)
+      return reply.send({ error: error instanceof Error ? error.message : 'gbrain 读取失败' })
+    }
+  })
+
+  scoped('POST', '/encyclopedia/promote', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const entityId = textField(body.entityId)
+    const requestId = textField(body.requestId)
+    if (!entityId || !requestId) {
+      reply.code(400)
+      return reply.send({ error: '缺少实体或 requestId' })
+    }
+    let document
+    try {
+      const current = await exclusive(book, () => readCanonical(book))
+      document = current.document
+    } catch (error) {
+      return discussFailure(reply, error, '升格没有写上')
+    }
+    try {
+      const result = await promoteEntityPage(document, entityId, requestId, {
+        bookId: book.id,
+        readPage: (slug) => readEncyclopediaSnapshot(slug),
+        putPage: (args) => putEncyclopediaPage(args),
+      })
+      reply.code(result.statusCode || (result.ok ? 200 : 502))
+      reply.header('Cache-Control', 'no-store')
+      if (!result.ok) return reply.send({ error: result.error || '升格没有写上' })
+      return reply.send({ ok: true, slug: result.slug })
+    } catch (error) {
+      reply.code(502)
+      return reply.send({ error: error instanceof Error ? error.message : '升格没有写上' })
+    }
   })
 
   scoped('POST', '/discuss/stream', async (request, reply) => {

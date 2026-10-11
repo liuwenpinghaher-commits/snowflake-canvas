@@ -12,7 +12,7 @@ export interface BookList {
 export const DEFAULT_BOOK_NAME = '未命名书'
 export const MSG_BOOK_UNSAVED = '这本书还有改动没写进去，先等它写完或选好冲突，再换书'
 
-const SCOPED_PREFIXES = ['/api/canvas', '/api/discuss/', '/api/sediment']
+const SCOPED_PREFIXES = ['/api/canvas', '/api/discuss/', '/api/sediment', '/api/encyclopedia/promote']
 
 let currentBookId: string | null = null
 

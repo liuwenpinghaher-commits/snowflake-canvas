@@ -2301,3 +2301,68 @@ button.danger-quiet {
 .relation-edge {
   cursor: pointer;
 }
+
+.encyclopedia-page {
+  padding: 16px 20px 40px;
+  overflow: auto;
+}
+
+.encyclopedia-head,
+.encyclopedia-row {
+  display: grid;
+  grid-template-columns: minmax(8em, 1.4fr) 6em minmax(12em, 2fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.encyclopedia-head {
+  padding: 8px 0 4px;
+  color: #6d6256;
+  font-size: 13px;
+}
+
+.encyclopedia-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.encyclopedia-item {
+  border-bottom: 1px solid #e4d9cc;
+}
+
+.encyclopedia-row {
+  width: 100%;
+  margin: 0;
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.encyclopedia-row[aria-current='true'] {
+  background: #f3e2d6;
+}
+
+.encyclopedia-detail {
+  padding: 0 0 16px;
+}
+
+.encyclopedia-detail h3 {
+  margin: 12px 0 6px;
+}
+
+.encyclopedia-text {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+
+.encyclopedia-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}

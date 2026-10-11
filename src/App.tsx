@@ -9,6 +9,7 @@ import BooksPage, { type NewBookInput } from './BooksPage.tsx'
 import CastPage from './CastPage.tsx'
 import ChapterPage from './ChapterPage.tsx'
 import RelationPage from './RelationPage.tsx'
+import EncyclopediaPage from './EncyclopediaPage.tsx'
 import { defaultRelationFilter, type RelationFilter } from './relations.ts'
 import {
   DEFAULT_BOOK_NAME,
@@ -304,6 +305,7 @@ export default function App() {
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
   const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter'>('canvas')
+  const [encyclopediaEntityId, setEncyclopediaEntityId] = useState<string | null>(null)
   const [linkAsk, setLinkAsk] = useState<{ from: string; to: string } | null>(null)
   const [pickingRelation, setPickingRelation] = useState(false)
   const [appearanceAsk, setAppearanceAsk] = useState<Exclude<AppearanceDecision, { kind: 'ignore' }> | null>(null)
@@ -883,14 +885,20 @@ export default function App() {
             setCastFocus({ entityId, fieldKey: '' })
             setPage('cast')
           }}
-          onOpenEncyclopedia={() => setPage('encyclopedia')}
+          onOpenEncyclopedia={(entityId) => {
+            setEncyclopediaEntityId(entityId)
+            setPage('encyclopedia')
+          }}
         />
       ) : null}
       {page === 'encyclopedia' ? (
-        <section className="later-page" aria-label="百科">
-          <h2>百科</h2>
-          <p>百科页还没做。升格卡面到定稿、拉定稿回卡面这两个按钮要等百科页。</p>
-        </section>
+        <EncyclopediaPage
+          state={state}
+          canEdit={canEdit}
+          bookId={bookId}
+          focusId={encyclopediaEntityId}
+          onApply={(recipe) => ctlRef.current?.mutate(recipe, UNDOABLE) ?? Promise.resolve()}
+        />
       ) : null}
       {page === 'chapter' ? (
         <ChapterPage

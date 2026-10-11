@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { bindLabel } from './encyclopedia.ts'
 import {
   ARC_KEYS,
   RENWUGUSHI_KEYS,
@@ -109,6 +110,7 @@ export default function CastPage({
               <th>名字</th>
               <th>类别</th>
               <th>一句</th>
+              <th>百科</th>
               <th />
             </tr>
           </thead>
@@ -187,6 +189,7 @@ function PersonRow({
         <td>{name || '未命名'}</td>
         <td>{visibility.level}</td>
         <td>{sentence}</td>
+        <td>{bindLabel(entity.slug)}</td>
         <td>
           <button type="button" disabled={!canEdit} onClick={() => onPlaceOnCanvas?.(entity.id)}>
             放到画布
@@ -200,7 +203,7 @@ function PersonRow({
       </tr>
       {open ? (
         <tr className="cast-detail">
-          <td colSpan={4}>
+          <td colSpan={5}>
             <PersonZones
               state={state}
               entity={entity}
