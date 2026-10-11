@@ -56,6 +56,7 @@ import {
   spawnChild,
   type Layer,
 } from './document.ts'
+import { createPersonEntity } from './person-form.ts'
 
 const UNDOABLE = { undoable: true }
 const CONFIRM_DELETE = '删除这张卡片？删错了可以点撤销。服务器模式下也可以用回退到这一版找回。'
@@ -285,7 +286,13 @@ export default function App() {
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
   const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter'>('canvas')
-  const [discussFocus, setDiscussFocus] = useState<{ cardId: string; sessionId?: string } | null>(null)
+  const [discussFocus, setDiscussFocus] = useState<{
+    cardId: string
+    sessionId?: string
+    adoptionKey?: string
+    draft?: string
+  } | null>(null)
+  const [castFocus, setCastFocus] = useState<{ entityId: string; fieldKey: string } | null>(null)
   const [wizardOnOpen, setWizardOnOpen] = useState(false)
   const [controlFolded, setControlFolded] = useState(false)
   const [lineHeight, setLineHeight] = useState(() => readStored(LINE_HEIGHT_KEY, readLineHeight, LINE_HEIGHT_DEFAULT))
@@ -426,11 +433,16 @@ export default function App() {
     }
   }
 
-  const openIdea = (cardId: string, sessionId?: string) => {
+  const openIdea = (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => {
     setPage('canvas')
     setDismissedId(null)
-    setDiscussFocus(sessionId ? { cardId, sessionId } : { cardId })
+    setDiscussFocus({ cardId, sessionId, adoptionKey, draft })
     ctlRef.current?.select(cardId)
+  }
+
+  const openPersonField = (entityId: string, fieldKey: string) => {
+    setCastFocus({ entityId, fieldKey })
+    setPage('cast')
   }
 
   const openBooks = (wizard: boolean) => {
@@ -792,6 +804,7 @@ export default function App() {
             void ctlRef.current?.mutate(recipe, UNDOABLE)
           }}
           onOpenIdea={openIdea}
+          focus={castFocus}
         />
       ) : null}
       {page === 'relation' ? <RelationPage state={state} /> : null}
@@ -883,6 +896,7 @@ export default function App() {
                       void ctlRef.current?.mutate(recipe, UNDOABLE)
                     }}
                     onOpenIdea={openIdea}
+                    onOpenField={openPersonField}
                   />
                 </div>
               </div>
@@ -945,6 +959,15 @@ export default function App() {
                 edges={state.canvas.edges}
                 cards={state.snowflake.cards}
                 focusSessionId={discussFocus?.cardId === state.activeId ? discussFocus.sessionId : undefined}
+                focusAdoptionKey={discussFocus?.cardId === state.activeId ? discussFocus.adoptionKey : undefined}
+                prefill={discussFocus?.cardId === state.activeId ? discussFocus.draft : undefined}
+                sediment={state.sediment ?? []}
+                onCreatePerson={async (id, name) => {
+                  const ctl = ctlRef.current
+                  if (!ctl) return false
+                  await ctl.mutate((current) => createPersonEntity(current, id, name), UNDOABLE)
+                  return (ctl.snapshot().state.entities ?? []).some((entity) => entity.id === id)
+                }}
                 onSedimentDone={() => {
                   void ctlRef.current?.reloadRemote()
                 }}

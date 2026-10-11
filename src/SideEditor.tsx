@@ -21,7 +21,7 @@ import {
   type Layer,
 } from './document.ts'
 import { PersonZones } from './CastPage.tsx'
-import { entityForPersonCard, gradeVisibility } from './person-form.ts'
+import { entityForPersonCard, formatGrowthLine, gradeVisibility, traceIdeaFields } from './person-form.ts'
 import { nextStepHint, pipelineGroupLabel, pipelineGroupProgress } from './card-layout.ts'
 import ExpandPanel from './ExpandPanel.tsx'
 import type { ShownCandidate } from './expand.ts'
@@ -117,6 +117,7 @@ export default function SideEditor({
   onDismissCandidates,
   onApply,
   onOpenIdea,
+  onOpenField,
 }: {
   cardId: string | null
   card: Card | null
@@ -132,7 +133,8 @@ export default function SideEditor({
   onConfirmCandidate: (id: string) => void
   onDismissCandidates: () => void
   onApply: (recipe: (state: AppState) => AppState) => void
-  onOpenIdea: (cardId: string, sessionId?: string) => void
+  onOpenIdea: (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
+  onOpenField: (entityId: string, fieldKey: string) => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -503,8 +505,41 @@ export default function SideEditor({
               onDismiss={onDismissCandidates}
             />
           ) : null}
+          {card && card.layer === 'situation' && cardId ? (
+            <IdeaGrowthList state={documentState} ideaId={cardId} onOpen={onOpenField} />
+          ) : null}
         </>
       ) : null}
     </div>
+  )
+}
+
+function IdeaGrowthList({
+  state,
+  ideaId,
+  onOpen,
+}: {
+  state: AppState
+  ideaId: string
+  onOpen: (entityId: string, fieldKey: string) => void
+}) {
+  const hits = traceIdeaFields(state, ideaId)
+  if (hits.length === 0) return null
+  return (
+    <section className="idea-growth" aria-label="这条念头长出了什么">
+      <h3>这条念头长出了什么</h3>
+      <ul>
+        {hits.map((hit) => {
+          const line = formatGrowthLine(state, hit)
+          return (
+            <li key={`${hit.entityId}:${hit.fieldKey}`}>
+              <button type="button" onClick={() => onOpen(hit.entityId, hit.fieldKey)}>
+                {line.label}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }

@@ -739,6 +739,287 @@ export function mergeSedimentAndEntities(
   return { entities, sediment, conflicts }
 }
 
+export const CHAPTER_PROSE_CONFLICT_PREFIX = 'chapter-prose:'
+export const PENDING_PROSE_CONFLICT_PREFIX = 'pending-prose:'
+
+export function chapterProseConflictId(chapterId: string, sceneId: string): string {
+  return `${CHAPTER_PROSE_CONFLICT_PREFIX}${encodeURIComponent(chapterId)}/${encodeURIComponent(sceneId)}`
+}
+
+export function pendingProseConflictId(cardId: string): string {
+  return `${PENDING_PROSE_CONFLICT_PREFIX}${encodeURIComponent(cardId)}`
+}
+
+export function chapterProseServerKey(chapterId: string, sceneId: string, local: string, remote: string): string {
+  return JSON.stringify({ chapterId, sceneId, local, remote })
+}
+
+export function pendingProseServerKey(cardId: string, local: string, remote: string): string {
+  return JSON.stringify({ cardId, local, remote })
+}
+
+function parseChapterProseServerKey(serverKey: string): { chapterId: string; sceneId: string; local: string; remote: string } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(serverKey)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as { chapterId?: unknown; sceneId?: unknown; local?: unknown; remote?: unknown }
+  if (typeof record.chapterId !== 'string' || typeof record.sceneId !== 'string') return null
+  if (typeof record.local !== 'string' || typeof record.remote !== 'string') return null
+  if (!record.chapterId || !record.sceneId) return null
+  return { chapterId: record.chapterId, sceneId: record.sceneId, local: record.local, remote: record.remote }
+}
+
+function parsePendingProseServerKey(serverKey: string): { cardId: string; local: string; remote: string } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(serverKey)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as { cardId?: unknown; local?: unknown; remote?: unknown }
+  if (typeof record.cardId !== 'string' || !record.cardId) return null
+  if (typeof record.local !== 'string' || typeof record.remote !== 'string') return null
+  return { cardId: record.cardId, local: record.local, remote: record.remote }
+}
+
+function chapterProseCardConflict(chapterId: string, sceneId: string, local: string, remote: string): CardConflict {
+  return {
+    cardId: chapterProseConflictId(chapterId, sceneId),
+    serverKey: chapterProseServerKey(chapterId, sceneId, local, remote),
+    server: {
+      card: { layer: 'changci', body: remote, fields: {} },
+      node: null,
+      edges: [],
+    },
+  }
+}
+
+function pendingProseCardConflict(cardId: string, local: string, remote: string): CardConflict {
+  return {
+    cardId: pendingProseConflictId(cardId),
+    serverKey: pendingProseServerKey(cardId, local, remote),
+    server: {
+      card: { layer: '正文草稿', body: remote, fields: {} },
+      node: null,
+      edges: [],
+    },
+  }
+}
+
+function applySceneProse(state: AppState, chapterId: string, sceneId: string, prose: string): AppState {
+  let found = false
+  const chapters = (state.chapters ?? []).map((chapter) => {
+    if (chapter.id !== chapterId) return chapter
+    return {
+      ...chapter,
+      scenes: chapter.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene
+        found = true
+        return { ...scene, prose }
+      }),
+    }
+  })
+  return found ? { ...state, chapters } : state
+}
+
+function applyPendingHint(state: AppState, cardId: string, chapterHint: string): AppState {
+  let found = false
+  const pendingProseScenes = (state.pendingProseScenes ?? []).map((item) => {
+    if (item.cardId !== cardId) return item
+    found = true
+    return { ...item, chapterHint }
+  })
+  return found ? { ...state, pendingProseScenes } : state
+}
+
+function unionIds(remote: readonly string[], local: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...remote, ...local]) {
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function pickText(base: string, remote: string, local: string): string {
+  if (local === remote) return local
+  if (local === base) return remote
+  if (remote === base) return local
+  return local
+}
+
+function cloneScene(scene: BookScene): BookScene {
+  const next: BookScene = {
+    id: scene.id,
+    title: scene.title,
+    ideaIds: [...(scene.ideaIds ?? [])],
+    prose: scene.prose ?? '',
+    beatIds: [...(scene.beatIds ?? [])],
+  }
+  if (scene.placeEntityId) next.placeEntityId = scene.placeEntityId
+  if (scene.proseFork) next.proseFork = true
+  return next
+}
+
+function cloneChapter(chapter: BookChapter): BookChapter {
+  return { id: chapter.id, title: chapter.title, scenes: chapter.scenes.map(cloneScene) }
+}
+
+function orderedPresent(
+  baseIds: readonly string[],
+  remoteIds: readonly string[],
+  localIds: readonly string[],
+  present: ReadonlySet<string>,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...baseIds, ...remoteIds, ...localIds]) {
+    if (!present.has(id) || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function mergeSceneRecord(
+  base: BookScene | undefined,
+  remote: BookScene,
+  local: BookScene,
+  chapterId: string,
+  choices: ReadonlyMap<string, ConflictChoiceRecord>,
+  conflicts: CardConflict[],
+): BookScene {
+  const beatIds = unionIds(remote.beatIds ?? [], local.beatIds ?? [])
+  const ideaIds = unionIds(remote.ideaIds ?? [], local.ideaIds ?? [])
+  const title = pickText(base?.title ?? '', remote.title ?? '', local.title ?? '')
+  const baseProse = base?.prose ?? ''
+  const remoteProse = remote.prose ?? ''
+  const localProse = local.prose ?? ''
+  let prose = localProse
+  if (localProse !== remoteProse) {
+    if (localProse === baseProse) prose = remoteProse
+    else if (remoteProse !== baseProse) {
+      const record = chapterProseCardConflict(chapterId, local.id, localProse, remoteProse)
+      const choice = choices.get(record.cardId)
+      if (choice && choice.serverKey === record.serverKey) prose = choice.pick === 'server' ? remoteProse : localProse
+      else {
+        prose = localProse
+        conflicts.push(record)
+      }
+    }
+  }
+  const place = pickText(base?.placeEntityId ?? '', remote.placeEntityId ?? '', local.placeEntityId ?? '')
+  const baseFork = base?.proseFork === true
+  const remoteFork = remote.proseFork === true
+  const localFork = local.proseFork === true
+  let proseFork = localFork
+  if (localFork === remoteFork) proseFork = localFork
+  else if (localFork === baseFork) proseFork = remoteFork
+  else if (remoteFork === baseFork) proseFork = localFork
+  const scene: BookScene = { id: local.id, title, ideaIds, prose, beatIds }
+  if (place) scene.placeEntityId = place
+  if (proseFork) scene.proseFork = true
+  return scene
+}
+
+function mergeChapterLists(
+  base: readonly BookChapter[],
+  remote: readonly BookChapter[],
+  local: readonly BookChapter[],
+  choices: ReadonlyMap<string, ConflictChoiceRecord>,
+): { chapters: BookChapter[]; conflicts: CardConflict[] } {
+  const conflicts: CardConflict[] = []
+  const baseMap = new Map(base.map((chapter) => [chapter.id, chapter]))
+  const remoteMap = new Map(remote.map((chapter) => [chapter.id, chapter]))
+  const localMap = new Map(local.map((chapter) => [chapter.id, chapter]))
+  const present = new Set<string>([...remoteMap.keys(), ...localMap.keys()])
+  const ids = orderedPresent(
+    base.map((chapter) => chapter.id),
+    remote.map((chapter) => chapter.id),
+    local.map((chapter) => chapter.id),
+    present,
+  )
+  const chapters = ids.flatMap((id) => {
+    const previous = baseMap.get(id)
+    const incoming = remoteMap.get(id)
+    const mine = localMap.get(id)
+    if (incoming && !mine) return [cloneChapter(incoming)]
+    if (mine && !incoming) return [cloneChapter(mine)]
+    if (!incoming || !mine) return []
+    const title = pickText(previous?.title ?? '', incoming.title ?? '', mine.title ?? '')
+    const remoteScenes = new Map(incoming.scenes.map((scene) => [scene.id, scene]))
+    const localScenes = new Map(mine.scenes.map((scene) => [scene.id, scene]))
+    const baseScenes = new Map((previous?.scenes ?? []).map((scene) => [scene.id, scene]))
+    const scenePresent = new Set<string>([...remoteScenes.keys(), ...localScenes.keys()])
+    const sceneIds = orderedPresent(
+      (previous?.scenes ?? []).map((scene) => scene.id),
+      incoming.scenes.map((scene) => scene.id),
+      mine.scenes.map((scene) => scene.id),
+      scenePresent,
+    )
+    const scenes = sceneIds.flatMap((sceneId) => {
+      const remoteScene = remoteScenes.get(sceneId)
+      const localScene = localScenes.get(sceneId)
+      if (remoteScene && localScene) return [mergeSceneRecord(baseScenes.get(sceneId), remoteScene, localScene, id, choices, conflicts)]
+      const only = localScene ?? remoteScene
+      return only ? [cloneScene(only)] : []
+    })
+    return [{ id, title, scenes }]
+  })
+  return { chapters, conflicts }
+}
+
+function mergePendingLists(
+  base: readonly PendingProseScene[],
+  remote: readonly PendingProseScene[],
+  local: readonly PendingProseScene[],
+  choices: ReadonlyMap<string, ConflictChoiceRecord>,
+): { pending: PendingProseScene[]; conflicts: CardConflict[] } {
+  const conflicts: CardConflict[] = []
+  const baseMap = new Map(base.map((item) => [item.cardId, item]))
+  const remoteMap = new Map(remote.map((item) => [item.cardId, item]))
+  const localMap = new Map(local.map((item) => [item.cardId, item]))
+  const present = new Set<string>([...remoteMap.keys(), ...localMap.keys()])
+  const ids = orderedPresent(
+    base.map((item) => item.cardId),
+    remote.map((item) => item.cardId),
+    local.map((item) => item.cardId),
+    present,
+  )
+  const pending = ids.flatMap((id) => {
+    const previous = baseMap.get(id)
+    const incoming = remoteMap.get(id)
+    const mine = localMap.get(id)
+    if (incoming && mine) {
+      if (incoming.chapterHint === mine.chapterHint) return [{ cardId: id, chapterHint: mine.chapterHint }]
+      const baseHint = previous?.chapterHint ?? ''
+      const remoteChanged = !previous || incoming.chapterHint !== baseHint
+      const localChanged = !previous || mine.chapterHint !== baseHint
+      if (remoteChanged && localChanged) {
+        const record = pendingProseCardConflict(id, mine.chapterHint, incoming.chapterHint)
+        const choice = choices.get(record.cardId)
+        if (choice && choice.serverKey === record.serverKey) {
+          return [{ cardId: id, chapterHint: choice.pick === 'server' ? incoming.chapterHint : mine.chapterHint }]
+        }
+        conflicts.push(record)
+        return [{ cardId: id, chapterHint: mine.chapterHint }]
+      }
+      if (remoteChanged && !localChanged) return [{ cardId: id, chapterHint: incoming.chapterHint }]
+      return [{ cardId: id, chapterHint: mine.chapterHint }]
+    }
+    const only = mine ?? incoming
+    return only ? [{ cardId: id, chapterHint: only.chapterHint }] : []
+  })
+  return { pending, conflicts }
+}
+
 // 三方合并：base 是本页上次成功写入的正本，remote 是服务器当前正本，local 是本页画布。
 // 两边都改过的卡按 choices 里作者的选择取一边；选择时看到的服务器版本已经变了，或还没选，就先留本页的，并列进 conflicts。
 // 实体页名两边不同也按 choices 取一边。没选，或选择对不上当前两边页名时，合并文档不写 slug，并列进 entityConflicts。
@@ -808,12 +1089,16 @@ export function mergeDocuments(
   const sediment = ledger.sediment
   const settled = settleEntitySlugs(ledger.entities, ledger.conflicts, choices)
   const entities = settled.entities
-  const chapters = pickJson(base.state.chapters ?? [], remote.state.chapters ?? [], local.state.chapters ?? [])
-  const pendingProseScenes = pickJson(
+  const outline = mergeChapterLists(base.state.chapters ?? [], remote.state.chapters ?? [], local.state.chapters ?? [], choices)
+  const chapters = outline.chapters
+  const pendingMerged = mergePendingLists(
     base.state.pendingProseScenes ?? [],
     remote.state.pendingProseScenes ?? [],
     local.state.pendingProseScenes ?? [],
+    choices,
   )
+  const pendingProseScenes = pendingMerged.pending
+  conflicts.push(...outline.conflicts, ...pendingMerged.conflicts)
   const mergedEdges = dropDanglingEdges(
     orderList(edges.kept, base.state.canvas.edges, remote.state.canvas.edges, local.state.canvas.edges, (edge) => edge.id),
     mergedCards,
@@ -1649,6 +1934,26 @@ class Controller implements PersistController {
       }
       if (pick === 'server') this.undoStack = []
       this.state = next
+    } else if (cardId.startsWith(CHAPTER_PROSE_CONFLICT_PREFIX)) {
+      const sides = parseChapterProseServerKey(entry.serverKey)
+      if (!sides) {
+        this.pendingConflicts.set(cardId, entry)
+        this.conflictChoices.delete(cardId)
+        this.emit()
+        return
+      }
+      if (pick === 'server') this.undoStack = []
+      this.state = applySceneProse(this.state, sides.chapterId, sides.sceneId, pick === 'server' ? sides.remote : sides.local)
+    } else if (cardId.startsWith(PENDING_PROSE_CONFLICT_PREFIX)) {
+      const sides = parsePendingProseServerKey(entry.serverKey)
+      if (!sides) {
+        this.pendingConflicts.set(cardId, entry)
+        this.conflictChoices.delete(cardId)
+        this.emit()
+        return
+      }
+      if (pick === 'server') this.undoStack = []
+      this.state = applyPendingHint(this.state, sides.cardId, pick === 'server' ? sides.remote : sides.local)
     } else if (pick === 'server') {
       this.undoStack = []
       this.state = applyConflictSide(this.state, cardId, entry.server)
@@ -2726,6 +3031,24 @@ class Controller implements PersistController {
           cardId: conflict.cardId,
           serverText: sides ? `页名 ${sides.remote}` : conflictSummary(conflict.server.card, conflict.server.node),
           mineText: sides ? `页名 ${sides.local}` : '页名还没选',
+        })
+        continue
+      }
+      if (conflict.cardId.startsWith(CHAPTER_PROSE_CONFLICT_PREFIX)) {
+        const sides = parseChapterProseServerKey(conflict.serverKey)
+        views.push({
+          cardId: conflict.cardId,
+          serverText: sides ? sides.remote : conflictSummary(conflict.server.card, conflict.server.node),
+          mineText: sides ? sides.local : '正文还没选',
+        })
+        continue
+      }
+      if (conflict.cardId.startsWith(PENDING_PROSE_CONFLICT_PREFIX)) {
+        const sides = parsePendingProseServerKey(conflict.serverKey)
+        views.push({
+          cardId: conflict.cardId,
+          serverText: sides ? sides.remote : conflictSummary(conflict.server.card, conflict.server.node),
+          mineText: sides ? sides.local : '待写还没选',
         })
         continue
       }

@@ -15,6 +15,7 @@ import {
   archiveGroupTitles,
   eventsForEntity,
   fieldEvents,
+  discussPrompt,
   fieldLabel,
   gradeVisibility,
   groupEventsByIdea,
@@ -28,6 +29,10 @@ import {
   type GradeVisibility,
 } from './person-form.ts'
 
+type OpenIdea = (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
+
+export type CastFocus = { entityId: string; fieldKey: string } | null
+
 const REFRESH_NOTE = '各行的展开只留在这一页的内存里。刷新后全部收起。'
 
 export default function CastPage({
@@ -35,13 +40,17 @@ export default function CastPage({
   canEdit,
   onApply,
   onOpenIdea,
+  focus = null,
 }: {
   state: AppState
   canEdit: boolean
   onApply: (recipe: (state: AppState) => AppState) => void
-  onOpenIdea: (cardId: string, sessionId?: string) => void
+  onOpenIdea: OpenIdea
+  focus?: CastFocus
 }) {
-  const [openRows, setOpenRows] = useState<Record<string, true>>({})
+  const [openRows, setOpenRows] = useState<Record<string, true>>(() =>
+    focus?.entityId ? { [focus.entityId]: true } : {},
+  )
   const [mergeNote, setMergeNote] = useState('')
   const people = (state.entities ?? []).filter((entity) => entity.entityType === 'person')
   const pending = state.pendingEntities ?? []
@@ -126,6 +135,7 @@ export default function CastPage({
                   }}
                   onApply={onApply}
                   onOpenIdea={onOpenIdea}
+                  focusFieldKey={focus?.entityId === entity.id ? focus.fieldKey : null}
                 />
               )
             })}
@@ -145,6 +155,7 @@ function PersonRow({
   onToggle,
   onApply,
   onOpenIdea,
+  focusFieldKey = null,
 }: {
   state: AppState
   entity: Entity
@@ -153,7 +164,8 @@ function PersonRow({
   canEdit: boolean
   onToggle: () => void
   onApply: (recipe: (state: AppState) => AppState) => void
-  onOpenIdea: (cardId: string, sessionId?: string) => void
+  onOpenIdea: OpenIdea
+  focusFieldKey?: string | null
 }) {
   const name = readPersonField(state, entity, 'name') || entity.name
   const sentence = readPersonField(state, entity, 'sentence')
@@ -181,6 +193,7 @@ function PersonRow({
               canEdit={canEdit}
               onApply={onApply}
               onOpenIdea={onOpenIdea}
+              focusFieldKey={focusFieldKey}
             />
           </td>
         </tr>
@@ -196,13 +209,15 @@ export function PersonZones({
   canEdit,
   onApply,
   onOpenIdea,
+  focusFieldKey = null,
 }: {
   state: AppState
   entity: Entity
   cardId: string | null
   canEdit: boolean
   onApply: (recipe: (state: AppState) => AppState) => void
-  onOpenIdea: (cardId: string, sessionId?: string) => void
+  onOpenIdea: OpenIdea
+  focusFieldKey?: string | null
 }) {
   const [gradeDraft, setGradeDraft] = useState<string | null>(null)
   const [ideaId, setIdeaId] = useState('')
@@ -293,9 +308,9 @@ export function PersonZones({
 
       <section className="person-zone" aria-label="身份">
         <h3>身份</h3>
-        <FieldLine state={state} entity={entity} fieldKey="name" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} projections={projections} />
+        <FieldLine state={state} entity={entity} fieldKey="name" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
         {visibility.summaryOnly ? null : (
-          <FieldLine state={state} entity={entity} fieldKey="role" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} projections={projections} />
+          <FieldLine state={state} entity={entity} fieldKey="role" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
         )}
         <label className="person-field">
           <span>类别</span>
@@ -321,7 +336,7 @@ export function PersonZones({
       </section>
 
       {!visibility.narrative ? (
-        <FieldLine state={state} entity={entity} fieldKey="sentence" hint={NARRATIVE_HINTS.sentence} canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} projections={projections} />
+        <FieldLine state={state} entity={entity} fieldKey="sentence" hint={NARRATIVE_HINTS.sentence} canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
       ) : null}
 
       {narrativeKeys.length > 0 || visibility.arc || (visibility.more && moreOpen) ? (
@@ -337,6 +352,7 @@ export function PersonZones({
               canEdit={canEdit && Boolean(ideaId)}
               onSave={save}
               onOpenIdea={onOpenIdea}
+              focusFieldKey={focusFieldKey}
               projections={projections}
             />
           ))}
@@ -353,6 +369,7 @@ export function PersonZones({
                   canEdit={canEdit && Boolean(ideaId)}
                   onSave={save}
                   onOpenIdea={onOpenIdea}
+                  focusFieldKey={focusFieldKey}
                   projections={projections}
                 />
               ))}
@@ -396,6 +413,7 @@ export function PersonZones({
                         canEdit={canEdit && Boolean(ideaId)}
                         onSave={save}
                         onOpenIdea={onOpenIdea}
+                        focusFieldKey={focusFieldKey}
                         projections={projections}
                       />
                     ),
@@ -419,6 +437,7 @@ export function PersonZones({
               canEdit={canEdit && Boolean(ideaId)}
               onSave={save}
               onOpenIdea={onOpenIdea}
+              focusFieldKey={focusFieldKey}
               projections={projections}
             />
           ))}
@@ -442,7 +461,7 @@ export function PersonZones({
                     {event.status === 'failed' ? '百科没写上' : event.quote}{' '}
                     {event.sessionId ? `会话 ${event.sessionId}` : '手填'}
                     {event.sessionId && event.adoptionKey ? (
-                      <button type="button" onClick={() => onOpenIdea(event.ideaId, event.sessionId)}>
+                      <button type="button" onClick={() => onOpenIdea(event.ideaId, event.sessionId, event.adoptionKey)}>
                         ↗
                       </button>
                     ) : null}
@@ -465,6 +484,7 @@ function FieldLine({
   canEdit,
   onSave,
   onOpenIdea,
+  focusFieldKey = null,
   projections,
 }: {
   state: AppState
@@ -473,7 +493,8 @@ function FieldLine({
   hint?: string
   canEdit: boolean
   onSave: (fieldKey: string, text: string) => void
-  onOpenIdea: (cardId: string, sessionId?: string) => void
+  onOpenIdea: OpenIdea
+  focusFieldKey?: string | null
   projections: { id: string; title: string }[]
 }) {
   const value = readPersonField(state, entity, fieldKey)
@@ -483,8 +504,9 @@ function FieldLine({
   const hits = traceField(state, entity.id, fieldKey)
   const count = traceEvents(fieldEvents(state, entity.id, fieldKey)).length
   const showDiscuss = fieldKey !== 'philosophy' && !value.trim() && projections.length > 0
+  const focused = focusFieldKey === fieldKey
   return (
-    <label className="person-field">
+    <label className={focused ? 'person-field field-focus' : 'person-field'} data-field-key={fieldKey} data-field-focus={focused ? 'true' : undefined}>
       <span>
         {fieldLabel(fieldKey)}
         {count > 0 ? (
@@ -516,7 +538,7 @@ function FieldLine({
           type="button"
           onClick={() => {
             const idea = projections[0]
-            if (idea) onOpenIdea(idea.id)
+            if (idea) onOpenIdea(idea.id, undefined, undefined, discussPrompt(fieldKey))
           }}
         >
           去讨论
@@ -529,7 +551,7 @@ function FieldLine({
               <time dateTime={hit.at}>{hit.at}</time> {actionLabel(hit.action)} {hit.label} {hit.ideaTitle}
               {hit.sessionId ? ` 会话 ${hit.sessionId}` : ''}
               {hit.sessionId && hit.adoptionKey ? (
-                <button type="button" onClick={() => onOpenIdea(hit.ideaId, hit.sessionId)}>
+                <button type="button" onClick={() => onOpenIdea(hit.ideaId, hit.sessionId, hit.adoptionKey)}>
                   ↗
                 </button>
               ) : (

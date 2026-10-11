@@ -564,3 +564,40 @@ describe('切片 B 导入接口', () => {
     expect(Object.keys(saved.document.snowflake.cards)).toHaveLength(0)
   }, 30_000)
 })
+
+describe('采纳定位路由', () => {
+  it('GET /discuss/adoption 只调 locateAdoption，找不到也是 200', async () => {
+    const server = await startServer()
+    const book = await createBook(server, '定位')
+    const store = {
+      cards: {
+        'card-1': {
+          lastSessionId: 'sess-1',
+          sessions: [
+            {
+              sessionId: 'sess-1',
+              title: '念头讨论',
+              createdAt: '2026-10-11T00:00:00.000Z',
+              cardId: 'card-1',
+              adoptions: [{ key: 'k1', text: '原文句子', adoptedAt: '2026-10-11T00:00:01.000Z' }],
+            },
+          ],
+        },
+      },
+    }
+    await writeFile(join(server.dataDir, 'books', book.id, 'session.json'), JSON.stringify(store))
+    const query = `cardId=card-1&sessionId=sess-1&adoptionKey=`
+    const hit = await fetch(`${server.base}/api/books/${book.id}/discuss/adoption?${query}k1`)
+    expect(hit.status).toBe(200)
+    expect(await hit.json()).toEqual({
+      found: true,
+      sessionId: 'sess-1',
+      adoptionKey: 'k1',
+      index: 0,
+      text: '原文句子',
+    })
+    const miss = await fetch(`${server.base}/api/books/${book.id}/discuss/adoption?${query}missing`)
+    expect(miss.status).toBe(200)
+    expect(await miss.json()).toEqual({ found: false, sessionId: 'sess-1', adoptionKey: 'missing' })
+  }, 30_000)
+})

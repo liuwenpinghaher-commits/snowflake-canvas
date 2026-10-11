@@ -2150,3 +2150,13 @@ button.danger-quiet {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+[data-adoption-focus="true"] {
+  outline: 2px solid #8c4a32;
+  background: #fff4e8;
+}
+
+[data-field-focus="true"] {
+  outline: 2px solid #8c4a32;
+  background: #fff4e8;
+}

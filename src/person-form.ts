@@ -7,6 +7,7 @@ import {
   applySediment,
   cardFace,
   commitCardText,
+  layerLabel,
   collectPersonEntities,
   emptyArc,
   extraFieldKeys,
@@ -184,6 +185,96 @@ export function projectedPersons(entities: readonly Entity[], edges: readonly Ca
 }
 
 export const MANY_PERSONS_HINT = '这条念头连着多个人，先点一个'
+
+export type SedimentDefault =
+  | { step: 1 | 2 | 4; entityId: string }
+  | { step: 3; hint: string; personIds: string[] }
+  | { step: 5 }
+  | { step: 0 }
+
+/** 沉淀面板的默认目标。顺序与方案 01 第 13 节一致，取到就停。 */
+export function defaultSedimentTarget(input: {
+  sessionId: string
+  ideaId: string
+  sediment: readonly SedimentEvent[]
+  entities: readonly Entity[]
+  edges: readonly CanvasEdge[]
+}): SedimentDefault {
+  const sessionId = input.sessionId.trim()
+  if (sessionId) {
+    let latest: SedimentEvent | undefined
+    for (const event of input.sediment) {
+      if (event.sessionId !== sessionId || event.superseded === true) continue
+      if (!latest || event.at >= latest.at) latest = event
+    }
+    const previousId = latest?.target.entityId
+    if (previousId && input.entities.some((entity) => entity.id === previousId)) {
+      return { step: 1, entityId: previousId }
+    }
+  }
+  const resolved: Entity[] = []
+  const seen = new Set<string>()
+  let projectionCount = 0
+  for (const edge of input.edges) {
+    if (edge.kind !== 'projects-onto' || edge.fromNode !== input.ideaId) continue
+    projectionCount += 1
+    if (seen.has(edge.toNode)) continue
+    seen.add(edge.toNode)
+    const entity = input.entities.find((item) => item.id === edge.toNode)
+    if (entity) resolved.push(entity)
+  }
+  const persons = resolved.filter((entity) => entity.entityType === 'person')
+  if (persons.length === 1) return { step: 2, entityId: persons[0].id }
+  if (persons.length > 1) return { step: 3, hint: MANY_PERSONS_HINT, personIds: persons.map((entity) => entity.id) }
+  if (persons.length === 0 && resolved.length === 1) return { step: 4, entityId: resolved[0].id }
+  if (projectionCount === 0) return { step: 5 }
+  return { step: 0 }
+}
+
+export function createPersonEntity(state: AppState, id: string, name: string): AppState {
+  const trimmed = name.trim()
+  if (!id || (state.entities ?? []).some((entity) => entity.id === id)) return state
+  const entity: Entity = {
+    id,
+    entityType: 'person',
+    name: trimmed,
+    views: {},
+    fields: trimmed ? { name: { value: trimmed, events: [] } } : {},
+    arc: emptyArc(),
+    premise: false,
+  }
+  return { ...state, entities: [...(state.entities ?? []), entity] }
+}
+
+export function discussPrompt(fieldKey: string): string {
+  return `${fieldLabel(fieldKey)}这一栏空着，接着谈`
+}
+
+const ENTITY_KIND_LABEL: Record<string, string> = {
+  person: '人物表',
+  place: '地点',
+  org: '组织',
+  concept: '概念',
+  theme: '主题',
+  'foreshadow-line': '伏笔线',
+}
+
+export function formatGrowthLine(
+  state: AppState,
+  hit: { entityId: string; fieldKey: string },
+): { entityId: string; fieldKey: string; label: string } {
+  const entity = (state.entities ?? []).find((item) => item.id === hit.entityId)
+  const entityName = entity?.name.trim() || '未命名'
+  const fieldName = fieldLabel(hit.fieldKey)
+  let processName = ENTITY_KIND_LABEL.person
+  if (entity) {
+    const viewId = viewCardFor(entity, hit.fieldKey)
+    const card = viewId ? state.snowflake.cards[viewId] : undefined
+    if (card) processName = cardFace(card).title.trim() || layerLabel(card.layer)
+    else processName = ENTITY_KIND_LABEL[entity.entityType] ?? entity.entityType
+  }
+  return { entityId: hit.entityId, fieldKey: hit.fieldKey, label: `${processName} ${entityName}·${fieldName}` }
+}
 
 export function fieldLabel(key: string): string {
   if (key.startsWith('arc.')) {

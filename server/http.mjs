@@ -27,6 +27,7 @@ import {
   fetchMessagePage,
 } from './discuss-store.mjs'
 import { getImportProgress, importPlainText, setImportProgress } from './import-book.mjs'
+import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 
@@ -1550,6 +1551,25 @@ function registerApi(app, prefix) {
     } catch (error) {
       return discussFailure(reply, error, '讨论记录没有取到')
     }
+  })
+
+  scoped('GET', '/discuss/adoption', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const cardId = textField(request.query?.cardId)
+    const sessionId = textField(request.query?.sessionId)
+    const adoptionKey = textField(request.query?.adoptionKey)
+    let store = { cards: {} }
+    try {
+      const raw = await readSessionRaw(book)
+      if (raw && !isLegacyRecord(raw)) store = normalizeStore(raw)
+    } catch {
+      store = { cards: {} }
+    }
+    const hit = locateAdoption(store, cardId, sessionId, adoptionKey)
+    reply.code(200)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(hit)
   })
 
   scoped('POST', '/discuss/adoptions', async (request, reply) => {

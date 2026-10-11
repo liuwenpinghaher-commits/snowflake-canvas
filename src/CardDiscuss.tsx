@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MarkdownText, stripMarkdown } from './markdown-lite.tsx'
 import { bookScopedPath } from './books.ts'
-import { ARCHIVE_GROUPS, ARC_KEYS, PERSON_ZONES, RENWUGUSHI_KEYS, cardFace, type CanvasEdge, type Card, type Entity, type SedimentAction } from './document.ts'
-import { MANY_PERSONS_HINT, fieldLabel, projectedPersons } from './person-form.ts'
+import { ARCHIVE_GROUPS, ARC_KEYS, PERSON_ZONES, RENWUGUSHI_KEYS, cardFace, type CanvasEdge, type Card, type Entity, type SedimentAction, type SedimentEvent } from './document.ts'
+import { MANY_PERSONS_HINT, defaultSedimentTarget, fieldLabel } from './person-form.ts'
 
 function api(path: string): string {
   const base = import.meta.env.BASE_URL || '/'
@@ -166,6 +166,31 @@ export function sessionLabel(item: DiscussSession): string {
 
 export function adoptionText(content: string): string {
   return stripMarkdown(content)
+}
+
+export function messageIndexForAdoption(
+  messages: readonly { content: string; serverKey?: string; adopted?: boolean }[],
+  hit: { found?: boolean; index?: number; text?: string; adoptionKey?: string },
+): number {
+  if (!hit || hit.found !== true) return -1
+  if (hit.adoptionKey) {
+    const byKey = messages.findIndex((item) => item.serverKey === hit.adoptionKey)
+    if (byKey >= 0) return byKey
+  }
+  const text = typeof hit.text === 'string' ? hit.text.trim() : ''
+  if (text) {
+    const byText = messages.findIndex((item) => {
+      const plain = adoptionText(item.content)
+      return item.content === text || plain === text || item.content.includes(text) || plain.includes(text)
+    })
+    if (byText >= 0) return byText
+  }
+  if (typeof hit.index === 'number' && hit.index >= 0) {
+    const adoptedIndexes = messages.map((item, index) => (item.adopted ? index : -1)).filter((index) => index >= 0)
+    if (hit.index < adoptedIndexes.length) return adoptedIndexes[hit.index] ?? -1
+    if (hit.index < messages.length) return hit.index
+  }
+  return -1
 }
 
 export type BrainOutcome = { ok: true; slug: string } | { ok: false; error: string }
@@ -332,6 +357,10 @@ export default function CardDiscuss({
   edges = [],
   cards = {},
   focusSessionId,
+  focusAdoptionKey,
+  prefill,
+  sediment = [],
+  onCreatePerson,
   onSedimentDone,
 }: {
   cardId: string
@@ -342,12 +371,17 @@ export default function CardDiscuss({
   edges?: CanvasEdge[]
   cards?: Record<string, Card>
   focusSessionId?: string
+  focusAdoptionKey?: string
+  prefill?: string
+  sediment?: SedimentEvent[]
+  onCreatePerson?: (id: string, name: string) => Promise<boolean>
   onSedimentDone?: () => void
 }) {
   const [sessions, setSessions] = useState<DiscussSession[]>([])
   const [sessionId, setSessionId] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(() => (prefill && prefill.trim() ? prefill : ''))
+  const [adoptionHit, setAdoptionHit] = useState<{ found: boolean; index?: number; text?: string; adoptionKey?: string } | null>(null)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
@@ -367,6 +401,7 @@ export default function CardDiscuss({
   const offsetRef = useRef(0)
   const hasMoreRef = useRef(false)
   const olderRef = useRef(false)
+  const adoptionPageRef = useRef(0)
   const anchorRef = useRef<{ height: number; top: number } | null>(null)
   const cardRef = useRef(cardId)
   const onCloseRef = useRef(onClose)
@@ -397,6 +432,10 @@ export default function CardDiscuss({
   useLayoutEffect(() => {
     draftRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    if (prefill && prefill.trim()) setDraft(prefill)
+  }, [prefill])
 
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
@@ -445,6 +484,53 @@ export default function CardDiscuss({
     if (el) el.scrollTop = el.scrollHeight
   }
 
+  const adoptionIndex = adoptionHit ? messageIndexForAdoption(messages, adoptionHit) : -1
+  const adoptionFocusKey = adoptionIndex >= 0 ? (messages[adoptionIndex]?.key ?? null) : null
+
+  useEffect(() => {
+    adoptionPageRef.current = 0
+    if (!focusAdoptionKey || !focusSessionId || sessionId !== focusSessionId) {
+      setAdoptionHit(null)
+      return
+    }
+    let cancelled = false
+    const query = new URLSearchParams({ cardId, sessionId, adoptionKey: focusAdoptionKey })
+    void fetch(api(`/api/discuss/adoption?${query}`), { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => null)) as {
+          found?: boolean
+          index?: number
+          text?: string
+          adoptionKey?: string
+        } | null
+        if (cancelled) return
+        if (!response.ok || !payload || payload.found !== true) {
+          setAdoptionHit({ found: false, adoptionKey: focusAdoptionKey })
+          return
+        }
+        setAdoptionHit({
+          found: true,
+          index: typeof payload.index === 'number' ? payload.index : undefined,
+          text: typeof payload.text === 'string' ? payload.text : undefined,
+          adoptionKey: typeof payload.adoptionKey === 'string' ? payload.adoptionKey : focusAdoptionKey,
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setAdoptionHit({ found: false, adoptionKey: focusAdoptionKey })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [cardId, focusAdoptionKey, focusSessionId, sessionId])
+
+  useEffect(() => {
+    if (!adoptionHit || adoptionHit.found !== true) return
+    if (messageIndexForAdoption(messages, adoptionHit) >= 0) return
+    if (!hasMore || loadingOlder || adoptionPageRef.current >= 8) return
+    adoptionPageRef.current += 1
+    void loadOlder()
+  }, [adoptionHit, messages, hasMore, loadingOlder])
+
   useLayoutEffect(() => {
     const el = chatRef.current
     if (!el) return
@@ -454,13 +540,19 @@ export default function CardDiscuss({
       el.scrollTop = el.scrollHeight - anchor.height + anchor.top
       return
     }
+    const focused = el.querySelector('[data-adoption-focus="true"]')
+    if (focused instanceof HTMLElement) {
+      stickRef.current = false
+      focused.scrollIntoView({ block: 'center' })
+      return
+    }
     if (stickRef.current) {
       el.scrollTop = el.scrollHeight
       setPendingNew(false)
       return
     }
     setPendingNew(true)
-  }, [messages])
+  }, [messages, adoptionFocusKey])
 
   function setMore(more: boolean) {
     hasMoreRef.current = more
@@ -916,7 +1008,7 @@ export default function CardDiscuss({
           const time = clock(item.at)
           if (item.role === 'error') {
             return (
-              <div key={item.key} className="log-row" data-role="error">
+              <div key={item.key} className="log-row" data-role="error" data-adoption-focus={item.key === adoptionFocusKey ? 'true' : undefined}>
                 <div className="log-meta">
                   <span className="who">出错</span>
                 </div>
@@ -933,7 +1025,7 @@ export default function CardDiscuss({
           }
           const mine = item.role === 'user'
           return (
-            <div key={item.key} className="log-row" data-role={item.role}>
+            <div key={item.key} className="log-row" data-role={item.role} data-adoption-focus={item.key === adoptionFocusKey ? 'true' : undefined}>
               <div className="log-meta">
                 <span className="who">{mine ? '我' : 'AI'}</span>
                 {time ? (
@@ -982,6 +1074,8 @@ export default function CardDiscuss({
           entities={entities}
           edges={edges}
           cards={cards}
+          sediment={sediment}
+          onCreatePerson={onCreatePerson}
           onCancel={() => setSedimentFor(null)}
           onDone={() => {
             setSedimentFor(null)
@@ -1034,6 +1128,8 @@ function SedimentPanel({
   entities,
   edges,
   cards,
+  sediment,
+  onCreatePerson,
   onCancel,
   onDone,
   onKeep,
@@ -1044,14 +1140,26 @@ function SedimentPanel({
   entities: Entity[]
   edges: CanvasEdge[]
   cards: Record<string, Card>
+  sediment: SedimentEvent[]
+  onCreatePerson?: (id: string, name: string) => Promise<boolean>
   onCancel: () => void
   onDone: () => void
   onKeep: () => void
 }) {
-  const people = projectedPersons(entities, edges, cardId)
-  const [pickedId, setPickedId] = useState('')
-  const chosen = people.length === 1 ? people[0] : people.find((person) => person.id === pickedId)
-  const blocked = !chosen
+  const choice = defaultSedimentTarget({ sessionId, ideaId: cardId, sediment, entities, edges })
+  const preset = choice.step === 1 || choice.step === 2 || choice.step === 4 ? choice.entityId : ''
+  const [pickedId, setPickedId] = useState(preset)
+  const [personName, setPersonName] = useState('')
+  const creating = choice.step === 5
+  const blocked = choice.step === 0 || (choice.step === 3 && !pickedId)
+  const chosen = entities.find((entity) => entity.id === pickedId)
+  const people =
+    choice.step === 3
+      ? choice.personIds.flatMap((id) => {
+          const person = entities.find((entity) => entity.id === id)
+          return person ? [person] : []
+        })
+      : []
   const [fieldKey, setFieldKey] = useState('')
   const [action, setAction] = useState<SedimentAction>('append')
   const [quote, setQuote] = useState(() => adoptionText(message.content))
@@ -1062,7 +1170,18 @@ function SedimentPanel({
   const ideaName = idea ? cardFace(idea).title.trim() || '未命名念头' : '当前念头'
 
   async function submit() {
-    if (!chosen || !fieldKey || fieldKey === 'philosophy' || !quote.trim() || !sessionId) return
+    if (blocked || !fieldKey || fieldKey === 'philosophy' || !quote.trim() || !sessionId) return
+    let entityId = pickedId
+    if (creating) {
+      const id = `person-${crypto.randomUUID()}`
+      const created = onCreatePerson ? await onCreatePerson(id, personName) : false
+      if (!created) {
+        setError('人物没有建成')
+        return
+      }
+      entityId = id
+    }
+    if (!entityId) return
     const requestId = requestRef.current ?? crypto.randomUUID()
     requestRef.current = requestId
     setBusy(true)
@@ -1073,7 +1192,7 @@ function SedimentPanel({
         body: JSON.stringify({
           cardId,
           sessionId,
-          entityId: chosen.id,
+          entityId,
           fieldKey,
           action,
           quote,
@@ -1112,7 +1231,7 @@ function SedimentPanel({
       }}
     >
       <p>把这句话沉淀到</p>
-      {blocked ? (
+      {choice.step === 3 && !pickedId ? (
         <p className="cast-warn" role="status">
           {MANY_PERSONS_HINT}
         </p>
@@ -1131,10 +1250,22 @@ function SedimentPanel({
           ))}
         </div>
       ) : null}
-      <label>
-        目标实体
-        <input aria-label="目标实体" value={chosen?.name ?? ''} disabled readOnly />
-      </label>
+      {creating ? (
+        <label>
+          新建人物
+          <input
+            aria-label="新人物名字"
+            value={personName}
+            placeholder="名字空着，等你填"
+            onChange={(event) => setPersonName(event.target.value)}
+          />
+        </label>
+      ) : (
+        <label>
+          目标实体
+          <input aria-label="目标实体" value={chosen?.name ?? ''} disabled readOnly />
+        </label>
+      )}
       <label>
         目标字段
         <select aria-label="目标字段" value={fieldKey} disabled={blocked} onChange={(event) => setFieldKey(event.target.value)}>

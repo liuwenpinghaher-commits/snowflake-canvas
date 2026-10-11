@@ -1678,47 +1678,6 @@ export function addEdge(state: AppState, from: string, to: string, kind: EdgeKin
   return { ...state, canvas: { ...state.canvas, edges: [...state.canvas.edges, edge] } }
 }
 
-export function connectIdeas(state: AppState, fromId: string, toId: string, relation: RelationKind): AppState {
-  if (relation === '伏笔') return addEdge(state, fromId, toId, 'foreshadow', { foreshadow: '计划' })
-  return addEdge(state, fromId, toId, 'relates', { relation })
-}
-
-export function setEdgeRelation(
-  state: AppState,
-  edgeId: string,
-  relation: RelationKind,
-  extra?: { foreshadow?: ForeshadowState; derivedFrom?: DerivedFrom },
-): AppState {
-  const current = state.canvas.edges.find((edge) => edge.id === edgeId)
-  if (!current) return state
-  const kind: EdgeKind = relation === '伏笔' ? 'foreshadow' : 'relates'
-  if (!edgeAllowed(state, current.fromNode, current.toNode, kind, { relation, foreshadow: extra?.foreshadow })) return state
-  const next: CanvasEdge = { ...current, kind }
-  if (kind === 'relates') {
-    next.relation = relation
-    delete next.foreshadow
-    if (relation === '派生' && extra?.derivedFrom) next.derivedFrom = extra.derivedFrom
-    else delete next.derivedFrom
-  } else {
-    next.foreshadow = extra?.foreshadow ?? current.foreshadow ?? '计划'
-    delete next.relation
-    delete next.derivedFrom
-  }
-  if (
-    current.kind === next.kind &&
-    current.relation === next.relation &&
-    current.foreshadow === next.foreshadow &&
-    current.derivedFrom?.sessionId === next.derivedFrom?.sessionId &&
-    current.derivedFrom?.adoptionKey === next.derivedFrom?.adoptionKey
-  ) {
-    return state
-  }
-  return {
-    ...state,
-    canvas: { ...state.canvas, edges: state.canvas.edges.map((edge) => (edge.id === edgeId ? next : edge)) },
-  }
-}
-
 function orderEvents(events: readonly SedimentEvent[]): SedimentEvent[] {
   return events
     .map((event, index) => ({ event, index }))
