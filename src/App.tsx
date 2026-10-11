@@ -7,6 +7,8 @@ import SideEditor from './SideEditor.tsx'
 import ConflictChoice from './ConflictChoice.tsx'
 import BooksPage, { type NewBookInput } from './BooksPage.tsx'
 import CastPage from './CastPage.tsx'
+import ChapterPage from './ChapterPage.tsx'
+import RelationPage from './RelationPage.tsx'
 import {
   DEFAULT_BOOK_NAME,
   MSG_BOOK_UNSAVED,
@@ -782,11 +784,21 @@ export default function App() {
           onOpenIdea={openIdea}
         />
       ) : null}
-      {page === 'relation' || page === 'encyclopedia' || page === 'chapter' ? (
-        <section className="later-page" aria-label={page === 'relation' ? '关系' : page === 'encyclopedia' ? '百科' : '章节'}>
-          <h2>{page === 'relation' ? '关系' : page === 'encyclopedia' ? '百科' : '章节'}</h2>
+      {page === 'relation' ? <RelationPage state={state} /> : null}
+      {page === 'encyclopedia' ? (
+        <section className="later-page" aria-label="百科">
+          <h2>百科</h2>
           <p>这一页下一刀才做。</p>
         </section>
+      ) : null}
+      {page === 'chapter' ? (
+        <ChapterPage
+          state={state}
+          canEdit={canEdit}
+          onApply={(recipe) => {
+            void ctlRef.current?.mutate(recipe, UNDOABLE)
+          }}
+        />
       ) : null}
       {page === 'canvas' || page === 'books' ? (
       <main className="workspace">
