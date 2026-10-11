@@ -1,5 +1,5 @@
 import { useState, type DragEvent } from 'react'
-import { frontText, type AppState } from './document.ts'
+import { frontText, resolveProseFork, type AppState } from './document.ts'
 import {
   BEAT_LENGTHS,
   beatAnchors,
@@ -128,6 +128,25 @@ export default function ChapterPage({
                       {names.map((name) => (
                         <p key={name}>出场：{name}</p>
                       ))}
+                      {scene.proseFork ? (
+                        <div className="prose-fork">
+                          <p>正文分叉</p>
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => onApply((current) => resolveProseFork(current, scene.id, 'scene'))}
+                          >
+                            留场上的
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => onApply((current) => resolveProseFork(current, scene.id, 'card'))}
+                          >
+                            留卡上的
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   )
                 })}

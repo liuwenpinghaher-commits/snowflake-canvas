@@ -32,6 +32,8 @@ export interface SuggestItem {
   slot: SuggestSlot
   text: string
   where: string
+  sessionId?: string
+  adoptionKey?: string
 }
 
 export interface SuggestFile {
@@ -106,7 +108,47 @@ function beatOf(action: SuggestAction, beatId: string | null | undefined): strin
   return blank(typeof beatId === 'string' ? beatId : '') || null
 }
 
+function sceneProseFork(state: AppState, sceneId: string): boolean {
+  for (const chapter of state.chapters ?? []) {
+    const scene = chapter.scenes.find((item) => item.id === sceneId)
+    if (scene) return scene.proseFork === true
+  }
+  return false
+}
+
+function latestSediment(state: AppState, cardId: string): { sessionId?: string; adoptionKey?: string } {
+  const targets = new Set(
+    state.canvas.edges
+      .filter((edge) => edge.kind === 'projects-onto' && edge.fromNode === cardId)
+      .map((edge) => edge.toNode),
+  )
+  if (targets.size === 0) return {}
+  const matched = (state.sediment ?? []).filter((event) => {
+    if (!targets.has(event.target.entityId)) return false
+    if (event.superseded) return false
+    return true
+  })
+  if (matched.length === 0) return {}
+  let best = matched[0]
+  let bestIndex = 0
+  matched.forEach((event, index) => {
+    if (!best || index === 0) return
+    if (event.at > best.at || (event.at === best.at && index > bestIndex)) {
+      best = event
+      bestIndex = index
+    }
+  })
+  if (!best) return {}
+  const trace: { sessionId?: string; adoptionKey?: string } = {}
+  const sessionId = (best.sessionId ?? '').trim()
+  const adoptionKey = (best.adoptionKey ?? '').trim()
+  if (sessionId) trace.sessionId = sessionId
+  if (adoptionKey) trace.adoptionKey = adoptionKey
+  return trace
+}
+
 function makeItem(
+  state: AppState,
   cardId: string,
   action: SuggestAction,
   beatId: string | null,
@@ -114,7 +156,7 @@ function makeItem(
   text: string,
 ): SuggestItem | null {
   if (!isSuggestSlot(slot)) return null
-  return {
+  const item: SuggestItem = {
     cardId,
     action,
     beatId,
@@ -122,6 +164,10 @@ function makeItem(
     text,
     where: SLOT_WHERE[slot],
   }
+  const trace = latestSediment(state, cardId)
+  if (trace.sessionId) item.sessionId = trace.sessionId
+  if (trace.adoptionKey) item.adoptionKey = trace.adoptionKey
+  return item
 }
 
 function render(items: SuggestItem[]): string {
@@ -145,6 +191,9 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
   if (card.layer !== '场景表' && card.layer !== 'changci' && card.layer !== '正文草稿') {
     return { ok: false, reason: REASON_LAYER }
   }
+  if (card.layer === '正文草稿' && sceneProseFork(state, blank(card.derivedFrom))) {
+    return { ok: false, reason: '这场正文分叉还没选，不能折进建议包' }
+  }
 
   const beatId = beatOf(action, input.beatId)
   const items: SuggestItem[] = []
@@ -152,21 +201,21 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
   if (card.layer === '场景表') {
     const text = sceneCardTask(card)
     if (!text) return { ok: false, reason: REASON_SCENE_TASK }
-    const intent = makeItem(input.cardId, action, beatId, 'intent', text)
+    const intent = makeItem(state, input.cardId, action, beatId, 'intent', text)
     if (intent) items.push(intent)
   } else if (card.layer === 'changci') {
     const own = blank(card.fields.task)
     if (own) {
-      const intent = makeItem(input.cardId, action, beatId, 'intent', own)
+      const intent = makeItem(state, input.cardId, action, beatId, 'intent', own)
       if (intent) items.push(intent)
     } else {
       const linked = connectedSceneTask(state, input.cardId)
       if (!linked) return { ok: false, reason: REASON_BEAT_TASK }
-      const intent = makeItem(linked.cardId, action, beatId, 'intent', linked.text)
+      const intent = makeItem(state, linked.cardId, action, beatId, 'intent', linked.text)
       if (intent) items.push(intent)
     }
   } else {
-    const motion = makeItem(input.cardId, action, beatId, 'do_text', card.body)
+    const motion = makeItem(state, input.cardId, action, beatId, 'do_text', card.body)
     if (motion) items.push(motion)
     if (action === 'new-draft-scene') {
       const linked = connectedSceneTask(state, input.cardId)
@@ -174,7 +223,7 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
       const intentText = linked?.text || supplement
       if (!intentText) return { ok: false, reason: REASON_DRAFT_TASK }
       const intentCardId = linked ? linked.cardId : input.cardId
-      const intent = makeItem(intentCardId, action, beatId, 'intent', intentText)
+      const intent = makeItem(state, intentCardId, action, beatId, 'intent', intentText)
       if (intent) items.push(intent)
     }
   }
@@ -183,7 +232,7 @@ export function foldIntoScene(state: AppState, input: FoldInput): FoldResult {
     if (!extra || typeof extra.slot !== 'string') continue
     if (items.some((item) => item.slot === extra.slot)) continue
     const text = typeof extra.text === 'string' ? extra.text : ''
-    const made = makeItem(input.cardId, action, beatId, extra.slot, text)
+    const made = makeItem(state, input.cardId, action, beatId, extra.slot, text)
     if (made) items.push(made)
   }
 

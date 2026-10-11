@@ -465,6 +465,6 @@ describe('P1d 关系图点击面板', () => {
     expect(bareHtml).toContain('还没有沉淀')
 
     expect(read('src/RelationPage.tsx')).toContain('setOpen(null)')
-    expect(read('src/App.tsx')).toContain('这一页下一刀才做。')
+    expect(read('src/App.tsx')).toContain('百科页还没做。升格卡面到定稿、拉定稿回卡面这两个按钮要等百科页。')
   })
 })

@@ -340,6 +340,16 @@ function HistoryBar({
   )
 }
 
+export function DiscussContextPreview({ context }: { context: string }) {
+  if (!context) return null
+  return (
+    <section className="discuss-context" aria-label="上下文预览">
+      <h3>上下文预览</h3>
+      <pre className="discuss-context-body">{context}</pre>
+    </section>
+  )
+}
+
 const SEDIMENT_FIELDS = [
   ...PERSON_ZONES[0].keys,
   ...PERSON_ZONES[1].keys.filter((key) => key !== 'arc'),
@@ -390,6 +400,11 @@ export default function CardDiscuss({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [writingBrain, setWritingBrain] = useState<Record<string, true>>({})
   const [sedimentFor, setSedimentFor] = useState<ChatMessage | null>(null)
+  const [contextPreview, setContextPreview] = useState('')
+
+  function showContext(payload: { context?: unknown }) {
+    if (typeof payload.context === 'string') setContextPreview(payload.context)
+  }
   const writingRef = useRef(new Set<string>())
   const chatRef = useRef<HTMLDivElement>(null)
   const draftRef = useRef<HTMLTextAreaElement>(null)
@@ -641,8 +656,9 @@ export default function CardDiscuss({
   async function refreshSessions() {
     try {
       const response = await fetch(api(`/api/discuss/session?cardId=${encodeURIComponent(cardId)}`), { cache: 'no-store' })
-      const payload = (await response.json().catch(() => ({}))) as { sessions?: DiscussSession[] }
+      const payload = (await response.json().catch(() => ({}))) as { sessions?: DiscussSession[]; context?: string }
       if (response.ok && Array.isArray(payload.sessions)) setSessions(payload.sessions)
+      if (response.ok) showContext(payload)
     } catch {
       // 下拉里的首问晚一点出现不影响讨论。
     }
@@ -670,13 +686,16 @@ export default function CardDiscuss({
       setNotice('')
       setMessages([])
       setMore(false)
+      setContextPreview('')
       const response = await fetch(api(`/api/discuss/session?cardId=${encodeURIComponent(cardId)}`), { cache: 'no-store' })
       const payload = (await response.json().catch(() => ({}))) as {
         sessionId?: string
         sessions?: DiscussSession[]
         error?: string
+        context?: string
       }
       if (cancelled) return
+      if (response.ok) showContext(payload)
       if (!response.ok || !payload.sessionId) {
         setNotice(payload.error || '画布会话没有取到。再双击这张卡片。')
         return
@@ -695,8 +714,10 @@ export default function CardDiscuss({
           sessionId?: string
           sessions?: DiscussSession[]
           error?: string
+          context?: string
         }
         if (cancelled) return
+        if (selected.ok) showContext(selectedPayload)
         if (!selected.ok || !selectedPayload.sessionId) {
           setNotice(selectedPayload.error || '没有切到上次的讨论。先看当前这条。')
           await remember(payload.sessionId, list)
@@ -731,11 +752,13 @@ export default function CardDiscuss({
         sessionId?: string
         sessions?: DiscussSession[]
         error?: string
+        context?: string
       }
       if (!response.ok || !payload.sessionId) {
         setNotice(payload.error || '没有打开这条讨论。从历史讨论里再选一次。')
         return
       }
+      showContext(payload)
       await remember(payload.sessionId, payload.sessions || sessions)
     } catch {
       setNotice('没有打开这条讨论。从历史讨论里再选一次。')
@@ -760,11 +783,13 @@ export default function CardDiscuss({
         sessionId?: string
         sessions?: DiscussSession[]
         error?: string
+        context?: string
       }
       if (!response.ok || !payload.sessionId) {
         setNotice(payload.error || '新讨论没有建成。再点一次「新建讨论」。')
         return
       }
+      showContext(payload)
       await remember(payload.sessionId, payload.sessions || [])
     } catch {
       setNotice('画布会话没有连上。检查本机服务后再试。')
@@ -998,6 +1023,7 @@ export default function CardDiscuss({
         onOpen={(id) => void openSession(id)}
         onCreate={() => void createSession()}
       />
+      <DiscussContextPreview context={contextPreview} />
       <div className="discuss-chat" aria-label="讨论记录" ref={chatRef} onScroll={onChatScroll}>
         {hasMore ? (
           <button type="button" className="load-older" disabled={loadingOlder} onClick={() => void loadOlder()}>

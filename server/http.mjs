@@ -30,6 +30,7 @@ import { getImportProgress, importPlainText, setImportProgress } from './import-
 import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
+import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
@@ -590,49 +591,43 @@ async function saveDiscussStore(book, store) {
   return writeSessionStore(book, store, [])
 }
 
-async function createGatewaySession(cardId, store) {
-  const key = readEnv('API_SERVER_KEY')
-  if (!key) throw httpError(503, 'API_SERVER_KEY 未注入')
-  const used = new Set(knownSessionIds(store))
-  let lastStatus = 502
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const createdAt = new Date().toISOString()
-    const nonce = Math.random().toString(36).slice(2, 8)
-    const title = `念头讨论 ${createdAt} ${nonce}`
-    const created = await gatewayFetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ title, system_prompt: DISCUSS_INSTRUCTIONS }),
-    })
-    const payload = await created.json().catch(() => ({}))
-    lastStatus = created.status
-    if (created.status === 201 && payload.session && typeof payload.session.id === 'string') {
-      const sessionId = payload.session.id.trim()
-      if (sessionId && !used.has(sessionId)) {
-        return { sessionId, title, createdAt, cardId, firstAskOpen: true }
-      }
-    }
-  }
-  throw httpError(lastStatus === 503 ? 503 : 502, '画布会话没有建成')
+async function discussContextText(book, cardId) {
+  const record = await exclusive(book, () => readCanonical(book))
+  const available = !(await gbrainDisabled()) && (await timelineReachable())
+  return collectDiscussContext(record.document, cardId, {
+    available,
+    getPage: (slug) => runGbrain(['get', slug]),
+  })
 }
 
-async function ensureCardSession(book, cardId) {
+async function createGatewaySession(cardId, store, contextText) {
+  return postGatewaySession({
+    cardId,
+    store,
+    contextText,
+    instructions: DISCUSS_INSTRUCTIONS,
+    apiKey: readEnv('API_SERVER_KEY'),
+    fetchImpl: gatewayFetch,
+  })
+}
+
+async function ensureCardSession(book, cardId, contextText) {
   if (!cardId) throw httpError(400, '缺少 cardId')
   return exclusiveSession(book, async () => {
     let store = await loadDiscussStoreInner(book)
     const existing = activeSessionId(store, cardId)
     if (existing) return { store, sessionId: existing }
-    const created = await createGatewaySession(cardId, store)
+    const created = await createGatewaySession(cardId, store, contextText)
     store = await saveDiscussStore(book, withSession(store, cardId, created))
     return { store, sessionId: created.sessionId }
   })
 }
 
-async function createCardSession(book, cardId) {
+async function createCardSession(book, cardId, contextText) {
   if (!cardId) throw httpError(400, '缺少 cardId')
   return exclusiveSession(book, async () => {
     const store = await loadDiscussStoreInner(book)
-    const created = await createGatewaySession(cardId, store)
+    const created = await createGatewaySession(cardId, store, contextText)
     const saved = await saveDiscussStore(book, withSession(store, cardId, created))
     return { store: saved, sessionId: created.sessionId }
   })
@@ -1000,12 +995,6 @@ async function runGbrain(args, stdin) {
     }
   }
   throw last
-}
-
-function stripTimeline(markdown) {
-  const marker = markdown.indexOf('<!-- timeline -->')
-  if (marker < 0) return markdown.trimEnd()
-  return markdown.slice(0, marker).trimEnd()
 }
 
 async function putCompiled(page, compiled) {
@@ -1506,9 +1495,10 @@ function registerApi(app, prefix) {
       return reply.send({ error: '缺少 cardId' })
     }
     try {
-      const { store, sessionId } = await ensureCardSession(book, cardId)
+      const context = await discussContextText(book, cardId)
+      const { store, sessionId } = await ensureCardSession(book, cardId, context)
       reply.header('Cache-Control', 'no-store')
-      return reply.send({ cardId, sessionId, sessions: publicSessions(store, cardId) })
+      return reply.send(discussSessionResponse(cardId, sessionId, publicSessions(store, cardId), context))
     } catch (error) {
       return discussFailure(reply, error, '画布会话没有建成')
     }
@@ -1525,11 +1515,12 @@ function registerApi(app, prefix) {
       return reply.send({ error: '缺少 cardId' })
     }
     try {
+      const context = await discussContextText(book, cardId)
       const result = sessionId
         ? await selectCardSession(book, cardId, sessionId)
-        : await createCardSession(book, cardId)
+        : await createCardSession(book, cardId, context)
       reply.header('Cache-Control', 'no-store')
-      return reply.send({ cardId, sessionId: result.sessionId, sessions: publicSessions(result.store, cardId) })
+      return reply.send(discussSessionResponse(cardId, result.sessionId, publicSessions(result.store, cardId), context))
     } catch (error) {
       return discussFailure(reply, error, '画布会话没有建成')
     }

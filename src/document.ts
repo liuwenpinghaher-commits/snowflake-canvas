@@ -2184,3 +2184,46 @@ export function reconcileProse(state: AppState): AppState {
   if (!changed) return state
   return { ...state, chapters, pendingProseScenes: pending, snowflake: { ...state.snowflake, cards } }
 }
+
+export function resolveProseFork(state: AppState, sceneId: string, keep: 'scene' | 'card'): AppState {
+  const chapters = state.chapters ?? []
+  let chapterIndex = -1
+  let sceneIndex = -1
+  for (let index = 0; index < chapters.length; index += 1) {
+    const found = chapters[index]?.scenes.findIndex((scene) => scene.id === sceneId) ?? -1
+    if (found >= 0) {
+      chapterIndex = index
+      sceneIndex = found
+      break
+    }
+  }
+  if (chapterIndex < 0 || sceneIndex < 0) return state
+  const scene = chapters[chapterIndex]?.scenes[sceneIndex]
+  if (!scene?.proseFork) return state
+  const drafts = Object.entries(state.snowflake.cards).filter(
+    ([, card]) => card.layer === '正文草稿' && (card.derivedFrom ?? '').trim() === sceneId,
+  )
+  let prose = scene.prose ?? ''
+  if (keep === 'card') {
+    const source = drafts.find(([, card]) => (card.body ?? '') !== '')
+    if (source) prose = source[1].body ?? ''
+  }
+  let next = state
+  for (const [id, card] of drafts) {
+    if ((card.body ?? '') === '') continue
+    next = setCardBody(next, id, '')
+  }
+  const nextChapters = (next.chapters ?? []).map((chapter, index) => {
+    if (index !== chapterIndex) return chapter
+    return {
+      ...chapter,
+      scenes: chapter.scenes.map((item, index2) => {
+        if (index2 !== sceneIndex) return item
+        const cleared: BookScene = { ...item, prose }
+        delete cleared.proseFork
+        return cleared
+      }),
+    }
+  })
+  return { ...next, chapters: nextChapters }
+}

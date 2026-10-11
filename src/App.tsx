@@ -889,7 +889,7 @@ export default function App() {
       {page === 'encyclopedia' ? (
         <section className="later-page" aria-label="百科">
           <h2>百科</h2>
-          <p>这一页下一刀才做。</p>
+          <p>百科页还没做。升格卡面到定稿、拉定稿回卡面这两个按钮要等百科页。</p>
         </section>
       ) : null}
       {page === 'chapter' ? (

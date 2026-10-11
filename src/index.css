@@ -906,6 +906,29 @@ button.on {
   padding: 4px 10px;
 }
 
+.discuss-context {
+  flex: none;
+  max-height: 9em;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee6da;
+  background: #fffdf8;
+}
+
+.discuss-context h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.discuss-context-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+}
+
 .discuss-chat {
   position: relative;
   flex: 1 1 auto;
@@ -2115,6 +2138,19 @@ button.danger-quiet {
 .scene-drop ul {
   margin: 4px 0;
   padding-left: 18px;
+}
+
+.prose-fork {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.prose-fork p {
+  margin: 0;
+  font-weight: 600;
 }
 
 .beat-grid {

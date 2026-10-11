@@ -86,7 +86,7 @@ describe('切片 D 关系图与章节', () => {
     expect(read('src/RelationPage.tsx')).toContain('node.color')
     const app = read('src/App.tsx')
     expect(app).toContain("page === 'encyclopedia'")
-    expect(app).toContain('这一页下一刀才做。')
+    expect(app).toContain('百科页还没做。升格卡面到定稿、拉定稿回卡面这两个按钮要等百科页。')
     expect(app).not.toContain("page === 'relation' || page === 'encyclopedia' || page === 'chapter'")
     expect(def.edges.map((edge) => edge.kind).sort()).toEqual(['appears-in', 'relates-entity'])
     expect(def.edges.find((edge) => edge.kind === 'appears-in')).toMatchObject({
