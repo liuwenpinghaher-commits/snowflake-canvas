@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { visibleProse, type Block } from './block-editor.ts'
 import BlockField from './BlockField.tsx'
+import { mentionLabel, mentionTargets, type MentionJump } from './mentions.ts'
 import {
   cardFace,
   choiceFields,
@@ -96,6 +97,7 @@ export default function SideEditor({
   onOpenIdea,
   onOpenField,
   onPovLeave,
+  mentionJump = null,
 }: {
   cardId: string | null
   card: Card | null
@@ -114,6 +116,7 @@ export default function SideEditor({
   onOpenIdea: (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
   onOpenField: (entityId: string, fieldKey: string) => void
   onPovLeave?: (cardId: string, text: string) => void
+  mentionJump?: MentionJump | null
 }) {
   const viewRef = useRef<{ composing: boolean } | null>(null)
   const composingRef = useRef(false)
@@ -129,6 +132,23 @@ export default function SideEditor({
   useEffect(() => {
     setFaceOpen(false)
   }, [cardId])
+
+  useEffect(() => {
+    if (!mentionJump || !card || !cardId || mentionJump.cardId !== cardId) return
+    const key = mentionJump.fieldKey
+    if (key === 'body') return
+    const allowed =
+      fieldKeys(card.layer).includes(key) ||
+      extraFieldKeys(card).includes(key) ||
+      Object.prototype.hasOwnProperty.call(card.fields, key)
+    if (!allowed) return
+    setFieldOverride((current) => {
+      if (current && current.cardId === cardId && current.layer === card.layer && current.key === key) return current
+      return { cardId, layer: card.layer, key }
+    })
+    // 只在点开某一处时切到那一格。正文每次保存都会换 card，不能放进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionJump?.nonce, mentionJump?.cardId, cardId])
 
   const fieldKey =
     card && cardId
@@ -173,6 +193,8 @@ export default function SideEditor({
   const editable = Boolean(card) && canType && !personLayer
 
   const stateSeq = writeSeqOf(documentState)
+  const targets = mentionTargets(documentState)
+  const labelsKey = targets.map((item) => `${item.kind}:${item.id}:${item.label}`).join('\n')
 
 
   const later = card ? laterLayers(card.layer) : []
@@ -312,6 +334,11 @@ export default function SideEditor({
             onPovLeave={onPovLeave}
             composingRef={composingRef}
             viewRef={viewRef}
+            mentionTargets={targets}
+            labelsKey={labelsKey}
+            labelOf={(kind, id) => mentionLabel(documentState, kind, id)}
+            focusBlockId={mentionJump && mentionJump.cardId === cardId ? mentionJump.blockId : null}
+            focusNonce={mentionJump && mentionJump.cardId === cardId ? mentionJump.nonce : 0}
           />
         )}
       </div>

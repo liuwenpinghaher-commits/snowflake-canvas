@@ -1,4 +1,5 @@
 import { cardFace, type AppState, type EntityType } from './document.ts'
+import { shownProse } from './mentions.ts'
 
 export const WORK_SURFACES = [
   { id: 'canvas', label: '画布' },
@@ -71,7 +72,7 @@ export function paletteHits(input: { bookName: string; state: AppState; query: s
     const card = input.state.snowflake.cards[id]
     if (!card) return
     seen.add(id)
-    const title = cardFace(card).title.trim() || '未命名卡片'
+    const title = shownProse(cardFace(card).title, input.state).trim() || '未命名卡片'
     if (!matches(title, query)) return
     hits.push({ key: `card:${id}`, kind: 'card', targetId: id, label: title, hint: '卡片' })
   }

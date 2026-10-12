@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import MentionBacklinks from './MentionBacklinks.tsx'
+import type { MentionHit } from './mentions.ts'
 import { bindLabel } from './encyclopedia.ts'
 import {
   ARC_KEYS,
@@ -43,6 +45,7 @@ export default function CastPage({
   onOpenIdea,
   focus = null,
   onPlaceOnCanvas,
+  onOpenMention,
 }: {
   state: AppState
   canEdit: boolean
@@ -50,6 +53,7 @@ export default function CastPage({
   onOpenIdea: OpenIdea
   focus?: CastFocus
   onPlaceOnCanvas?: (entityId: string) => void
+  onOpenMention?: (hit: MentionHit) => void
 }) {
   const [openRows, setOpenRows] = useState<Record<string, true>>(() =>
     focus?.entityId ? { [focus.entityId]: true } : {},
@@ -141,6 +145,7 @@ export default function CastPage({
                   onOpenIdea={onOpenIdea}
                   focusFieldKey={focus?.entityId === entity.id ? focus.fieldKey : null}
                   onPlaceOnCanvas={onPlaceOnCanvas}
+                  onOpenMention={onOpenMention}
                 />
               )
             })}
@@ -162,6 +167,7 @@ function PersonRow({
   onOpenIdea,
   focusFieldKey = null,
   onPlaceOnCanvas,
+  onOpenMention,
 }: {
   state: AppState
   entity: Entity
@@ -173,6 +179,7 @@ function PersonRow({
   onOpenIdea: OpenIdea
   focusFieldKey?: string | null
   onPlaceOnCanvas?: (entityId: string) => void
+  onOpenMention?: (hit: MentionHit) => void
 }) {
   const name = readPersonField(state, entity, 'name') || entity.name
   const sentence = readPersonField(state, entity, 'sentence')
@@ -186,7 +193,12 @@ function PersonRow({
           event.dataTransfer.effectAllowed = 'copy'
         }}
       >
-        <td>{name || '未命名'}</td>
+        <td>
+          <div>{name || '未命名'}</div>
+          {onOpenMention ? (
+            <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} />
+          ) : null}
+        </td>
         <td>{visibility.level}</td>
         <td>{sentence}</td>
         <td>{bindLabel(entity.slug)}</td>

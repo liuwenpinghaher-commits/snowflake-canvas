@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import MentionBacklinks from './MentionBacklinks.tsx'
+import type { MentionHit } from './mentions.ts'
 import { bookScopedPath } from './books.ts'
 import { addEdge, createCard, type AppState, type Entity } from './document.ts'
 import {
@@ -270,12 +272,14 @@ export default function EncyclopediaPage({
   bookId,
   focusId = null,
   onApply,
+  onOpenMention,
 }: {
   state: AppState
   canEdit: boolean
   bookId: string | null
   focusId?: string | null
   onApply: (recipe: (state: AppState) => AppState) => void | Promise<void>
+  onOpenMention?: (hit: MentionHit) => void
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(focusId)
   const entities = (state.entities ?? []).filter((entity) => entity.entityType in ENTITY_TYPE_LABEL)
@@ -317,6 +321,9 @@ export default function EncyclopediaPage({
                     <span>{ENTITY_TYPE_LABEL[entity.entityType]}</span>
                     <span>{bindLabel(entity.slug)}</span>
                   </button>
+                  {onOpenMention ? (
+                    <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} />
+                  ) : null}
                   {selected ? (
                     <EntityDetail
                       state={state}

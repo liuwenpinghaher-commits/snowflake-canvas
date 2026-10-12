@@ -4,6 +4,15 @@
 //   p 段落  h 标题  q 引用  t0 未完成待办  t1 已完成待办  d 分隔线
 // 新正本的块数组由 document.ts 写在卡片旁边；这里不决定落不落盘。
 
+import {
+  insertedMentionTrigger,
+  mentionAtCursor,
+  mentionToken,
+  replaceMentionMarks,
+  trackMention,
+  type MentionKind,
+} from './mention-mark.ts'
+
 export type BlockType = 'paragraph' | 'heading' | 'quote' | 'todo' | 'divider'
 
 export interface Block {
@@ -18,6 +27,12 @@ export interface SlashState {
   query: string
 }
 
+export interface MentionState {
+  index: number
+  start: number
+  query: string
+}
+
 export interface BlockComposeSession {
   blocks: Block[]
   composing: boolean
@@ -25,6 +40,7 @@ export interface BlockComposeSession {
   active: number
   selected: number | null
   slash: SlashState | null
+  mention: MentionState | null
   past: Block[][]
 }
 
@@ -35,6 +51,7 @@ export type BlockEvent =
   | { type: 'move'; from: number; to: number }
   | { type: 'slashQuery'; query: string }
   | { type: 'slashPick'; blockType: BlockType }
+  | { type: 'mentionPick'; kind: MentionKind; id: string }
   | { type: 'escape' }
   | { type: 'undo' }
   | { type: 'compositionstart' }
@@ -167,11 +184,16 @@ export function blocksToText(blocks: readonly Block[]): string {
   return [BLOCK_WIRE_SENTINEL, ...blocks.map(encodeLine)].join('\n')
 }
 
-export function visibleProse(stored: string): string {
-  if (!isBlockWire(stored)) return stored
-  return textToBlocks(stored)
-    .map((block) => (block.type === 'divider' ? '' : block.text))
-    .join('\n')
+export function visibleProse(
+  stored: string,
+  labelOf?: (kind: MentionKind, id: string) => string,
+): string {
+  const raw = !isBlockWire(stored)
+    ? stored
+    : textToBlocks(stored)
+        .map((block) => (block.type === 'divider' ? '' : block.text))
+        .join('\n')
+  return labelOf ? replaceMentionMarks(raw, labelOf) : raw
 }
 
 export function slashQueryOf(text: string, cursor: number): string | null {
@@ -219,7 +241,7 @@ function splitAt(session: BlockComposeSession, index: number, cursor: number): B
   if (block.type === 'divider') {
     const created = paragraph('')
     const blocks = [...session.blocks.slice(0, index + 1), created, ...session.blocks.slice(index + 1)]
-    return { ...session, blocks, past, active: index + 1, selected: null, slash: null }
+    return { ...session, blocks, past, active: index + 1, selected: null, slash: null, mention: null }
   }
   const at = clampCursor(cursor, block.text.length)
   const left = { ...block, text: block.text.slice(0, at) }
@@ -231,7 +253,7 @@ function splitAt(session: BlockComposeSession, index: number, cursor: number): B
     ...(rightType === 'todo' ? { checked: false } : {}),
   }
   const blocks = [...session.blocks.slice(0, index), left, right, ...session.blocks.slice(index + 1)]
-  return { ...session, blocks, past, active: index + 1, selected: null, slash: null }
+  return { ...session, blocks, past, active: index + 1, selected: null, slash: null, mention: null }
 }
 
 export function blockSessionFromText(text: string): BlockComposeSession {
@@ -242,7 +264,7 @@ export function blockSessionFromText(text: string): BlockComposeSession {
     draft: blocks[0]?.text ?? '',
     active: 0,
     selected: null,
-    slash: null,
+    slash: null, mention: null,
     past: [],
   }
 }
@@ -255,7 +277,7 @@ export function blockSessionFromBlocks(blocks: readonly Block[], past: readonly 
     draft: next[0]?.text ?? '',
     active: 0,
     selected: null,
-    slash: null,
+    slash: null, mention: null,
     past: past.map((entry) => cloneBlocks(entry)),
   }
 }
@@ -263,7 +285,7 @@ export function blockSessionFromBlocks(blocks: readonly Block[], past: readonly 
 export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent): BlockComposeSession {
   if (event.type === 'compositionstart') {
     const current = session.blocks[session.active]?.text ?? ''
-    return { ...session, composing: true, draft: current }
+    return { ...session, composing: true, draft: current, mention: null }
   }
   if (event.type === 'insert') {
     if (!session.composing) return session
@@ -273,7 +295,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const blocks = session.blocks.map((block, index) =>
       index === session.active ? { ...block, text: event.text } : block,
     )
-    return { ...session, composing: false, draft: event.text, blocks, slash: null }
+    return { ...session, composing: false, draft: event.text, blocks, slash: null, mention: null }
   }
   if (session.composing) return session
 
@@ -283,13 +305,26 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const before = block.text
     const blocks = session.blocks.map((item, index) => (index === event.index ? { ...item, text: event.text } : item))
     let slash = session.slash
+    let mention = session.mention
     if (slash && slash.index === event.index) {
       const query = slashQueryOf(event.text, event.cursor)
       slash = query === null ? null : { index: event.index, query }
     } else if (!slash && insertedSlashTrigger(before, event.text, event.cursor)) {
       slash = { index: event.index, query: slashQueryOf(event.text, event.cursor) ?? '' }
+      mention = null
     }
-    return { ...session, blocks, slash, active: event.index }
+    if (slash) {
+      mention = null
+    } else if (mention && mention.index === event.index) {
+      const tracked = trackMention(event.text, mention.start, event.cursor)
+      mention = tracked ? { index: event.index, start: tracked.start, query: tracked.query } : null
+    } else if (!mention && insertedMentionTrigger(before, event.text, event.cursor)) {
+      const found = mentionAtCursor(event.text, event.cursor)
+      mention = found ? { index: event.index, start: found.start, query: found.query } : null
+    } else if (mention && mention.index !== event.index) {
+      mention = null
+    }
+    return { ...session, blocks, slash, mention, active: event.index }
   }
 
   if (event.type === 'slashQuery') {
@@ -301,15 +336,31 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     if (!session.slash) return session
     const index = session.slash.index
     const block = session.blocks[index]
-    if (!block) return { ...session, slash: null }
+    if (!block) return { ...session, slash: null, mention: null }
     const past = withPast(session)
     const next = asType(block, event.blockType, stripSlashLine(block.text))
     const blocks = session.blocks.map((item, itemIndex) => (itemIndex === index ? next : item))
-    return { ...session, blocks, past, slash: null, active: index, selected: null }
+    return { ...session, blocks, past, slash: null, mention: null, active: index, selected: null }
+  }
+
+  if (event.type === 'mentionPick') {
+    if (!session.mention) return session
+    const token = mentionToken(event.kind, event.id)
+    const index = session.mention.index
+    const block = session.blocks[index]
+    if (!token || !block || block.type === 'divider') return { ...session, mention: null }
+    const start = session.mention.start
+    const end = start + 2 + session.mention.query.length
+    if (block.text.slice(start, end) !== `[[${session.mention.query}`) return { ...session, mention: null }
+    const past = withPast(session)
+    const text = block.text.slice(0, start) + token + block.text.slice(end)
+    const blocks = session.blocks.map((item, itemIndex) => (itemIndex === index ? { ...item, text } : item))
+    return { ...session, blocks, past, slash: null, mention: null, active: index, selected: null }
   }
 
   if (event.type === 'escape') {
-    if (session.slash) return { ...session, slash: null }
+    if (session.mention) return { ...session, mention: null }
+    if (session.slash) return { ...session, slash: null, mention: null }
     return { ...session, selected: session.active }
   }
 
@@ -320,17 +371,18 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
       ...session,
       blocks: blocks.length > 0 ? blocks : [paragraph('')],
       past: session.past.slice(0, -1),
-      slash: null,
+      slash: null, mention: null,
       selected: null,
     }
   }
 
   if (event.type === 'enter') {
+    if (session.mention) return session
     if (session.slash) {
       const items = filterSlash(session.slash.query)
-      if (items.length === 0) return { ...session, slash: null }
+      if (items.length === 0) return { ...session, slash: null, mention: null }
       const picked = items[0]
-      if (!picked) return { ...session, slash: null }
+      if (!picked) return { ...session, slash: null, mention: null }
       return applyBlockEvent(session, { type: 'slashPick', blockType: picked.type })
     }
     return splitAt(session, event.index, event.cursor)
@@ -355,7 +407,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const [item] = blocks.splice(event.from, 1)
     if (!item) return session
     blocks.splice(event.to, 0, item)
-    return { ...session, blocks, past, active: event.to, slash: null, selected: null }
+    return { ...session, blocks, past, active: event.to, slash: null, mention: null, selected: null }
   }
 
   if (event.type === 'toggleTodo') {
@@ -375,7 +427,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const text = block.type === 'divider' ? '' : block.text
     const next = asType(block, event.blockType, text)
     const blocks = session.blocks.map((item, index) => (index === event.index ? next : item))
-    return { ...session, blocks, past, slash: null, active: event.index, selected: event.index }
+    return { ...session, blocks, past, slash: null, mention: null, active: event.index, selected: event.index }
   }
 
   if (event.type === 'duplicate') {
@@ -389,7 +441,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
           ? { id: freshBlockId(), type: 'divider', text: '' }
           : { id: freshBlockId(), type: block.type, text: block.text }
     const blocks = [...session.blocks.slice(0, event.index + 1), copy, ...session.blocks.slice(event.index + 1)]
-    return { ...session, blocks, past, slash: null, active: event.index + 1, selected: event.index + 1 }
+    return { ...session, blocks, past, slash: null, mention: null, active: event.index + 1, selected: event.index + 1 }
   }
 
   if (event.type === 'remove') {
@@ -400,7 +452,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const rest = session.blocks.filter((_, index) => index !== event.index)
     const blocks = rest.length > 0 ? rest : [paragraph('')]
     const active = Math.min(event.index, blocks.length - 1)
-    return { ...session, blocks, past, slash: null, active, selected: active }
+    return { ...session, blocks, past, slash: null, mention: null, active, selected: active }
   }
 
   return session

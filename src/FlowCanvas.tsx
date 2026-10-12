@@ -30,6 +30,7 @@ import {
   type FootnoteSegment,
   type FootnoteTarget,
 } from './document.ts'
+import { shownCharCount, shownProse } from './mentions.ts'
 import { entityCanvasPaint } from './relations.ts'
 
 type CardData = {
@@ -165,6 +166,7 @@ function toFlowNode(
   premise: boolean,
   footnotes: FootnoteSegment[],
   onFootnote: (target: FootnoteTarget) => void,
+  state: AppState,
 ): Node {
   if (node.type === 'group') {
     return {
@@ -181,11 +183,19 @@ function toFlowNode(
   }
   const face = card ? cardFace(card) : { title: node.text ?? '', body: '', meta: '' }
   // 卡面 body 为空时，用字段里多出来、会画在正文上的那段，避免只去量一段空正文。
-  const bodyText = card ? bodyTextForCard(card).text : face.body
+  // 引用标记在这里换成当前名字，卡面上不出现 [[sf:...]]。
+  const bodyText = card ? shownProse(bodyTextForCard(card).text, state) : shownProse(face.body, state)
+  const title = shownProse(face.title, state)
+  // 念头和正文草稿的「N 字」跟侧栏同一口径：标记本身不计，显示出来的名字计。
+  const counted =
+    card && (card.layer === 'situation' || card.layer === '正文草稿')
+      ? shownCharCount(card.body, state)
+      : null
+  const meta = counted === null ? face.meta : counted ? `${counted} 字` : ''
   const estimated = estimateSnowCardHeight({
-    title: face.title,
+    title,
     body: bodyText,
-    meta: face.meta,
+    meta,
     width: node.width,
   })
   const height = measured ?? estimated
@@ -203,9 +213,9 @@ function toFlowNode(
       canGrow: card ? laterLayers(card.layer).length > 0 : false,
       flash: flashId === node.id,
       conflict,
-      title: face.title,
+      title,
       body: bodyText,
-      meta: face.meta,
+      meta,
       width: node.width,
       boxHeight: height,
       onHeight,
@@ -441,6 +451,7 @@ export default function FlowCanvas({
       premiseMark(documentState, node.id) === '前提',
       cardFootnotes(documentState, node.id),
       openFootnote,
+      documentState,
     )
     const held = dragged[node.id]
     return held ? { ...flow, position: held } : flow

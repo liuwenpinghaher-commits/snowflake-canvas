@@ -65,12 +65,14 @@ import {
   adoptIntoCard,
   spawnChild,
   type AppearanceDecision,
+  type AppState,
   type FootnoteTarget,
   type Layer,
   type LinkKind,
 } from './document.ts'
 import { createPersonEntity } from './person-form.ts'
-import { visibleProse } from './block-editor.ts'
+import MentionBacklinks from './MentionBacklinks.tsx'
+import { shownCharCount, shownProse, type MentionHit, type MentionJump } from './mentions.ts'
 import { ActionMenu } from './ActionMenu.tsx'
 import { copyCardAnchor, deleteCanvasNode } from './canvas-commands.ts'
 import { isSurfaceId, paletteHits, type PaletteHit } from './command-palette.ts'
@@ -216,8 +218,8 @@ type SaveDialog = {
   resolve: (accepted: boolean) => void
 }
 
-function countChars(text: string): number {
-  return [...visibleProse(text).replace(/\s/g, '')].length
+function countChars(text: string, state: AppState): number {
+  return shownCharCount(text, state)
 }
 
 function syncLabel(view: PersistSnapshot['view']): { text: string; tone: 'ok' | 'busy' | 'bad' | 'muted' } {
@@ -343,6 +345,7 @@ export default function App() {
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [cardMenu, setCardMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [chapterJump, setChapterJump] = useState<{ id: string; nonce: number } | null>(null)
+  const [mentionJump, setMentionJump] = useState<MentionJump | null>(null)
   const [sideEditTick, setSideEditTick] = useState(0)
   const snapRef = useRef(snap)
   const canEditRef = useRef(false)
@@ -527,6 +530,19 @@ export default function App() {
     ctlRef.current?.select(cardId)
   }
 
+  const openMention = (hit: MentionHit) => {
+    setPage('canvas')
+    setDismissedId(null)
+    setControlFolded(false)
+    setMentionJump({
+      cardId: hit.sourceCardId,
+      fieldKey: hit.fieldKey,
+      blockId: hit.blockId,
+      nonce: Date.now(),
+    })
+    ctlRef.current?.select(hit.sourceCardId)
+  }
+
   const openPersonField = (entityId: string, fieldKey: string) => {
     setCastFocus({ entityId, fieldKey })
     setPage('cast')
@@ -625,10 +641,10 @@ export default function App() {
     const field = document.querySelector('.control-pane .cm-content, .control-pane textarea')
     if (field instanceof HTMLElement) field.focus()
   }, [sideEditTick, state.activeId, drawerOpen, controlFolded])
-  const discussName = activeCard ? discussCardName(cardFace(activeCard).title, layerLabel(activeCard.layer)) : ''
-  const activeWords = activeCard ? countChars(activeCard.body) : 0
+  const discussName = activeCard ? discussCardName(shownProse(cardFace(activeCard).title, state), layerLabel(activeCard.layer)) : ''
+  const activeWords = activeCard ? countChars(activeCard.body, state) : 0
   const activeAdopted = Boolean(activeCard && (activeCard.fields.adopted ?? '').trim())
-  const bookWords = Object.values(state.snowflake.cards).reduce((sum, card) => sum + countChars(card.body), 0)
+  const bookWords = Object.values(state.snowflake.cards).reduce((sum, card) => sum + countChars(card.body, state), 0)
   const currentBook = books.find((book) => book.id === bookId) ?? null
   const noCards = Object.keys(state.snowflake.cards).length === 0
   const sync = syncLabel(view)
@@ -981,6 +997,7 @@ export default function App() {
           onOpenIdea={openIdea}
           focus={castFocus}
           onPlaceOnCanvas={(entityId) => placeOnCanvas(entityId)}
+          onOpenMention={openMention}
         />
       ) : null}
       {page === 'relation' ? (
@@ -1006,6 +1023,7 @@ export default function App() {
           bookId={bookId}
           focusId={encyclopediaEntityId}
           onApply={(recipe) => ctlRef.current?.mutate(recipe, UNDOABLE) ?? Promise.resolve()}
+          onOpenMention={openMention}
         />
       ) : null}
       {page === 'chapter' ? (
@@ -1050,7 +1068,10 @@ export default function App() {
                   </button>
                 </span>
               </div>
-              <h2 className="discuss-heading card-head-title">{cardFace(activeCard).title || discussName}</h2>
+              <h2 className="discuss-heading card-head-title">{shownProse(cardFace(activeCard).title, state) || discussName}</h2>
+              {state.activeId ? (
+                <MentionBacklinks state={state} kind="card" id={state.activeId} onOpen={openMention} />
+              ) : null}
               <p className="card-head-meta">
                 {activeWords} 字{activeAdopted ? ' · 已采纳过' : ''}
               </p>
@@ -1093,6 +1114,7 @@ export default function App() {
                     }}
                     onOpenIdea={openIdea}
                     onOpenField={openPersonField}
+                    mentionJump={mentionJump}
                     onPovLeave={(cardId, text) => {
                       void (async () => {
                         const ctl = ctlRef.current

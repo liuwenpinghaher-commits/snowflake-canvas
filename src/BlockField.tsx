@@ -17,8 +17,17 @@ import {
   textToBlocks,
   type Block,
   type BlockType,
+  type MentionState,
   type SlashState,
 } from './block-editor.ts'
+import { insertedMentionTrigger, mentionAtCursor, trackMention } from './mention-mark.ts'
+import { bumpMentionLabels, mentionExtensions } from './mention-view.ts'
+import {
+  filterMentionTargets,
+  mentionToken,
+  type MentionCandidate,
+  type MentionKind,
+} from './mentions.ts'
 import { isBlockMenuShortcut } from './shortcuts.ts'
 
 function changedSpan(before: string, after: string): { from: number; to: number; insert: string } {
@@ -101,6 +110,11 @@ export default function BlockField({
   onPovLeave,
   composingRef,
   viewRef,
+  mentionTargets,
+  labelsKey,
+  labelOf,
+  focusBlockId = null,
+  focusNonce = 0,
 }: {
   cardId: string | null
   fieldKey: string | null
@@ -113,15 +127,26 @@ export default function BlockField({
   onPovLeave?: (cardId: string, text: string) => void
   composingRef: { current: boolean }
   viewRef: { current: { composing: boolean } | null }
+  mentionTargets: readonly MentionCandidate[]
+  labelsKey: string
+  labelOf: (kind: MentionKind, id: string) => string
+  focusBlockId?: string | null
+  focusNonce?: number
 }) {
   const [blocks, setBlocks] = useState<Block[]>(() =>
     storedBlocks && storedBlocks.length > 0 ? cloneBlockList(storedBlocks) : textToBlocks(text),
   )
   const [slash, setSlash] = useState<SlashState | null>(null)
+  const [mention, setMention] = useState<MentionState | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const blocksRef = useRef(blocks)
   const pastRef = useRef<Block[][]>([])
   const slashRef = useRef<SlashState | null>(null)
+  const mentionRef = useRef<MentionState | null>(null)
+  const targetsRef = useRef(mentionTargets)
+  const labelRef = useRef(labelOf)
+  targetsRef.current = mentionTargets
+  labelRef.current = labelOf
   const selectedRef = useRef<number | null>(null)
   const activeRef = useRef(0)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -232,6 +257,35 @@ export default function BlockField({
     if (!open && before !== undefined && insertedSlashTrigger(before, doc, cursor)) {
       slashRef.current = { index, query: slashQueryOf(doc, cursor) ?? '' }
       setSlash(slashRef.current)
+      mentionRef.current = null
+      setMention(null)
+    }
+  }
+
+  const syncMention = (index: number, doc: string, cursor: number, before?: string) => {
+    if (composingRef.current) return
+    const open = mentionRef.current
+    if (open && open.index === index) {
+      const tracked = trackMention(doc, open.start, cursor)
+      if (!tracked) {
+        mentionRef.current = null
+        setMention(null)
+      } else if (tracked.query !== open.query || tracked.start !== open.start) {
+        mentionRef.current = { index, start: tracked.start, query: tracked.query }
+        setMention(mentionRef.current)
+      }
+      return
+    }
+    if (open && open.index !== index) {
+      mentionRef.current = null
+      setMention(null)
+    }
+    if (slashRef.current) return
+    if (before !== undefined && insertedMentionTrigger(before, doc, cursor)) {
+      const found = mentionAtCursor(doc, cursor)
+      if (!found) return
+      mentionRef.current = { index, start: found.start, query: found.query }
+      setMention(mentionRef.current)
     }
   }
 
@@ -242,10 +296,12 @@ export default function BlockField({
     blocksRef.current = session.blocks
     pastRef.current = session.past
     slashRef.current = session.slash
+    mentionRef.current = session.mention
     selectedRef.current = session.selected
     activeRef.current = session.active
     setBlocks(session.blocks)
     setSlash(session.slash)
+    setMention(session.mention)
     setSelected(session.selected)
     for (const block of session.blocks) patchView(block.id, block.text)
     if (focus) focusRef.current = focus
@@ -256,6 +312,7 @@ export default function BlockField({
     const session = blockSessionFromBlocks(readBlocks(), pastRef.current)
     session.active = activeRef.current
     session.slash = slashRef.current
+    session.mention = mentionRef.current
     session.selected = selectedRef.current
     session.composing = composingRef.current
     return session
@@ -267,8 +324,11 @@ export default function BlockField({
     const index = blocksRef.current.findIndex((block) => block.id === id)
     if (index < 0) return
     if (!externalHeldRef.current) {
+      const before = blocksRef.current[index]?.text
       blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: doc } : block))
-      syncSlash(index, doc, editor.state.selection.main.head)
+      const head = editor.state.selection.main.head
+      syncSlash(index, doc, head)
+      syncMention(index, doc, head, before)
       emitCommit(blocksToText(blocksRef.current), blocksRef.current)
       return
     }
@@ -312,7 +372,9 @@ export default function BlockField({
       const before = update.startState.doc.toString()
       const after = update.state.doc.toString()
       blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: after } : block))
-      syncSlash(index, after, update.state.selection.main.head, before)
+      const head = update.state.selection.main.head
+      syncSlash(index, after, head, before)
+      syncMention(index, after, head, before)
       emitCommit(blocksToText(blocksRef.current), blocksRef.current)
     },
     onEnter(id, view) {
@@ -331,7 +393,24 @@ export default function BlockField({
       let session = blockSessionFromBlocks(blocksNow, pastRef.current)
       session.active = index
       session.slash = slashRef.current
+      session.mention = mentionRef.current
       session.selected = selectedRef.current
+      if (session.mention && session.mention.index === index) {
+        const items = filterMentionTargets(targetsRef.current, session.mention.query)
+        if (items.length === 0) {
+          session = applyBlockEvent(session, { type: 'escape' })
+          commitSession(session)
+          return true
+        }
+        const picked = items[0]
+        if (!picked) return true
+        const at = session.mention.start
+        const token = mentionToken(picked.kind, picked.id)
+        session = applyBlockEvent(session, { type: 'mentionPick', kind: picked.kind, id: picked.id })
+        const focus = session.blocks[index]
+        commitSession(session, focus && token ? { id: focus.id, cursor: at + token.length } : undefined)
+        return true
+      }
       session = applyBlockEvent(session, { type: 'enter', index, cursor: start })
       const focus = session.blocks[session.active]
       commitSession(session, focus ? { id: focus.id, cursor: 0 } : undefined)
@@ -346,10 +425,12 @@ export default function BlockField({
       blocksRef.current = session.blocks
       pastRef.current = session.past
       slashRef.current = session.slash
+      mentionRef.current = session.mention
       selectedRef.current = session.selected
       activeRef.current = session.active
       setBlocks(session.blocks)
       setSlash(session.slash)
+      setMention(session.mention)
       setSelected(session.selected)
       return true
     },
@@ -360,6 +441,10 @@ export default function BlockField({
     },
     onCompositionStart() {
       composingRef.current = true
+      if (mentionRef.current) {
+        mentionRef.current = null
+        setMention(null)
+      }
     },
     onCompositionEnd(id, view) {
       composingRef.current = false
@@ -436,12 +521,14 @@ export default function BlockField({
       composingRef.current = false
       externalHeldRef.current = false
       slashRef.current = null
+      mentionRef.current = null
       selectedRef.current = null
       pastRef.current = []
       const next = incomingStored ?? textToBlocks(text)
       blocksRef.current = next
       setBlocks(next)
       setSlash(null)
+      setMention(null)
       setSelected(null)
       lastCommitRef.current = blocksToText(next)
       appliedRef.current = { editable, cardId, fieldKey }
@@ -463,8 +550,10 @@ export default function BlockField({
       blocksRef.current = incomingStored
       pastRef.current = []
       slashRef.current = null
+      mentionRef.current = null
       setBlocks(incomingStored)
       setSlash(null)
+      setMention(null)
       lastCommitRef.current = blocksToText(incomingStored)
       externalHeldRef.current = false
       for (const block of incomingStored) patchView(block.id, block.text)
@@ -488,14 +577,28 @@ export default function BlockField({
       blocksRef.current = next
       pastRef.current = []
       slashRef.current = null
+      mentionRef.current = null
       setBlocks(next)
       setSlash(null)
+      setMention(null)
       lastCommitRef.current = blocksToText(next)
       externalHeldRef.current = false
       for (const block of next) patchView(block.id, block.text)
     }
     appliedRef.current = { editable, cardId, fieldKey }
   }, [text, cardId, fieldKey, editable, stateSeq, storedKey, storedBlocks, composingRef, viewRef])
+
+  const pickMention = (kind: MentionKind, id: string) => {
+    if (composingRef.current || !canTypeRef.current) return
+    const open = mentionRef.current
+    if (!open) return
+    const token = mentionToken(kind, id)
+    const at = open.start
+    let session = sessionNow()
+    session = applyBlockEvent(session, { type: 'mentionPick', kind, id })
+    const focus = session.blocks[open.index]
+    commitSession(session, focus && token ? { id: focus.id, cursor: at + token.length } : undefined)
+  }
 
   const pick = (blockType: BlockType) => {
     if (composingRef.current || !canTypeRef.current) return
@@ -533,7 +636,9 @@ export default function BlockField({
     selectedRef.current = index
     setSelected(index)
     slashRef.current = null
+    mentionRef.current = null
     setSlash(null)
+    setMention(null)
     setMenu({ index, x, y })
   }
   openBlockMenuRef.current = openBlockMenu
@@ -557,6 +662,24 @@ export default function BlockField({
         }))
       : []
 
+  useEffect(() => {
+    for (const view of viewsRef.current.values()) {
+      view.dispatch({ effects: bumpMentionLabels.of(labelsKey) })
+    }
+  }, [labelsKey])
+
+  useEffect(() => {
+    if (!focusBlockId || !cardId) return
+    const root = rootRef.current
+    if (!root) return
+    const safe = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(focusBlockId) : focusBlockId
+    const node = root.querySelector(`[data-block-id="${safe}"]`)
+    if (!(node instanceof HTMLElement)) return
+    if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
+    const editor = node.querySelector('.cm-content')
+    if (editor instanceof HTMLElement) editor.focus()
+  }, [focusNonce, focusBlockId, cardId, blocks])
+
   return (
     <div ref={rootRef} className={blocks.length === 1 ? 'sf-blocks is-single' : 'sf-blocks'}>
       {blocks.map((block, index) => (
@@ -565,7 +688,10 @@ export default function BlockField({
           block={block}
           index={index}
           selected={selected === index}
-          slash={slash && slash.index === index ? slash : null}
+          slash={mention && mention.index === index ? null : slash && slash.index === index ? slash : null}
+          mention={mention && mention.index === index ? mention : null}
+          mentionItems={mention && mention.index === index ? filterMentionTargets(mentionTargets, mention.query) : []}
+          labelRef={labelRef}
           editableRef={editableRef}
           applyingRef={applyingRef}
           composingRef={composingRef}
@@ -574,6 +700,7 @@ export default function BlockField({
           focusRef={focusRef}
           handlersRef={handlersRef}
           onPick={pick}
+          onMentionPick={pickMention}
           onMove={moveBlock}
           onToggle={() => toggleTodo(index)}
           onDividerEnter={() => enterDivider(index)}
@@ -590,6 +717,9 @@ function BlockRow({
   index,
   selected,
   slash,
+  mention,
+  mentionItems,
+  labelRef,
   editableRef,
   applyingRef,
   composingRef,
@@ -598,6 +728,7 @@ function BlockRow({
   focusRef,
   handlersRef,
   onPick,
+  onMentionPick,
   onMove,
   onToggle,
   onDividerEnter,
@@ -607,6 +738,9 @@ function BlockRow({
   index: number
   selected: boolean
   slash: SlashState | null
+  mention: MentionState | null
+  mentionItems: readonly MentionCandidate[]
+  labelRef: { current: (kind: MentionKind, id: string) => string }
   editableRef: { current: boolean }
   applyingRef: { current: boolean }
   composingRef: { current: boolean }
@@ -615,6 +749,7 @@ function BlockRow({
   focusRef: { current: { id: string; cursor: number } | null }
   handlersRef: { current: Handlers }
   onPick: (type: BlockType) => void
+  onMentionPick: (kind: MentionKind, id: string) => void
   onMove: (from: number, to: number) => void
   onToggle: () => void
   onDividerEnter: () => void
@@ -635,6 +770,7 @@ function BlockRow({
         doc: block.text,
         extensions: [
           history(),
+          mentionExtensions(labelRef),
           drawSelection(),
           EditorView.lineWrapping,
           placeholder('在这里写'),
@@ -708,7 +844,7 @@ function BlockRow({
       viewsRef.current.delete(id)
       compartmentsRef.current.delete(id)
     }
-  }, [applyingRef, block.id, block.type, compartmentsRef, composingRef, editableRef, focusRef, handlersRef, viewsRef])
+  }, [applyingRef, block.id, block.type, compartmentsRef, composingRef, editableRef, focusRef, handlersRef, labelRef, viewsRef])
 
   useEffect(() => {
     const view = viewRef.current
@@ -736,6 +872,7 @@ function BlockRow({
   return (
     <div
       className={selected ? `sf-block is-selected sf-${block.type}` : `sf-block sf-${block.type}`}
+      data-block-id={block.id}
       onContextMenu={(event) => {
         event.preventDefault()
         event.stopPropagation()
@@ -807,6 +944,23 @@ function BlockRow({
             </li>
           ))}
           {items.length === 0 ? <li className="sf-slash-empty">没有这一项</li> : null}
+        </ul>
+      ) : null}
+      {mention ? (
+        <ul className="sf-slash" role="listbox" aria-label="引用">
+          {mentionItems.map((item, itemIndex) => (
+            <li key={`${item.kind}:${item.id}`}>
+              <button
+                type="button"
+                aria-selected={itemIndex === 0}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => onMentionPick(item.kind, item.id)}
+              >
+                {item.label}
+              </button>
+            </li>
+          ))}
+          {mentionItems.length === 0 ? <li className="sf-slash-empty">没有这一项</li> : null}
         </ul>
       ) : null}
     </div>
