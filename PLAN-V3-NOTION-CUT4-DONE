@@ -1,0 +1,7 @@
+commit: 10011e86a50095b3d284da0d542c3eb54c27b038
+vitest: 30 files, 273 tests, rc=0
+tsc_rc=0 build_rc=0
+摘要: 正文里的 [[sf:card:<id>]] / [[sf:entity:<id>]] 显示当前名字；改名跟随，删除显示「找不到」，正文不丢。
+悬停「N 处提到」预览那一块可见正文。反向列表现算，不落盘，不自动建边。
+人物页和百科页也能看到并点回去。字数只计显示名。组字期间不打开引用面板。
+测试 tests/block-mentions.test.ts。另加了 src/CastPage.tsx 与 src/EncyclopediaPage.tsx。
