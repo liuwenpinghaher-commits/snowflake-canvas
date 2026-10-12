@@ -1,7 +1,8 @@
-// 一格正文的块。写回仍是一个字符串，不在卡片上增加块数组。
+// 一格正文的块。@@sf-blocks 仍是读旧字符串的入口。
 // 单段落且没有特殊块时，字符串原样进出。
 // 多块或特殊块用一行前缀，软换行写成 \n，整段以 @@sf-blocks 开头：
 //   p 段落  h 标题  q 引用  t0 未完成待办  t1 已完成待办  d 分隔线
+// 新正本的块数组由 document.ts 写在卡片旁边；这里不决定落不落盘。
 
 export type BlockType = 'paragraph' | 'heading' | 'quote' | 'todo' | 'divider'
 

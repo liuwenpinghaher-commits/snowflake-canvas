@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { visibleProse } from './block-editor.ts'
+import { visibleProse, type Block } from './block-editor.ts'
 import BlockField from './BlockField.tsx'
 import {
   cardFace,
@@ -15,6 +15,7 @@ import {
   laterLayers,
   layerLabel,
   markBookPremise,
+  readCellBlocks,
   nextLayer,
   type AppState,
   type Card,
@@ -101,7 +102,7 @@ export default function SideEditor({
   documentState: AppState
   groupSelected: boolean
   canType: boolean
-  onCommit: (cardId: string, fieldKey: string | null, text: string) => void
+  onCommit: (cardId: string, fieldKey: string | null, text: string, blocks?: readonly Block[]) => void
   onAdoptField: (fieldKey: string | null) => void
   onChangeLayer: (cardId: string, layer: Layer) => void
   expandNotice: string | null
@@ -303,6 +304,7 @@ export default function SideEditor({
             cardId={cardId}
             fieldKey={fieldKey}
             text={text}
+            storedBlocks={card ? readCellBlocks(card, fieldKey) : undefined}
             editable={editable}
             canType={canType}
             stateSeq={stateSeq}

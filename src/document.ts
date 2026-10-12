@@ -398,6 +398,16 @@ export interface PendingEntity {
   cardIds: string[]
 }
 
+export const PROSE_BLOCK_TYPES = ['paragraph', 'heading', 'quote', 'todo', 'divider'] as const
+export type ProseBlockType = (typeof PROSE_BLOCK_TYPES)[number]
+
+export interface ProseBlock {
+  id: string
+  type: ProseBlockType
+  text: string
+  checked?: boolean
+}
+
 export interface Card {
   layer: Layer
   body: string
@@ -408,6 +418,8 @@ export interface Card {
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
+  /** 这一格已经落盘的块，或用户拆过块后要落盘的块。键是 body，或字段名。没有这个键时，正文仍只是字符串。 */
+  blocks?: Record<string, ProseBlock[]>
 }
 
 export interface LooseCard {
@@ -419,6 +431,7 @@ export interface LooseCard {
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
+  blocks?: Record<string, ProseBlock[]>
 }
 
 export interface AppState {
@@ -633,12 +646,18 @@ function unescapeWire(source: string): string {
   return out
 }
 
+function isStoredBlockWire(text: string): boolean {
+  if (!text.startsWith(BLOCK_WIRE_MARK)) return false
+  const lines = text.slice(BLOCK_WIRE_MARK.length).split('\n')
+  return lines.length > 0 && lines.every((line) => line === 'd' || BLOCK_WIRE_LINE.test(line))
+}
+
 // 和服务端单独加载这份文件的方式一致：这里自己认出块字符串，不引用旁边的模块。
 function visibleProse(stored: string): string {
-  if (!stored.startsWith(BLOCK_WIRE_MARK)) return stored
-  const lines = stored.slice(BLOCK_WIRE_MARK.length).split('\n')
-  if (lines.length === 0 || !lines.every((line) => line === 'd' || BLOCK_WIRE_LINE.test(line))) return stored
-  return lines
+  if (!isStoredBlockWire(stored)) return stored
+  return stored
+    .slice(BLOCK_WIRE_MARK.length)
+    .split('\n')
     .map((line) => {
       if (line === 'd') return ''
       const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
@@ -647,15 +666,119 @@ function visibleProse(stored: string): string {
     .join('\n')
 }
 
+function isProseBlockType(value: string): value is ProseBlockType {
+  return (PROSE_BLOCK_TYPES as readonly string[]).includes(value)
+}
+
+export function blocksVisibleText(blocks: readonly ProseBlock[]): string {
+  return blocks.map((block) => (block.type === 'divider' ? '' : block.text)).join('\n')
+}
+
+export function cloneProseBlocks(blocks: readonly ProseBlock[]): ProseBlock[] {
+  const out: ProseBlock[] = []
+  for (const block of blocks) {
+    if (typeof block.id !== 'string' || block.id.length === 0) continue
+    if (!isProseBlockType(block.type) || typeof block.text !== 'string') continue
+    if (block.type === 'divider') {
+      out.push({ id: block.id, type: 'divider', text: '' })
+      continue
+    }
+    if (block.type === 'todo') {
+      out.push({ id: block.id, type: 'todo', text: block.text, checked: block.checked === true })
+      continue
+    }
+    out.push({ id: block.id, type: block.type, text: block.text })
+  }
+  return out
+}
+
+export function cloneBlockMap(blocks: Record<string, ProseBlock[]> | undefined): Record<string, ProseBlock[]> | undefined {
+  if (!blocks) return undefined
+  const out: Record<string, ProseBlock[]> = {}
+  for (const [key, list] of Object.entries(blocks)) {
+    const cloned = cloneProseBlocks(list)
+    if (cloned.length > 0) out[key] = cloned
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function blockStructureKey(blocks: readonly ProseBlock[]): string {
+  return blocks.map((block) => (block.type === 'todo' ? `todo:${block.checked === true ? 1 : 0}` : block.type)).join('\n')
+}
+
+function storedToBlocks(text: string): ProseBlock[] {
+  if (!isStoredBlockWire(text)) return [{ id: 'wire-1', type: 'paragraph', text }]
+  return text
+    .slice(BLOCK_WIRE_MARK.length)
+    .split('\n')
+    .map((line, index) => {
+      const id = `wire-${index + 1}`
+      if (line === 'd') return { id, type: 'divider' as const, text: '' }
+      const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
+      const body = unescapeWire(line.slice(mark.length + 1))
+      if (mark === 'h') return { id, type: 'heading' as const, text: body }
+      if (mark === 'q') return { id, type: 'quote' as const, text: body }
+      if (mark === 't0') return { id, type: 'todo' as const, text: body, checked: false }
+      if (mark === 't1') return { id, type: 'todo' as const, text: body, checked: true }
+      return { id, type: 'paragraph' as const, text: body }
+    })
+}
+
+function cellString(card: Card, key: string): string {
+  if (key === 'body') return card.body
+  return card.fields[key] ?? ''
+}
+
+export function withPersistedBlocks(card: Card): Card {
+  const persisted = cloneBlockMap(card.blocks)
+  if (!persisted) {
+    if (!card.blocks) return card
+    const next: Card = { ...card }
+    delete next.blocks
+    return next
+  }
+  const fields = { ...card.fields }
+  let body = card.body
+  for (const [key, list] of Object.entries(persisted)) {
+    const visible = blocksVisibleText(list)
+    if (key === 'body') body = visible
+    else fields[key] = visible
+  }
+  if (card.layer === '一句话' && persisted.sentence) body = fields.sentence ?? body
+  return { ...card, body, fields, blocks: persisted }
+}
+
+export function readCellBlocks(card: Card, fieldKey: string | null): ProseBlock[] | undefined {
+  const key = fieldKey && card.layer !== 'situation' && card.layer !== '正文草稿' && card.layer !== '一句话' ? fieldKey : card.layer === '一句话' ? 'sentence' : 'body'
+  const list = card.blocks?.[key]
+  if (!list || list.length === 0) return undefined
+  const cloned = cloneProseBlocks(list)
+  return cloned.length > 0 ? cloned : undefined
+}
+
+function dropCellBlocks(card: Card, key: string): Card {
+  if (!card.blocks?.[key]) return card
+  const blocks = { ...card.blocks }
+  delete blocks[key]
+  if (Object.keys(blocks).length === 0) {
+    const next: Card = { ...card }
+    delete next.blocks
+    return next
+  }
+  return { ...card, blocks }
+}
+
 function proseCard(card: Card): Card {
-  const body = visibleProse(card.body)
+  const source = card.blocks ? withPersistedBlocks(card) : card
+  const body = visibleProse(source.body)
   let changed = body !== card.body
   const fields: Record<string, string> = {}
-  for (const [key, value] of Object.entries(card.fields)) {
+  for (const [key, value] of Object.entries(source.fields)) {
     const next = visibleProse(value)
     fields[key] = next
-    if (next !== value) changed = true
+    if (next !== (card.fields[key] ?? '')) changed = true
   }
+  if (Object.keys(fields).length !== Object.keys(card.fields).length) changed = true
   if (!changed) return card
   return { ...card, body, fields }
 }
@@ -1162,34 +1285,61 @@ function allowedFieldKey(card: Card, fieldKey: string | null): string | undefine
   return official.find((key) => !isChoiceField(key)) ?? official[0]
 }
 
+function commitCellKey(card: Card, fieldKey: string | null): string | null {
+  if (card.layer === 'situation' || card.layer === '正文草稿') return 'body'
+  if (card.layer === '一句话') return 'sentence'
+  if (card.layer === 'changci' && fieldKey === 'pov') return 'pov'
+  const key = allowedFieldKey(card, fieldKey)
+  if (!key || key === 'philosophy') return null
+  return key
+}
+
+function incomingBlocks(blocks: readonly ProseBlock[] | undefined, text: string): ProseBlock[] {
+  if (blocks && blocks.length > 0) {
+    const cloned = cloneProseBlocks(blocks)
+    if (cloned.length > 0) return cloned
+  }
+  return storedToBlocks(text)
+}
+
 export function commitCardText(
   state: AppState,
   cardId: string,
   text: string,
   fieldKey: string | null,
   composing: boolean,
+  blocks?: readonly ProseBlock[],
 ): AppState {
   if (composing) return state
   const current = state.snowflake.cards[cardId]
   if (!current) return state
+  const cell = commitCellKey(current, fieldKey)
+  if (!cell) return state
+  const hadList = current.blocks?.[cell]
+  const had = Boolean(hadList && hadList.length > 0)
+  const incoming = incomingBlocks(blocks, text)
+  const before = hadList && hadList.length > 0 ? hadList : storedToBlocks(cellString(current, cell))
+  const keep = !isChoiceField(cell) && (had || blockStructureKey(before) !== blockStructureKey(incoming))
+  const written = keep ? blocksVisibleText(incoming) : text
+  const nextBlocks = keep ? { ...(cloneBlockMap(current.blocks) ?? {}), [cell]: cloneProseBlocks(incoming) } : undefined
   let card: Card
   if (current.layer === 'situation' || current.layer === '正文草稿') {
-    card = { ...current, layer: current.layer, body: text, fields: {} }
+    card = { ...current, layer: current.layer, body: written, fields: {} }
   } else if (current.layer === '一句话') {
-    card = { ...current, layer: '一句话', body: text, fields: { sentence: text } }
+    card = { ...current, layer: '一句话', body: written, fields: { sentence: written } }
   } else {
     const fields = fieldsFor(current.layer, current.fields)
     if (current.layer === 'changci' && fieldKey === 'pov') {
-      if (text.trim()) fields.pov = text.trim()
+      if (keep) fields.pov = written
+      else if (written.trim()) fields.pov = written.trim()
       else delete fields.pov
-    } else {
-      const key = allowedFieldKey(current, fieldKey)
-      if (key === 'philosophy') return state
-      if (key) fields[key] = text
-      if (keptExtraKey(current.layer, key ?? '') && !text.trim()) delete fields[key ?? '']
+    } else if (cell) {
+      fields[cell] = written
+      if (keptExtraKey(current.layer, cell) && !written.trim()) delete fields[cell]
     }
     card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
+  if (keep && nextBlocks) card = { ...card, blocks: nextBlocks }
   const painted = paintCard(state, cardId, card)
   if (current.layer === 'renwubiao' && fieldKey === 'motivation') return mirrorPhilosophy(painted)
   return painted
@@ -1223,18 +1373,21 @@ export function adoptIntoCard(state: AppState, cardId: string, nextBody: string,
   const existing = (current.fields[target] ?? '').replace(/\s+$/u, '')
   const written = existing && existing !== addition && !existing.endsWith(`\n${addition}`) ? `${existing}\n${addition}` : addition || existing
   const fields = fieldsFor(current.layer, { ...current.fields, [target]: written })
-  const card: Card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
-  if (card.body === current.body && fields[target] === (current.fields[target] ?? '')) return state
+  let card: Card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
+  card = dropCellBlocks(card, target)
+  if (card.body === current.body && fields[target] === (current.fields[target] ?? '') && !current.blocks?.[target]) return state
   return paintCard(state, cardId, card)
 }
 
 export function setCardBody(state: AppState, cardId: string, body: string): AppState {
   const current = state.snowflake.cards[cardId]
   if (!current || current.body === body) return state
-  const card: Card =
+  let card: Card =
     current.layer === '一句话'
       ? { ...current, layer: '一句话', body, fields: { ...current.fields, sentence: body } }
       : { ...current, body }
+  card = dropCellBlocks(card, 'body')
+  if (current.layer === '一句话') card = dropCellBlocks(card, 'sentence')
   return paintCard(state, cardId, card)
 }
 
@@ -1306,11 +1459,18 @@ export function serializeDocument(state: AppState): {
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
     const fields = fieldsFor(card.layer, card.fields)
     if (card.layer === 'renwudangan') fields.philosophy = motivationForDossier(state, id)
-    const stored: Card = {
+    const aligned = withPersistedBlocks({
+      ...card,
       layer: card.layer,
       body: card.layer === '一句话' ? (fields.sentence ?? card.body) : card.body,
       fields,
+    })
+    const stored: Card = {
+      layer: aligned.layer,
+      body: aligned.body,
+      fields: aligned.fields,
     }
+    if (aligned.blocks) stored.blocks = aligned.blocks
     if (card.mergeNote) stored.mergeNote = card.mergeNote
     if (card.premise) stored.premise = true
     if (card.derivedFrom) stored.derivedFrom = card.derivedFrom
@@ -1356,6 +1516,7 @@ interface DraftCard {
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
+  blocks?: Record<string, ProseBlock[]>
 }
 
 function mergeText(base: string, extra: string): string {
@@ -1416,6 +1577,7 @@ export function loadCards(
       derivedFrom: card.derivedFrom,
       arc: card.arc,
       originAnchor: card.originAnchor,
+      blocks: cloneBlockMap(card.blocks),
     })
   }
 
@@ -1510,6 +1672,8 @@ function attachDraftMeta(card: Card, draft: DraftCard): Card {
       ...(typeof draft.originAnchor.charOffset === 'number' ? { charOffset: draft.originAnchor.charOffset } : {}),
     }
   }
+  const blocks = cloneBlockMap(draft.blocks)
+  if (blocks) card.blocks = blocks
   return card
 }
 
@@ -1646,7 +1810,7 @@ export function mirrorPhilosophy(state: AppState): AppState {
     const motivation = entity.fields.motivation?.value ?? (entity.views.renwubiao ? (cards[entity.views.renwubiao]?.fields.motivation ?? '') : '')
     if ((dossier.fields.philosophy ?? '') === motivation) continue
     changed = true
-    cards[dossierId] = { ...dossier, fields: { ...dossier.fields, philosophy: motivation } }
+    cards[dossierId] = dropCellBlocks({ ...dossier, fields: { ...dossier.fields, philosophy: motivation } }, 'philosophy')
   }
   const entities = (state.entities ?? []).map((entity) => {
     if (!entity.fields.philosophy) return entity
@@ -2134,7 +2298,11 @@ export function mergeCards(state: AppState, targetId: string, dropIds: readonly 
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
     if (dropSet.has(id)) continue
     if (id === targetId) {
-      const next: Card = { ...card, body, mergeNote: noteIds.join(',') }
+      let next: Card = { ...card, body, mergeNote: noteIds.join(',') }
+      if (body !== card.body) {
+        next = dropCellBlocks(next, 'body')
+        if (card.layer === '一句话') next = dropCellBlocks(next, 'sentence')
+      }
       if (premise) next.premise = true
       else delete next.premise
       cards[id] = next
@@ -2230,7 +2398,7 @@ export function reconcileProse(state: AppState): AppState {
     const bodyEmpty = body.trim() === ''
     if (proseEmpty && !bodyEmpty) {
       chapters[loc.chapterIndex].scenes[loc.sceneIndex] = { ...scene, prose: body }
-      cards[id] = { ...card, body: '' }
+      cards[id] = dropCellBlocks({ ...card, body: '' }, 'body')
       changed = true
       continue
     }

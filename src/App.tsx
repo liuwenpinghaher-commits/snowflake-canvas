@@ -961,8 +961,8 @@ export default function App() {
                     documentState={state}
                     groupSelected={activeNode?.type === 'group'}
                     canType={canEdit}
-                    onCommit={(cardId, fieldKey, text) => {
-                      void ctlRef.current?.commitText(cardId, fieldKey, text)
+                    onCommit={(cardId, fieldKey, text, blocks) => {
+                      void ctlRef.current?.commitText(cardId, fieldKey, text, blocks)
                     }}
                     onAdoptField={(key) => {
                       adoptFieldRef.current = key

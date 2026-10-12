@@ -43,6 +43,24 @@ function rebaseEdit(base: string, mine: string, theirs: string): string | null {
   return null
 }
 
+function cloneBlockList(blocks: readonly Block[]): Block[] {
+  return blocks.map((block) => ({ ...block }))
+}
+
+function sameBlockList(left: readonly Block[], right: readonly Block[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((block, index) => {
+    const other = right[index]
+    return (
+      !!other &&
+      block.id === other.id &&
+      block.type === other.type &&
+      block.text === other.text &&
+      (block.checked === true) === (other.checked === true)
+    )
+  })
+}
+
 function preservePlainId(current: readonly Block[], incoming: readonly Block[], text: string): Block[] {
   if (
     !isBlockWire(text) &&
@@ -71,6 +89,7 @@ export default function BlockField({
   cardId,
   fieldKey,
   text,
+  storedBlocks,
   editable,
   canType,
   stateSeq,
@@ -82,15 +101,18 @@ export default function BlockField({
   cardId: string | null
   fieldKey: string | null
   text: string
+  storedBlocks?: readonly Block[] | null
   editable: boolean
   canType: boolean
   stateSeq: number
-  onCommit: (cardId: string, fieldKey: string | null, text: string) => void
+  onCommit: (cardId: string, fieldKey: string | null, text: string, blocks?: readonly Block[]) => void
   onPovLeave?: (cardId: string, text: string) => void
   composingRef: { current: boolean }
   viewRef: { current: { composing: boolean } | null }
 }) {
-  const [blocks, setBlocks] = useState<Block[]>(() => textToBlocks(text))
+  const [blocks, setBlocks] = useState<Block[]>(() =>
+    storedBlocks && storedBlocks.length > 0 ? cloneBlockList(storedBlocks) : textToBlocks(text),
+  )
   const [slash, setSlash] = useState<SlashState | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const blocksRef = useRef(blocks)
@@ -107,7 +129,8 @@ export default function BlockField({
   const editableRef = useRef(editable)
   const canTypeRef = useRef(canType)
   const textRef = useRef(text)
-  const lastCommitRef = useRef<string | null>(text)
+  const lastCommitRef = useRef<string | null>(null)
+  if (lastCommitRef.current === null) lastCommitRef.current = blocksToText(blocks)
   const onCommitRef = useRef(onCommit)
   const onPovLeaveRef = useRef(onPovLeave)
   const appliedRef = useRef({ editable, cardId, fieldKey })
@@ -126,13 +149,20 @@ export default function BlockField({
       return { ...block, text: view.state.doc.toString() }
     })
 
-  const emitCommit = (wire: string) => {
+  const storedKey =
+    storedBlocks && storedBlocks.length > 0
+      ? storedBlocks
+          .map((block) => `${block.id}\u0000${block.type}\u0000${block.checked === true ? '1' : '0'}\u0000${block.text}`)
+          .join('\u0001')
+      : ''
+
+  const emitCommit = (wire: string, committed: readonly Block[]) => {
     if (!canTypeRef.current || applyingRef.current) return
     if (lastCommitRef.current === wire) return
     const target = appliedRef.current
     if (!target.cardId) return
     lastCommitRef.current = wire
-    onCommitRef.current(target.cardId, target.fieldKey, wire)
+    onCommitRef.current(target.cardId, target.fieldKey, wire, cloneBlockList(committed))
   }
 
   const patchView = (id: string, next: string) => {
@@ -181,7 +211,7 @@ export default function BlockField({
     setSelected(session.selected)
     for (const block of session.blocks) patchView(block.id, block.text)
     if (focus) focusRef.current = focus
-    emitCommit(blocksToText(session.blocks))
+    emitCommit(blocksToText(session.blocks), session.blocks)
   }
 
   const sessionNow = () => {
@@ -201,7 +231,7 @@ export default function BlockField({
     if (!externalHeldRef.current) {
       blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: doc } : block))
       syncSlash(index, doc, editor.state.selection.main.head)
-      emitCommit(blocksToText(blocksRef.current))
+      emitCommit(blocksToText(blocksRef.current), blocksRef.current)
       return
     }
     externalHeldRef.current = false
@@ -220,12 +250,12 @@ export default function BlockField({
       }
       blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: merged } : block))
       lastCommitRef.current = theirs
-      emitCommit(merged)
+      emitCommit(merged, blocksRef.current)
       return
     }
     blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: doc } : block))
     lastCommitRef.current = theirs
-    emitCommit(blocksToText(blocksRef.current))
+    emitCommit(blocksToText(blocksRef.current), blocksRef.current)
   }
 
   handlersRef.current = {
@@ -245,7 +275,7 @@ export default function BlockField({
       const after = update.state.doc.toString()
       blocksRef.current = blocksRef.current.map((block, item) => (item === index ? { ...block, text: after } : block))
       syncSlash(index, after, update.state.selection.main.head, before)
-      emitCommit(blocksToText(blocksRef.current))
+      emitCommit(blocksToText(blocksRef.current), blocksRef.current)
     },
     onEnter(id, view) {
       if (composingRef.current || view.composing || !canTypeRef.current || !editableRef.current) return false
@@ -338,7 +368,7 @@ export default function BlockField({
         lastCommitRef.current !== null &&
         wire !== lastCommitRef.current
       ) {
-        onCommitRef.current(applied.cardId, applied.fieldKey, wire)
+        onCommitRef.current(applied.cardId, applied.fieldKey, wire, cloneBlockList(blocksRef.current))
       }
       composingRef.current = false
       viewRef.current = null
@@ -348,6 +378,7 @@ export default function BlockField({
   useEffect(() => {
     const applied = appliedRef.current
     const same = applied.cardId === cardId && applied.fieldKey === fieldKey
+    const incomingStored = storedBlocks && storedBlocks.length > 0 ? cloneBlockList(storedBlocks) : null
     if (applied.editable !== editable) {
       applyingRef.current = true
       for (const [id, view] of viewsRef.current) {
@@ -360,19 +391,45 @@ export default function BlockField({
     if (!same) {
       if (applied.cardId && !composingRef.current && canTypeRef.current && lastCommitRef.current !== null) {
         const wire = blocksToText(blocksRef.current)
-        if (wire !== lastCommitRef.current) onCommitRef.current(applied.cardId, applied.fieldKey, wire)
+        if (wire !== lastCommitRef.current) {
+          onCommitRef.current(applied.cardId, applied.fieldKey, wire, cloneBlockList(blocksRef.current))
+        }
       }
       composingRef.current = false
       externalHeldRef.current = false
       slashRef.current = null
       selectedRef.current = null
       pastRef.current = []
-      const next = textToBlocks(text)
+      const next = incomingStored ?? textToBlocks(text)
       blocksRef.current = next
       setBlocks(next)
       setSlash(null)
       setSelected(null)
-      lastCommitRef.current = text
+      lastCommitRef.current = blocksToText(next)
+      appliedRef.current = { editable, cardId, fieldKey }
+      return
+    }
+    if (incomingStored) {
+      if (sameBlockList(blocksRef.current, incomingStored)) {
+        lastCommitRef.current = blocksToText(blocksRef.current)
+        appliedRef.current = { editable, cardId, fieldKey }
+        return
+      }
+      const own = stateSeq !== 0 && stateSeq === latestWriteSeq()
+      const composing = composingRef.current || Boolean(viewRef.current?.composing)
+      if (own || composing) {
+        if (!own) externalHeldRef.current = true
+        appliedRef.current = { editable, cardId, fieldKey }
+        return
+      }
+      blocksRef.current = incomingStored
+      pastRef.current = []
+      slashRef.current = null
+      setBlocks(incomingStored)
+      setSlash(null)
+      lastCommitRef.current = blocksToText(incomingStored)
+      externalHeldRef.current = false
+      for (const block of incomingStored) patchView(block.id, block.text)
       appliedRef.current = { editable, cardId, fieldKey }
       return
     }
@@ -395,12 +452,12 @@ export default function BlockField({
       slashRef.current = null
       setBlocks(next)
       setSlash(null)
-      lastCommitRef.current = text
+      lastCommitRef.current = blocksToText(next)
       externalHeldRef.current = false
       for (const block of next) patchView(block.id, block.text)
     }
     appliedRef.current = { editable, cardId, fieldKey }
-  }, [text, cardId, fieldKey, editable, stateSeq, composingRef, viewRef])
+  }, [text, cardId, fieldKey, editable, stateSeq, storedKey, storedBlocks, composingRef, viewRef])
 
   const pick = (blockType: BlockType) => {
     if (composingRef.current || !canTypeRef.current) return

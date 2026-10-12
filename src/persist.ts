@@ -15,6 +15,7 @@ import {
   reconcileProse,
   foldFieldValue,
   serializeDocument,
+  withPersistedBlocks,
   type AppState,
   type ArcCells,
   type BookChapter,
@@ -30,6 +31,7 @@ import {
   type PendingProseScene,
   type PendingEntity,
   type OriginAnchor,
+  type ProseBlock,
   type SedimentEvent,
   ARC_KEYS,
   SEDIMENT_ACTIONS,
@@ -225,7 +227,7 @@ export interface PersistController {
   requestPermission(): Promise<void>
   claimWrite(): Promise<void>
   openLocalFile(bytes: Uint8Array, name: string): Promise<void>
-  commitText(cardId: string, fieldKey: string | null, text: string): Promise<void>
+  commitText(cardId: string, fieldKey: string | null, text: string, blocks?: readonly ProseBlock[]): Promise<void>
   mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void>
   undo(): Promise<void>
   select(id: string | null): void
@@ -308,16 +310,27 @@ export function parseCompleteDocument(bytes: Uint8Array): { bytes: Uint8Array; s
 }
 
 function cardJson(card: AppState['snowflake']['cards'][string]): string {
+  const projected = withPersistedBlocks(card)
   const fields: Record<string, string> = {}
-  for (const key of Object.keys(card.fields).sort()) fields[key] = card.fields[key] ?? ''
-  return JSON.stringify({
-    layer: card.layer,
-    body: card.body,
+  for (const key of Object.keys(projected.fields).sort()) fields[key] = projected.fields[key] ?? ''
+  const payload: {
+    layer: Card['layer']
+    body: string
+    fields: Record<string, string>
+    mergeNote: string
+    premise: boolean
+    derivedFrom: string
+    blocks?: Record<string, ProseBlock[]>
+  } = {
+    layer: projected.layer,
+    body: projected.body,
     fields,
-    mergeNote: card.mergeNote ?? '',
-    premise: card.premise === true,
-    derivedFrom: card.derivedFrom ?? '',
-  })
+    mergeNote: projected.mergeNote ?? '',
+    premise: projected.premise === true,
+    derivedFrom: projected.derivedFrom ?? '',
+  }
+  if (projected.blocks) payload.blocks = projected.blocks
+  return JSON.stringify(payload)
 }
 
 function nodeJson(node: CanvasNode): string {
@@ -1566,6 +1579,32 @@ function isEnd(value: unknown): value is CanvasEdge['fromEnd'] {
   return value === 'none' || value === 'arrow'
 }
 
+function parseProseBlock(value: unknown): ProseBlock | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0) return null
+  if (typeof value.text !== 'string') return null
+  if (value.type === 'divider') return { id: value.id, type: 'divider', text: '' }
+  if (value.type === 'todo') return { id: value.id, type: 'todo', text: value.text, checked: value.checked === true }
+  if (value.type === 'paragraph' || value.type === 'heading' || value.type === 'quote') {
+    return { id: value.id, type: value.type, text: value.text }
+  }
+  return null
+}
+
+function parseProseBlocks(value: unknown): Record<string, ProseBlock[]> | undefined {
+  if (!isRecord(value)) return undefined
+  const out: Record<string, ProseBlock[]> = {}
+  for (const [key, list] of Object.entries(value)) {
+    if (!Array.isArray(list)) continue
+    const blocks: ProseBlock[] = []
+    for (const item of list) {
+      const block = parseProseBlock(item)
+      if (block) blocks.push(block)
+    }
+    if (blocks.length > 0) out[key] = blocks
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function parseCard(value: unknown): LooseCard | null {
   if (!isRecord(value) || typeof value.layer !== 'string') return null
   const known = isStoredLayer(value.layer)
@@ -1584,6 +1623,8 @@ function parseCard(value: unknown): LooseCard | null {
     return null
   }
   const card: LooseCard = { layer: value.layer, body, fields }
+  const blocks = parseProseBlocks(value.blocks)
+  if (blocks) card.blocks = blocks
   if (typeof value.mergeNote === 'string' && value.mergeNote.length > 0) card.mergeNote = value.mergeNote
   if (value.premise === true) card.premise = true
   if (typeof value.derivedFrom === 'string' && value.derivedFrom.length > 0) card.derivedFrom = value.derivedFrom
@@ -1892,13 +1933,19 @@ class Controller implements PersistController {
     this.emit()
   }
 
-  async commitText(cardId: string, fieldKey: string | null, text: string): Promise<void> {
-    await this.applyText(cardId, fieldKey, text, true)
+  async commitText(cardId: string, fieldKey: string | null, text: string, blocks?: readonly ProseBlock[]): Promise<void> {
+    await this.applyText(cardId, fieldKey, text, true, blocks)
   }
 
-  private async applyText(cardId: string, fieldKey: string | null, text: string, fromEditor: boolean): Promise<void> {
+  private async applyText(
+    cardId: string,
+    fieldKey: string | null,
+    text: string,
+    fromEditor: boolean,
+    blocks?: readonly ProseBlock[],
+  ): Promise<void> {
     if (!this.acceptsEdits()) return
-    const next = commitCardText(this.state, cardId, text, fieldKey, false)
+    const next = commitCardText(this.state, cardId, text, fieldKey, false, blocks)
     if (next === this.state) return
     if (fromEditor) {
       writeSeq += 1

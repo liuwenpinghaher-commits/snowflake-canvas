@@ -1,0 +1,36 @@
+{
+  "canvas": { "nodes": [], "edges": [] },
+  "snowflake": {
+    "fileId": "fixture-blocks",
+    "cards": {
+      "c1": {
+        "layer": "situation",
+        "body": "@@sf-blocks\np 字符串里的甲\nh 字符串里的乙",
+        "fields": {},
+        "blocks": {
+          "body": [
+            { "id": "b1", "type": "paragraph", "text": "甲" },
+            { "id": "b2", "type": "heading", "text": "乙" }
+          ]
+        }
+      },
+      "c2": {
+        "layer": "一段",
+        "body": "背景原文不动",
+        "fields": {
+          "background": "她在雪夜开门。",
+          "disaster1": "第一灾",
+          "disaster2": "",
+          "disaster3": "",
+          "ending": ""
+        },
+        "blocks": {
+          "background": [
+            { "id": "f1", "type": "paragraph", "text": "她在雪夜开门。" },
+            { "id": "f2", "type": "quote", "text": "第二行" }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -91,9 +91,10 @@ describe('块编辑：回车、拖动、撤销', () => {
     const stored = doc.snowflake.cards.c1
     if (!stored) throw new Error('missing stored')
     expect(typeof stored.body).toBe('string')
-    expect(Object.keys(stored)).not.toContain('blocks')
-    expect(JSON.stringify(doc)).not.toMatch(/"blocks"\s*:/)
-    expect(texts(textToBlocks(stored.body))).toEqual(['甲', '乙', '丙'])
+    expect(stored.body).toBe('甲\n乙\n丙')
+    expect(stored.blocks?.body?.map((block) => block.text)).toEqual(['甲', '乙', '丙'])
+    expect(stored.blocks?.body?.every((block) => block.type === 'paragraph')).toBe(true)
+    expect(JSON.stringify(doc)).toMatch(/"blocks"\s*:/)
     expect(frontText(state.snowflake.cards.c1!)).toBe('甲\n乙\n丙')
 
     const soft = blocksToText([
