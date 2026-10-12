@@ -624,7 +624,8 @@ describe('落盘链路', () => {
     expect(receivers.filter((name) => name === 'suggestionFile')).toEqual(['suggestionFile'])
     expect(receivers).toHaveLength(2)
     expect(source).not.toContain('fileHandle.createWritable')
-    // localStorage 只许存界面偏好，键名只能是下面五个字面量；正文、文档、快照、恢复日志一律不许进。
+    // localStorage 只许存界面偏好：下面五个字面量，外加带书 id 的视图选择（snowflake-view:）。
+    // 正文、文档、快照、恢复日志一律不许进。
     const allowedKeys = new Set([
       'snowflake-drawer-width',
       'snowflake-drawer-split',
@@ -666,12 +667,19 @@ describe('落盘链路', () => {
       const callers = [...source.matchAll(new RegExp(`(?<![\\w.]|function\\s)\\b${owner}(?:<[^>]*>)?\\(\\s*([^,)]*)`, 'g'))]
       expect(callers.length, `${owner} 没有调用方`).toBeGreaterThan(0)
       for (const caller of callers) {
-        const resolved = resolveKey(caller[1]!)
+        const expr = caller[1]!.trim()
+        // 视图选择的键由 viewStorageKey 拼出，前缀固定，后面跟书 id 和槽位，不进正本。
+        if (expr.startsWith('viewStorageKey')) {
+          usedKeys.push('snowflake-view:')
+          continue
+        }
+        const resolved = resolveKey(expr)
         expect(resolved, `localStorage 键名看不出字面量：${caller[0]}`).not.toBeNull()
         usedKeys.push(...resolved!)
       }
     }
-    expect(usedKeys.filter((key) => !allowedKeys.has(key))).toEqual([])
+    expect(usedKeys.filter((key) => !allowedKeys.has(key) && key !== 'snowflake-view:')).toEqual([])
+    expect(source).toContain('return `snowflake-view:${bookId}:${slot}`')
     expect(source).not.toMatch(/\bpauseVfs\b/)
     expect(source).not.toMatch(/\bunpauseVfs\b/)
     expect(source).not.toMatch(/['"]opfs['"]/)

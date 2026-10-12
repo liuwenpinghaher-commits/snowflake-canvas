@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import MentionBacklinks from './MentionBacklinks.tsx'
 import type { MentionHit } from './mentions.ts'
 import { bindLabel } from './encyclopedia.ts'
@@ -21,22 +21,25 @@ import {
   discussPrompt,
   fieldLabel,
   gradeVisibility,
+  PERSON_GRADE_COLUMNS,
   groupEventsByIdea,
   ideaOptions,
   ideaTitle,
   mergePendingEntity,
   projectingIdeas,
   readPersonField,
+  setPersonGrade,
   traceEvents,
   traceField,
   type GradeVisibility,
 } from './person-form.ts'
+import { browserViewStore, openRowRecord, readChoice, readIdList, writeChoice, writeIdList } from './view-memory.ts'
 
 type OpenIdea = (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
 
 export type CastFocus = { entityId: string; fieldKey: string } | null
 
-const REFRESH_NOTE = '各行的展开只留在这一页的内存里。刷新后全部收起。'
+const REFRESH_NOTE = '展开的行记在这台浏览器里，只跟这一本走。刷新后仍展开。'
 
 export default function CastPage({
   state,
@@ -46,6 +49,8 @@ export default function CastPage({
   focus = null,
   onPlaceOnCanvas,
   onOpenMention,
+  bookId = null,
+  initialView,
 }: {
   state: AppState
   canEdit: boolean
@@ -54,18 +59,57 @@ export default function CastPage({
   focus?: CastFocus
   onPlaceOnCanvas?: (entityId: string) => void
   onOpenMention?: (hit: MentionHit) => void
+  bookId?: string | null
+  initialView?: 'table' | 'board'
 }) {
+  const storageId = bookId ?? 'none'
+  const [view, setView] = useState<'table' | 'board'>(
+    () => initialView ?? readChoice(browserViewStore(), storageId, 'cast', ['table', 'board'] as const, 'table'),
+  )
   const [openRows, setOpenRows] = useState<Record<string, true>>(() =>
-    focus?.entityId ? { [focus.entityId]: true } : {},
+    openRowRecord(readIdList(browserViewStore(), storageId, 'cast-open'), focus?.entityId),
   )
   const [mergeNote, setMergeNote] = useState('')
+  useEffect(() => {
+    if (initialView) return
+    const store = browserViewStore()
+    setView(readChoice(store, storageId, 'cast', ['table', 'board'] as const, 'table'))
+    const record = openRowRecord(readIdList(store, storageId, 'cast-open'), focus?.entityId)
+    setOpenRows(record)
+    if (focus?.entityId && !readIdList(store, storageId, 'cast-open').includes(focus.entityId)) {
+      writeIdList(store, storageId, 'cast-open', Object.keys(record))
+    }
+  }, [storageId, focus?.entityId, initialView])
   const people = (state.entities ?? []).filter((entity) => entity.entityType === 'person')
   const pending = state.pendingEntities ?? []
+
+  const chooseView = (next: 'table' | 'board') => {
+    setView(next)
+    writeChoice(browserViewStore(), storageId, 'cast', next)
+  }
+
+  const toggleRow = (entityId: string) => {
+    setOpenRows((current) => {
+      const next = { ...current }
+      if (next[entityId]) delete next[entityId]
+      else next[entityId] = true
+      writeIdList(browserViewStore(), storageId, 'cast-open', Object.keys(next))
+      return next
+    })
+  }
 
   return (
     <section className="cast-page" aria-label="人物">
       <header className="cast-head">
         <h2>人物</h2>
+        <div className="view-switch" role="tablist" aria-label="人物视图">
+          <button type="button" role="tab" aria-selected={view === 'table'} className={view === 'table' ? 'on' : undefined} onClick={() => chooseView('table')}>
+            表
+          </button>
+          <button type="button" role="tab" aria-selected={view === 'board'} className={view === 'board' ? 'on' : undefined} onClick={() => chooseView('board')}>
+            看板
+          </button>
+        </div>
         <p className="hint">{REFRESH_NOTE}</p>
       </header>
       {pending.length > 0 ? (
@@ -105,7 +149,54 @@ export default function CastPage({
           ) : null}
         </div>
       ) : null}
-      {people.length === 0 ? (
+      {view === 'board' ? (
+        <div className="cast-board" aria-label="人物看板">
+          {PERSON_GRADE_COLUMNS.map((column) => (
+            <section
+              key={column}
+              className="board-col"
+              aria-label={column}
+              onDragOver={(event) => {
+                if (!canEdit) return
+                event.preventDefault()
+              }}
+              onDrop={(event) => {
+                if (!canEdit) return
+                const raw = event.dataTransfer.getData('text/plain')
+                if (!raw.startsWith('person:')) return
+                event.preventDefault()
+                const entityId = raw.slice('person:'.length)
+                onApply((current) => setPersonGrade(current, entityId, column))
+              }}
+            >
+              <h3>{column}</h3>
+              {people
+                .filter((entity) => gradeVisibility(readPersonField(state, entity, 'grade')).level === column)
+                .map((entity) => {
+                  const name = readPersonField(state, entity, 'name') || entity.name || '未命名'
+                  const sentence = readPersonField(state, entity, 'sentence')
+                  return (
+                    <article
+                      key={entity.id}
+                      className="board-card"
+                      draggable={canEdit}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('text/plain', `person:${entity.id}`)
+                        event.dataTransfer.effectAllowed = 'move'
+                      }}
+                    >
+                      <strong>{name}</strong>
+                      {onOpenMention ? (
+                        <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} />
+                      ) : null}
+                      <p>{sentence}</p>
+                    </article>
+                  )
+                })}
+            </section>
+          ))}
+        </div>
+      ) : people.length === 0 ? (
         <p className="hint">这本书还没有人物实体。人物表上写下名字之后，会在这里出现一行。</p>
       ) : (
         <table className="cast-table">
@@ -132,14 +223,7 @@ export default function CastPage({
                   canEdit={canEdit}
                   onToggle={() => {
                     if (visibility.summaryOnly) return
-                    setOpenRows((current) => {
-                      if (current[entity.id]) {
-                        const next = { ...current }
-                        delete next[entity.id]
-                        return next
-                      }
-                      return { ...current, [entity.id]: true }
-                    })
+                    toggleRow(entity.id)
                   }}
                   onApply={onApply}
                   onOpenIdea={onOpenIdea}

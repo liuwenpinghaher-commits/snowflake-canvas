@@ -490,3 +490,23 @@ export function actionLabel(action: SedimentAction): string {
   if (action === 'replace') return '替换'
   return '否定'
 }
+
+export const PERSON_GRADE_COLUMNS = ['主要', '次要', 'NPC', '路人'] as const
+
+export function setPersonGrade(state: AppState, entityId: string, grade: string): AppState {
+  if (!(PERSON_GRADE_COLUMNS as readonly string[]).includes(grade)) return state
+  const entity = (state.entities ?? []).find((item) => item.id === entityId && item.entityType === 'person')
+  if (!entity) return state
+  if (mapGrade(readPersonField(state, entity, 'grade')) === grade) return state
+  let next = state
+  const cardId = entity.views.renwubiao
+  const card = cardId ? next.snowflake.cards[cardId] : undefined
+  if (cardId && card?.layer === 'renwubiao') next = commitCardText(next, cardId, grade, 'grade', false)
+  return patchEntity(next, entityId, (current) => ({
+    ...current,
+    fields: {
+      ...current.fields,
+      grade: { value: grade, events: current.fields.grade?.events ?? [] },
+    },
+  }))
+}

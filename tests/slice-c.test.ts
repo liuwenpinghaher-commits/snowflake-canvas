@@ -42,8 +42,8 @@ describe('切片 C 前端', () => {
 
   it('折叠属于人物表格行，不在画布卡面上', () => {
     const cast = read('src/CastPage.tsx')
-    expect(cast).toContain('各行的展开只留在这一页的内存里')
-    expect(cast).toContain('刷新后全部收起')
+    expect(cast).toContain('刷新后仍展开')
+    expect(cast).not.toContain('刷新后全部收起')
     expect(cast).toContain("aria-expanded={open}")
     const flow = read('src/FlowCanvas.tsx')
     expect(flow).not.toContain('expandedIds')

@@ -42,7 +42,7 @@ button.on {
   flex-direction: column;
 }
 
-/* 顶栏只有一行：左边当前书和字数，右边保存状态、正本状态、新建念头、版本、书籍、设置。 */
+/* 顶栏主按钮：当前书、保存状态、新建念头。版本、书籍、行高、分组和删除收在更多里。 */
 .topbar {
   position: relative;
   z-index: 25;
@@ -2565,4 +2565,154 @@ button.danger-quiet {
 
 .action-menu button:hover:not(:disabled) {
   background: #f3e2d6;
+}
+
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-main > .workspace {
+  min-height: 0;
+}
+
+.shell-main > .cast-page,
+.shell-main > .relation-page,
+.shell-main > .chapter-page,
+.shell-main > .encyclopedia-page,
+.shell-main > .scene-page {
+  flex: 1;
+  min-height: 0;
+}
+
+.side-tree {
+  width: 232px;
+  flex: none;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid #ddd4c6;
+  background: #fffdf8;
+  padding: 12px 12px 24px;
+}
+
+.side-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.side-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.side-tree .tree-children {
+  padding-left: 12px;
+}
+
+.side-tree button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+}
+
+.side-tree-head button {
+  width: auto;
+}
+
+.side-tree button.tree-current {
+  background: #f3e2d6;
+  font-weight: 650;
+}
+
+.named-menu-pop .named-menu-pop {
+  top: 0;
+  right: calc(100% + 6px);
+  left: auto;
+}
+
+.cast-head,
+.scene-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.view-switch {
+  display: flex;
+  gap: 8px;
+}
+
+.cast-board,
+.scene-board {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  overflow-x: auto;
+}
+
+.board-col {
+  flex: 1 0 180px;
+  min-height: 160px;
+  background: #f7f4ee;
+  border: 1px solid #e4d9cc;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.board-col h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.board-card {
+  background: #fffdf8;
+  border: 1px solid #e4d9cc;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.board-card p {
+  margin: 4px 0 0;
+}
+
+.scene-page {
+  padding: 16px 20px 40px;
+  overflow: auto;
+}
+
+.scene-table,
+.relation-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.scene-table th,
+.scene-table td,
+.relation-table th,
+.relation-table td {
+  border-bottom: 1px solid #e4d9cc;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.relation-table tr {
+  cursor: pointer;
 }

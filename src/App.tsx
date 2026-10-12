@@ -7,6 +7,8 @@ import SideEditor from './SideEditor.tsx'
 import ConflictChoice from './ConflictChoice.tsx'
 import BooksPage, { type NewBookInput } from './BooksPage.tsx'
 import CastPage from './CastPage.tsx'
+import ScenePage from './ScenePage.tsx'
+import SideTree from './SideTree.tsx'
 import ChapterPage from './ChapterPage.tsx'
 import RelationPage from './RelationPage.tsx'
 import EncyclopediaPage from './EncyclopediaPage.tsx'
@@ -76,6 +78,8 @@ import { shownCharCount, shownProse, type MentionHit, type MentionJump } from '.
 import { ActionMenu } from './ActionMenu.tsx'
 import { copyCardAnchor, deleteCanvasNode } from './canvas-commands.ts'
 import { isSurfaceId, paletteHits, type PaletteHit } from './command-palette.ts'
+import { treeJump, type TreeNode } from './side-tree.ts'
+import { browserViewStore, readChoice, writeChoice } from './view-memory.ts'
 import CommandPalette from './CommandPalette.tsx'
 import { runShortcut, shortcutDecision } from './shortcuts.ts'
 
@@ -312,7 +316,7 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState<string | null>(null)
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
-  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter'>('canvas')
+  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter' | 'scenes'>('canvas')
   const [encyclopediaEntityId, setEncyclopediaEntityId] = useState<string | null>(null)
   const [linkAsk, setLinkAsk] = useState<{ from: string; to: string } | null>(null)
   const [pickingRelation, setPickingRelation] = useState(false)
@@ -335,6 +339,13 @@ export default function App() {
   const lastVersionRef = useRef<{ bookId: string | null; version: string | null }>({ bookId: null, version: null })
   const [books, setBooks] = useState<BookItem[]>([])
   const [bookId, setBookId] = useState<string | null>(null)
+  const [treeCollapsed, setTreeCollapsed] = useState(
+    () => readChoice(browserViewStore(), 'none', 'tree', ['open', 'collapsed'] as const, 'open') === 'collapsed',
+  )
+  useEffect(() => {
+    const id = bookId ?? 'none'
+    setTreeCollapsed(readChoice(browserViewStore(), id, 'tree', ['open', 'collapsed'] as const, 'open') === 'collapsed')
+  }, [bookId])
   const [booksLoaded, setBooksLoaded] = useState(false)
   const [bookBusy, setBookBusy] = useState(false)
   const [bookNotice, setBookNotice] = useState<string | null>(null)
@@ -733,6 +744,23 @@ export default function App() {
     setChapterJump({ id: hit.targetId, nonce: Date.now() })
   }
 
+  const openTreeNode = (node: TreeNode) => {
+    if (node.target.kind === 'book') return
+    const jump = treeJump(node)
+    if (jump.page === 'cast' && jump.entityId) setCastFocus({ entityId: jump.entityId, fieldKey: '' })
+    if (jump.page === 'encyclopedia' && jump.entityId) setEncyclopediaEntityId(jump.entityId)
+    if (jump.page === 'chapter' && jump.chapterId) setChapterJump({ id: jump.chapterId, nonce: Date.now() })
+    setPage(jump.page)
+  }
+
+  const toggleTree = () => {
+    setTreeCollapsed((current) => {
+      const next = !current
+      writeChoice(browserViewStore(), bookId ?? 'none', 'tree', next ? 'collapsed' : 'open')
+      return next
+    })
+  }
+
   const paletteItems = paletteHits({
     bookName: currentBook?.name ?? '',
     state,
@@ -773,9 +801,6 @@ export default function App() {
           <span className={`top-chip is-${sync.tone}`} role="status" aria-label={`保存状态：${sync.text}`}>
             {sync.text}
           </span>
-          <span className="top-chip is-muted" aria-label={`正本状态：${canonLabel(view)}`}>
-            {canonLabel(view)}
-          </span>
           <button
             type="button"
             className="primary"
@@ -784,6 +809,10 @@ export default function App() {
           >
             新建念头
           </button>
+          <NamedMenu id="more-menu-pop" label="更多">
+          <span className="top-chip is-muted" aria-label={`正本状态：${canonLabel(view)}`}>
+            {canonLabel(view)}
+          </span>
           <NamedMenu id="version-menu-pop" label="版本">
             <p className="menu-facts">
               雪花画布{currentBook ? ` · ${currentBook.name}` : ''}
@@ -914,9 +943,20 @@ export default function App() {
               删除
             </button>
           </NamedMenu>
+          </NamedMenu>
         </div>
       </header>
+      <div className={treeCollapsed ? 'shell is-tree-collapsed' : 'shell'}>
+        {treeCollapsed ? null : (
+          <SideTree bookName={currentBook?.name ?? ''} state={state} page={page} onOpen={openTreeNode} onToggle={toggleTree} />
+        )}
+        <div className="shell-main">
       <nav className="primary-nav" aria-label="页面">
+        {treeCollapsed ? (
+          <button type="button" onClick={toggleTree}>
+            展开目录
+          </button>
+        ) : null}
         {(
           [
             ['canvas', '画布'],
@@ -924,6 +964,7 @@ export default function App() {
             ['relation', '关系'],
             ['encyclopedia', '百科'],
             ['chapter', '章节'],
+            ['scenes', '场次'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -998,6 +1039,7 @@ export default function App() {
           focus={castFocus}
           onPlaceOnCanvas={(entityId) => placeOnCanvas(entityId)}
           onOpenMention={openMention}
+          bookId={bookId}
         />
       ) : null}
       {page === 'relation' ? (
@@ -1014,6 +1056,7 @@ export default function App() {
             setEncyclopediaEntityId(entityId)
             setPage('encyclopedia')
           }}
+          bookId={bookId}
         />
       ) : null}
       {page === 'encyclopedia' ? (
@@ -1035,6 +1078,17 @@ export default function App() {
           onApply={(recipe) => {
             void ctlRef.current?.mutate(recipe, UNDOABLE)
           }}
+        />
+      ) : null}
+      {page === 'scenes' ? (
+        <ScenePage
+          state={state}
+          canEdit={canEdit}
+          bookId={bookId}
+          onApply={(recipe) => {
+            void ctlRef.current?.mutate(recipe, UNDOABLE)
+          }}
+          onOpenCard={(id) => showCard(id, false)}
         />
       ) : null}
       {page === 'canvas' || page === 'books' ? (
@@ -1249,6 +1303,8 @@ export default function App() {
           onDelete={removeBook}
         />
       ) : null}
+        </div>
+      </div>
       {dialog ? (
         <div className="modal-back" role="presentation">
           <div className="modal" role="dialog" aria-label={dialog.title}>

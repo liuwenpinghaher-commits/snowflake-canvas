@@ -840,7 +840,7 @@ function fieldsFor(layer: Layer, partial: Record<string, string> | undefined): R
   return out
 }
 
-function shownFieldValue(key: string, value: string): string {
+export function shownFieldValue(key: string, value: string): string {
   if (key !== 'structureKind') return value
   if (value === 'active') return '主动'
   if (value === 'reactive') return '反应'
