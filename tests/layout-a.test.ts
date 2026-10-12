@@ -134,11 +134,10 @@ describe('顶栏常用按钮留在外面，其余分进版本、书籍、设置'
     expect(settings).toContain('操作说明')
   })
 
-  it('三个菜单里仍有分组、删除、快照、回退、撤销和条件按钮，键盘能开关', () => {
+  it('三个菜单里仍有分组、删除、快照、回退和条件按钮，键盘能开关', () => {
     for (const label of [
       '新建分组',
       '删除',
-      '撤销',
       '选择一份快照',
       '回退到这一版',
       '选择正本',
@@ -153,7 +152,8 @@ describe('顶栏常用按钮留在外面，其余分进版本、书籍、设置'
     expect(menuFn).toContain("event.key !== 'Escape'")
     expect(menuFn).toContain("addEventListener('pointerdown'")
     expect(settings).toContain('disabled={!canEdit || !state.activeId}')
-    expect(settings).toContain('disabled={!canEdit || !view.canUndo}')
+    expect(settings).not.toContain('撤销')
+    expect(settings).not.toContain('canUndo')
     expect(version).toContain('disabled={!canEdit || snapName.length === 0}')
   })
 })

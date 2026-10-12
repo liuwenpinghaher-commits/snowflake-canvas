@@ -41,6 +41,9 @@ export type BlockEvent =
   | { type: 'insert'; text: string }
   | { type: 'compositionend'; text: string }
   | { type: 'toggleTodo'; index: number }
+  | { type: 'turn'; index: number; blockType: 'paragraph' | 'heading' | 'quote' | 'todo' }
+  | { type: 'duplicate'; index: number }
+  | { type: 'remove'; index: number }
 
 export const BLOCK_WIRE_SENTINEL = '@@sf-blocks'
 
@@ -365,5 +368,79 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     return { ...session, blocks, past, active: event.index }
   }
 
+  if (event.type === 'turn') {
+    const block = session.blocks[event.index]
+    if (!block || block.type === event.blockType) return session
+    const past = withPast(session)
+    const text = block.type === 'divider' ? '' : block.text
+    const next = asType(block, event.blockType, text)
+    const blocks = session.blocks.map((item, index) => (index === event.index ? next : item))
+    return { ...session, blocks, past, slash: null, active: event.index, selected: event.index }
+  }
+
+  if (event.type === 'duplicate') {
+    const block = session.blocks[event.index]
+    if (!block) return session
+    const past = withPast(session)
+    const copy: Block =
+      block.type === 'todo'
+        ? { id: freshBlockId(), type: 'todo', text: block.text, checked: block.checked === true }
+        : block.type === 'divider'
+          ? { id: freshBlockId(), type: 'divider', text: '' }
+          : { id: freshBlockId(), type: block.type, text: block.text }
+    const blocks = [...session.blocks.slice(0, event.index + 1), copy, ...session.blocks.slice(event.index + 1)]
+    return { ...session, blocks, past, slash: null, active: event.index + 1, selected: event.index + 1 }
+  }
+
+  if (event.type === 'remove') {
+    const block = session.blocks[event.index]
+    if (!block) return session
+    if (session.blocks.length === 1 && block.type === 'paragraph' && block.text.length === 0) return session
+    const past = withPast(session)
+    const rest = session.blocks.filter((_, index) => index !== event.index)
+    const blocks = rest.length > 0 ? rest : [paragraph('')]
+    const active = Math.min(event.index, blocks.length - 1)
+    return { ...session, blocks, past, slash: null, active, selected: active }
+  }
+
+  return session
+}
+
+export function blockMenuItems(
+  index: number,
+  count: number,
+  canType: boolean,
+  current: BlockType | undefined,
+): { id: string; label: string; disabled: boolean }[] {
+  const turns = [
+    ['paragraph', '变成段落'],
+    ['heading', '变成标题'],
+    ['quote', '变成引用'],
+    ['todo', '变成待办'],
+  ] as const
+  return [
+    ...turns.map(([type, label]) => ({
+      id: `turn:${type}`,
+      label,
+      disabled: !canType || current === type,
+    })),
+    { id: 'duplicate', label: '复制', disabled: !canType },
+    { id: 'remove', label: '删除', disabled: !canType },
+    { id: 'up', label: '上移', disabled: !canType || index <= 0 },
+    { id: 'down', label: '下移', disabled: !canType || index < 0 || index >= count - 1 },
+  ]
+}
+
+export function applyBlockMenu(session: BlockComposeSession, index: number, command: string): BlockComposeSession {
+  if (command === 'duplicate') return applyBlockEvent(session, { type: 'duplicate', index })
+  if (command === 'remove') return applyBlockEvent(session, { type: 'remove', index })
+  if (command === 'up') return applyBlockEvent(session, { type: 'move', from: index, to: index - 1 })
+  if (command === 'down') return applyBlockEvent(session, { type: 'move', from: index, to: index + 1 })
+  if (command.startsWith('turn:')) {
+    const blockType = command.slice('turn:'.length)
+    if (blockType === 'paragraph' || blockType === 'heading' || blockType === 'quote' || blockType === 'todo') {
+      return applyBlockEvent(session, { type: 'turn', index, blockType })
+    }
+  }
   return session
 }

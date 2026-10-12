@@ -3,8 +3,11 @@ import { history, historyKeymap, insertNewline, undo, undoDepth, defaultKeymap }
 import { Compartment, EditorState, Prec, Transaction } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from '@codemirror/view'
 import { latestWriteSeq } from './persist.ts'
+import { ActionMenu } from './ActionMenu.tsx'
 import {
   applyBlockEvent,
+  applyBlockMenu,
+  blockMenuItems,
   blockSessionFromBlocks,
   blocksToText,
   filterSlash,
@@ -16,6 +19,7 @@ import {
   type BlockType,
   type SlashState,
 } from './block-editor.ts'
+import { isBlockMenuShortcut } from './shortcuts.ts'
 
 function changedSpan(before: string, after: string): { from: number; to: number; insert: string } {
   const max = Math.min(before.length, after.length)
@@ -120,6 +124,40 @@ export default function BlockField({
   const slashRef = useRef<SlashState | null>(null)
   const selectedRef = useRef<number | null>(null)
   const activeRef = useRef(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const openBlockMenuRef = useRef<(index: number, x: number, y: number) => void>(() => {})
+  const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const root = rootRef.current
+      const inside = Boolean(root && event.target instanceof Node && root.contains(event.target))
+      if (
+        !isBlockMenuShortcut(
+          {
+            key: event.key,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            repeat: event.repeat,
+            isComposing: event.isComposing,
+            target: event.target,
+          },
+          inside,
+        )
+      ) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      const index = selectedRef.current ?? activeRef.current
+      const block = root?.querySelectorAll('.sf-block').item(index) ?? null
+      const rect = block instanceof HTMLElement ? block.getBoundingClientRect() : null
+      openBlockMenuRef.current(index, rect ? rect.left + 28 : 24, rect ? rect.bottom : 24)
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [])
   const viewsRef = useRef(new Map<string, EditorView>())
   const compartmentsRef = useRef(new Map<string, Compartment>())
   const focusRef = useRef<{ id: string; cursor: number } | null>(null)
@@ -490,8 +528,37 @@ export default function BlockField({
     commitSession(session, focus ? { id: focus.id, cursor: 0 } : undefined)
   }
 
+  const openBlockMenu = (index: number, x: number, y: number) => {
+    if (index < 0 || index >= blocksRef.current.length) return
+    selectedRef.current = index
+    setSelected(index)
+    slashRef.current = null
+    setSlash(null)
+    setMenu({ index, x, y })
+  }
+  openBlockMenuRef.current = openBlockMenu
+
+  const runBlockMenu = (index: number, command: string) => {
+    if (!canTypeRef.current) return
+    const session = applyBlockMenu(sessionNow(), index, command)
+    const focus = session.blocks[session.active]
+    commitSession(session, focus && focus.type !== 'divider' ? { id: focus.id, cursor: focus.text.length } : undefined)
+    setMenu(null)
+  }
+
+  const menuIndex = menu?.index ?? -1
+  const menuItems =
+    menuIndex >= 0
+      ? blockMenuItems(menuIndex, blocks.length, canType, blocks[menuIndex]?.type).map((item) => ({
+          id: item.id,
+          label: item.label,
+          disabled: item.disabled,
+          onSelect: () => runBlockMenu(menuIndex, item.id),
+        }))
+      : []
+
   return (
-    <div className={blocks.length === 1 ? 'sf-blocks is-single' : 'sf-blocks'}>
+    <div ref={rootRef} className={blocks.length === 1 ? 'sf-blocks is-single' : 'sf-blocks'}>
       {blocks.map((block, index) => (
         <BlockRow
           key={block.id}
@@ -510,8 +577,10 @@ export default function BlockField({
           onMove={moveBlock}
           onToggle={() => toggleTodo(index)}
           onDividerEnter={() => enterDivider(index)}
+          onOpenMenu={openBlockMenu}
         />
       ))}
+      {menu ? <ActionMenu label="块菜单" x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} /> : null}
     </div>
   )
 }
@@ -532,6 +601,7 @@ function BlockRow({
   onMove,
   onToggle,
   onDividerEnter,
+  onOpenMenu,
 }: {
   block: Block
   index: number
@@ -548,6 +618,7 @@ function BlockRow({
   onMove: (from: number, to: number) => void
   onToggle: () => void
   onDividerEnter: () => void
+  onOpenMenu: (index: number, x: number, y: number) => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -665,6 +736,11 @@ function BlockRow({
   return (
     <div
       className={selected ? `sf-block is-selected sf-${block.type}` : `sf-block sf-${block.type}`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onOpenMenu(index, event.clientX, event.clientY)
+      }}
       onDragOver={(event) => {
         event.preventDefault()
       }}
@@ -681,6 +757,11 @@ function BlockRow({
         className="sf-handle"
         draggable
         aria-label="拖动这一块"
+        onClick={(event) => {
+          event.stopPropagation()
+          const rect = event.currentTarget.getBoundingClientRect()
+          onOpenMenu(index, rect.left, rect.bottom)
+        }}
         onDragStart={(event) => {
           event.dataTransfer.setData('text/plain', String(index))
           event.dataTransfer.effectAllowed = 'move'

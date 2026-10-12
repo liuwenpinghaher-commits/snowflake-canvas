@@ -55,11 +55,12 @@ import {
   confirmAppearance,
   createCard,
   defaultFieldKey,
-  deleteSelection,
+  duplicateCard,
   layerLabel,
   legalEdgeKinds,
   LINK_KIND_LABEL,
   moveNode,
+  nextLayer,
   placeEntityOnCanvas,
   adoptIntoCard,
   spawnChild,
@@ -70,9 +71,13 @@ import {
 } from './document.ts'
 import { createPersonEntity } from './person-form.ts'
 import { visibleProse } from './block-editor.ts'
+import { ActionMenu } from './ActionMenu.tsx'
+import { copyCardAnchor, deleteCanvasNode } from './canvas-commands.ts'
+import { isSurfaceId, paletteHits, type PaletteHit } from './command-palette.ts'
+import CommandPalette from './CommandPalette.tsx'
+import { runShortcut, shortcutDecision } from './shortcuts.ts'
 
 const UNDOABLE = { undoable: true }
-const CONFIRM_DELETE = '删除这张卡片？删错了可以点撤销。服务器模式下也可以用回退到这一版找回。'
 
 export const DRAWER_WIDTH_KEY = 'snowflake-drawer-width'
 export const DRAWER_WIDTH_MIN = 380
@@ -333,6 +338,61 @@ export default function App() {
   const [bookNotice, setBookNotice] = useState<string | null>(null)
   const wideDrawer = useWideDrawer()
   const [drawerWidth, setDrawerWidth] = useState(() => readStoredDrawerWidth())
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteQuery, setPaletteQuery] = useState('')
+  const [paletteIndex, setPaletteIndex] = useState(0)
+  const [cardMenu, setCardMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [chapterJump, setChapterJump] = useState<{ id: string; nonce: number } | null>(null)
+  const [sideEditTick, setSideEditTick] = useState(0)
+  const snapRef = useRef(snap)
+  const canEditRef = useRef(false)
+  const removeCardRef = useRef<(id: string) => void>(() => {})
+  snapRef.current = snap
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const decision = shortcutDecision({
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        repeat: event.repeat,
+        isComposing: event.isComposing,
+        target: event.target,
+      })
+      runShortcut(decision, {
+        togglePalette() {
+          event.preventDefault()
+          setCardMenu(null)
+          setPaletteOpen((open) => {
+            if (open) return false
+            setPaletteQuery('')
+            setPaletteIndex(0)
+            return true
+          })
+        },
+        undo() {
+          if (!canEditRef.current) return
+          event.preventDefault()
+          void ctlRef.current?.undo()
+        },
+        redo() {
+          if (!canEditRef.current) return
+          event.preventDefault()
+          void ctlRef.current?.redo()
+        },
+        deleteSelection() {
+          const id = snapRef.current.state.activeId
+          if (!id || !canEditRef.current) return
+          event.preventDefault()
+          removeCardRef.current(id)
+        },
+      })
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -556,9 +616,15 @@ export default function App() {
   const activeNode = state.canvas.nodes.find((node) => node.id === state.activeId) ?? null
   const activeCard = state.activeId ? (state.snowflake.cards[state.activeId] ?? null) : null
   const canEdit = view.canEdit
+  canEditRef.current = canEdit
   const conflictIds = new Set(view.conflicts.map((item) => item.cardId))
   const activeConflict = view.conflicts.find((item) => item.cardId === state.activeId) ?? null
   const drawerOpen = Boolean(activeCard && state.activeId !== dismissedId)
+  useEffect(() => {
+    if (sideEditTick === 0 || !drawerOpen || controlFolded) return
+    const field = document.querySelector('.control-pane .cm-content, .control-pane textarea')
+    if (field instanceof HTMLElement) field.focus()
+  }, [sideEditTick, state.activeId, drawerOpen, controlFolded])
   const discussName = activeCard ? discussCardName(cardFace(activeCard).title, layerLabel(activeCard.layer)) : ''
   const activeWords = activeCard ? countChars(activeCard.body) : 0
   const activeAdopted = Boolean(activeCard && (activeCard.fields.adopted ?? '').trim())
@@ -605,6 +671,60 @@ export default function App() {
       () => undefined,
     )
   }
+
+  const removeCard = (id: string | null) => {
+    if (!id || !canEdit) return
+    void deleteCanvasNode(ctlRef.current, id, (message) => window.confirm(message))
+  }
+  removeCardRef.current = removeCard
+
+  const showCard = (id: string, focusSide: boolean) => {
+    setPage('canvas')
+    setDismissedId(null)
+    setControlFolded(false)
+    ctlRef.current?.select(id)
+    setCardMenu(null)
+    if (focusSide) setSideEditTick((value) => value + 1)
+  }
+
+  const jumpTo = (hit: PaletteHit) => {
+    setPaletteOpen(false)
+    setCardMenu(null)
+    if (hit.kind === 'surface' && isSurfaceId(hit.targetId)) {
+      setPage(hit.targetId)
+      return
+    }
+    if (hit.kind === 'book') {
+      setPage('canvas')
+      return
+    }
+    if (hit.kind === 'card') {
+      showCard(hit.targetId, false)
+      return
+    }
+    if (hit.kind === 'entity') {
+      const entity = state.entities?.find((item) => item.id === hit.targetId)
+      if (!entity || entity.entityType === 'person') {
+        setCastFocus({ entityId: hit.targetId, fieldKey: '' })
+        setPage('cast')
+        return
+      }
+      setEncyclopediaEntityId(hit.targetId)
+      setPage('encyclopedia')
+      return
+    }
+    setPage('chapter')
+    setChapterJump({ id: hit.targetId, nonce: Date.now() })
+  }
+
+  const paletteItems = paletteHits({
+    bookName: currentBook?.name ?? '',
+    state,
+    query: paletteQuery,
+  })
+  const paletteActive = paletteItems.length === 0 ? 0 : Math.min(paletteIndex, paletteItems.length - 1)
+  const menuIndex = cardMenu ? cardMenu.id : ''
+  const menuCard = menuIndex ? state.snowflake.cards[menuIndex] : undefined
 
   return (
     <div className="app" style={{ '--discuss-line-height': String(lineHeight) } as CSSProperties}>
@@ -774,21 +894,8 @@ export default function App() {
             >
               新建分组
             </button>
-            <button
-              type="button"
-              disabled={!canEdit || !state.activeId}
-              onClick={() => {
-                if (!window.confirm(CONFIRM_DELETE)) return
-                void ctlRef.current?.mutate(
-                  (current) => (current.activeId ? deleteSelection(current, current.activeId) : current),
-                  UNDOABLE,
-                )
-              }}
-            >
+            <button type="button" disabled={!canEdit || !state.activeId} onClick={() => removeCard(state.activeId)}>
               删除
-            </button>
-            <button type="button" disabled={!canEdit || !view.canUndo} onClick={() => void ctlRef.current?.undo()}>
-              撤销
             </button>
           </NamedMenu>
         </div>
@@ -905,6 +1012,8 @@ export default function App() {
         <ChapterPage
           state={state}
           canEdit={canEdit}
+          focusId={chapterJump?.id ?? null}
+          focusNonce={chapterJump?.nonce ?? 0}
           onApply={(recipe) => {
             void ctlRef.current?.mutate(recipe, UNDOABLE)
           }}
@@ -1040,6 +1149,10 @@ export default function App() {
                 (current) => createCard(current, { layer: 'situation', x, y, body: '' }),
                 UNDOABLE,
               )
+            }}
+            onCardMenu={(id, point) => {
+              setPaletteOpen(false)
+              setCardMenu({ id, x: point.x, y: point.y })
             }}
             flashCardId={flashCardId}
           />
@@ -1222,6 +1335,61 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {paletteOpen ? (
+        <CommandPalette
+          query={paletteQuery}
+          hits={paletteItems}
+          activeIndex={paletteActive}
+          onQuery={(value) => {
+            setPaletteQuery(value)
+            setPaletteIndex(0)
+          }}
+          onActive={setPaletteIndex}
+          onPick={jumpTo}
+          onClose={() => setPaletteOpen(false)}
+        />
+      ) : null}
+      {cardMenu
+        ? (() => {
+            const menu = cardMenu
+            return (
+              <ActionMenu
+                label="卡片菜单"
+                x={menu.x}
+                y={menu.y}
+                onClose={() => setCardMenu(null)}
+                items={[
+                  { id: "open", label: "打开", onSelect: () => showCard(menu.id, false) },
+                  { id: "side", label: "在侧边编辑", onSelect: () => showCard(menu.id, true) },
+                  {
+                    id: "spawn",
+                    label: "长出下一层",
+                    disabled: !canEdit || !menuCard || !nextLayer(menuCard.layer),
+                    onSelect: () => {
+                      void ctlRef.current?.mutate((current) => spawnChild(current, menu.id), UNDOABLE)
+                    },
+                  },
+                  {
+                    id: "copy",
+                    label: "复制",
+                    disabled: !canEdit || !menuCard,
+                    onSelect: () => {
+                      void ctlRef.current?.mutate((current) => duplicateCard(current, menu.id), UNDOABLE)
+                    },
+                  },
+                  { id: "delete", label: "删除", disabled: !canEdit || !menuCard, onSelect: () => removeCard(menu.id) },
+                  {
+                    id: "link",
+                    label: "复制链接",
+                    onSelect: () => {
+                      void copyCardAnchor(menu.id)
+                    },
+                  },
+                ]}
+              />
+            )
+          })()
+        : null}
     </div>
   )
 }

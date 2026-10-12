@@ -1079,6 +1079,61 @@ export function createCard(
   }
 }
 
+function retargetBlocks(blocks: Card['blocks']): Card['blocks'] {
+  const cloned = cloneBlockMap(blocks)
+  if (!cloned) return undefined
+  const out: Record<string, ProseBlock[]> = {}
+  for (const [key, list] of Object.entries(cloned)) {
+    out[key] = list.map((block) => ({ ...block, id: makeId('blk') }))
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+export function duplicateCard(state: AppState, id: string, newId?: string): AppState {
+  const source = state.snowflake.cards[id]
+  const node = state.canvas.nodes.find((item) => item.id === id)
+  if (!source || !node || node.type !== 'text' || node.entityId) return state
+  const copyId = newId ?? makeId('n')
+  if (state.canvas.nodes.some((item) => item.id === copyId) || state.snowflake.cards[copyId]) return state
+  const card: Card = {
+    layer: source.layer,
+    body: source.body,
+    fields: { ...source.fields },
+  }
+  if (source.mergeNote) card.mergeNote = source.mergeNote
+  if (source.premise) card.premise = true
+  if (source.derivedFrom) card.derivedFrom = source.derivedFrom
+  if (source.arc) card.arc = { ...source.arc }
+  if (source.originAnchor?.chapterId) {
+    card.originAnchor = {
+      chapterId: source.originAnchor.chapterId,
+      ...(source.originAnchor.sceneId ? { sceneId: source.originAnchor.sceneId } : {}),
+      ...(typeof source.originAnchor.charOffset === 'number' ? { charOffset: source.originAnchor.charOffset } : {}),
+    }
+  }
+  const blocks = retargetBlocks(source.blocks)
+  if (blocks) card.blocks = blocks
+  const copy: CanvasNode = {
+    id: copyId,
+    type: 'text',
+    x: node.x + 32,
+    y: node.y + 32,
+    width: node.width,
+    height: node.height,
+    text: frontText(card),
+    ...(node.color ? { color: node.color } : {}),
+  }
+  return {
+    ...state,
+    activeId: copyId,
+    canvas: { ...state.canvas, nodes: [...state.canvas.nodes, copy] },
+    snowflake: {
+      ...state.snowflake,
+      cards: { ...state.snowflake.cards, [copyId]: card },
+    },
+  }
+}
+
 export function addGroup(
   state: AppState,
   input: { id?: string; x?: number; y?: number; text?: string } = {},

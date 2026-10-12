@@ -230,6 +230,7 @@ export interface PersistController {
   commitText(cardId: string, fieldKey: string | null, text: string, blocks?: readonly ProseBlock[]): Promise<void>
   mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void>
   undo(): Promise<void>
+  redo(): Promise<void>
   select(id: string | null): void
   editorComposition(
     session: ComposeSession,
@@ -1683,6 +1684,8 @@ class Controller implements PersistController {
   private snapshotNames: string[] = []
   private remoteSnapshots: Array<{ name: string; savedAt: string }> = []
   private undoStack: AppState[] = []
+  private redoStack: AppState[] = []
+  private preserveRedo = false
   private remoteMode = false
   private remoteEtag = ''
   // 两边都改过、还等作者选边的卡，以及页名两边不同、还没选的实体。非空时本页只改内存，不发写请求。
@@ -1916,7 +1919,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(parsed.state.snowflake.fileId, 'open-file')
-    this.undoStack = []
+    this.clearHistory()
     this.state = { ...parsed.state, activeId: this.state.activeId }
     this.lastBytes = parsed.bytes
     this.needChoice = false
@@ -1954,33 +1957,66 @@ class Controller implements PersistController {
     await this.persistState(next)
   }
 
+  private clearHistory(): void {
+    this.undoStack = []
+    this.redoStack = []
+  }
+
+  private pushUndo(state: AppState): void {
+    this.undoStack.push(state)
+    if (this.undoStack.length > UNDO_LIMIT) this.undoStack.splice(0, this.undoStack.length - UNDO_LIMIT)
+  }
+
+  private pushRedo(state: AppState): void {
+    this.redoStack.push(state)
+    if (this.redoStack.length > UNDO_LIMIT) this.redoStack.splice(0, this.redoStack.length - UNDO_LIMIT)
+  }
+
+  private withKeptActive(stored: AppState): AppState {
+    const active = this.state.activeId
+    return {
+      ...stored,
+      activeId: active && stored.canvas.nodes.some((node) => node.id === active) ? active : stored.activeId,
+    }
+  }
+
   async mutate(recipe: (state: AppState) => AppState, options?: { undoable?: boolean }): Promise<void> {
     if (!this.acceptsEdits()) return
     const before = this.state
     const next = recipe(before)
     if (next === before) return
-    if (options?.undoable) {
-      this.undoStack.push(before)
-      if (this.undoStack.length > UNDO_LIMIT) this.undoStack.splice(0, this.undoStack.length - UNDO_LIMIT)
-    }
+    if (options?.undoable) this.pushUndo(before)
+    this.redoStack = []
     await this.persistState(next)
   }
 
-  // 撤销只换内存里的画布，再走同一条写入队列；没有重做。
+  // 撤销和重做只换内存里的画布，再走同一条写入队列。重做栈不写进文件。
   async undo(): Promise<void> {
     if (!this.acceptsEdits()) return
     const previous = this.undoStack.pop()
     if (!previous) return
     if (previous.snowflake.fileId !== this.state.snowflake.fileId) {
-      this.undoStack = []
+      this.clearHistory()
       this.emit()
       return
     }
-    const active = this.state.activeId
-    await this.persistState({
-      ...previous,
-      activeId: active && previous.canvas.nodes.some((node) => node.id === active) ? active : previous.activeId,
-    })
+    this.pushRedo(this.state)
+    this.preserveRedo = true
+    await this.persistState(this.withKeptActive(previous))
+  }
+
+  async redo(): Promise<void> {
+    if (!this.acceptsEdits()) return
+    const next = this.redoStack.pop()
+    if (!next) return
+    if (next.snowflake.fileId !== this.state.snowflake.fileId) {
+      this.redoStack = []
+      this.emit()
+      return
+    }
+    this.pushUndo(this.state)
+    this.preserveRedo = true
+    await this.persistState(this.withKeptActive(next))
   }
 
   select(id: string | null): void {
@@ -2033,7 +2069,7 @@ class Controller implements PersistController {
         this.emit()
         return
       }
-      if (pick === 'server') this.undoStack = []
+      if (pick === 'server') this.clearHistory()
       this.state = next
     } else if (cardId.startsWith(CHAPTER_PROSE_CONFLICT_PREFIX)) {
       const sides = parseChapterProseServerKey(entry.serverKey)
@@ -2043,7 +2079,7 @@ class Controller implements PersistController {
         this.emit()
         return
       }
-      if (pick === 'server') this.undoStack = []
+      if (pick === 'server') this.clearHistory()
       this.state = applySceneProse(this.state, sides.chapterId, sides.sceneId, pick === 'server' ? sides.remote : sides.local)
     } else if (cardId.startsWith(PENDING_PROSE_CONFLICT_PREFIX)) {
       const sides = parsePendingProseServerKey(entry.serverKey)
@@ -2053,10 +2089,10 @@ class Controller implements PersistController {
         this.emit()
         return
       }
-      if (pick === 'server') this.undoStack = []
+      if (pick === 'server') this.clearHistory()
       this.state = applyPendingHint(this.state, sides.cardId, pick === 'server' ? sides.remote : sides.local)
     } else if (pick === 'server') {
-      this.undoStack = []
+      this.clearHistory()
       this.state = applyConflictSide(this.state, cardId, entry.server)
     }
     if (this.pendingConflicts.size > 0) {
@@ -2299,7 +2335,7 @@ class Controller implements PersistController {
     if (!parsed) return false
     this.remoteMode = true
     this.remoteEtag = loaded.etag
-    this.undoStack = []
+    this.clearHistory()
     this.state = parsed.state
     this.lastBytes = parsed.bytes
     this.fileId = parsed.state.snowflake.fileId
@@ -2394,6 +2430,8 @@ class Controller implements PersistController {
   // 同一标签的所有写入走这一条队列：同一时间只有一个写请求在路上；
   // 排队期间的多次改动只记在内存里，轮到时按最后一份画布发一次。
   private persistState(next: AppState): Promise<void> {
+    if (!this.preserveRedo) this.redoStack = []
+    this.preserveRedo = false
     this.actionNotice = null
     this.state = next
     if (this.pendingConflicts.size > 0) {
@@ -2509,7 +2547,7 @@ class Controller implements PersistController {
 
   private takeMerged(sent: AppState, sentBytes: Uint8Array, merged: Uint8Array): void {
     // 合进了别处的改动，旧的撤销步骤会把它们一起抹掉。
-    this.undoStack = []
+    this.clearHistory()
     if (this.state === sent) {
       const parsed = parseCompleteDocument(merged)
       if (parsed) this.state = { ...parsed.state, activeId: this.state.activeId }
@@ -2544,7 +2582,7 @@ class Controller implements PersistController {
     this.adoptEntityConflicts(entityConflicts, true)
     if (!provisional) return
     // 合进了别处的改动，旧的撤销步骤会把它们一起抹掉。
-    this.undoStack = []
+    this.clearHistory()
     let next = provisional
     if (this.state !== sent) {
       const again = mergeDocuments(sentBytes, provisional, documentToBytes(this.state))
@@ -2588,7 +2626,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(parsed.state.snowflake.fileId, reason)
-    this.undoStack = []
+    this.clearHistory()
     this.state = parsed.state
     this.lastBytes = parsed.bytes
     this.needChoice = false
@@ -2671,7 +2709,7 @@ class Controller implements PersistController {
       return
     }
     const result = await this.writeExact(logged.bytes)
-    this.undoStack = []
+    this.clearHistory()
     this.state = logged.state
     this.fileId = logged.state.snowflake.fileId
     this.lastBytes = result.ok ? result.bytes : logged.bytes
@@ -2698,7 +2736,7 @@ class Controller implements PersistController {
       return
     }
     const acquired = await this.tryBecomeWriter(logged.state.snowflake.fileId, 'open-file')
-    this.undoStack = []
+    this.clearHistory()
     this.state = logged.state
     if (!acquired) {
       await this.closeLog()
@@ -2879,7 +2917,7 @@ class Controller implements PersistController {
       const parsed = parseCompleteDocument(result.bytes)
       if (parsed) {
         const active = this.state.activeId
-        this.undoStack = []
+        this.clearHistory()
         this.state = {
           ...parsed.state,
           activeId: active && parsed.state.canvas.nodes.some((node) => node.id === active) ? active : null,
@@ -2900,7 +2938,7 @@ class Controller implements PersistController {
           : null
       const parsed = merged ? parseCompleteDocument(merged) : null
       if (parsed && result.bytes) {
-        this.undoStack = []
+        this.clearHistory()
         this.state = { ...parsed.state, activeId: this.state.activeId }
         this.lastBytes = result.bytes.slice()
         this.remoteEtag = result.etag

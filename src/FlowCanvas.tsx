@@ -268,6 +268,7 @@ export default function FlowCanvas({
   onPlaceEntity,
   documentState,
   flashCardId,
+  onCardMenu,
 }: {
   nodes: CanvasNode[]
   edges: CanvasEdge[]
@@ -285,6 +286,7 @@ export default function FlowCanvas({
   onPlaceEntity: (entityId: string, x: number, y: number) => void
   documentState: AppState
   flashCardId: string | null
+  onCardMenu: (id: string, point: { x: number; y: number }) => void
 }) {
   const { screenToFlowPosition, fitView, getNodesBounds, setViewport } = useReactFlow()
   const lastPaneClick = useRef(0)
@@ -560,7 +562,14 @@ export default function FlowCanvas({
           const pos = screenToFlowPosition({ x: clientX, y: clientY })
           onSpawn(connectionState.fromNode.id, pos.x, pos.y)
         }}
-        deleteKeyCode={null}
+        onNodeContextMenu={(event, node) => {
+          if (node.type !== 'snowCard') return
+          event.preventDefault()
+          onSelect(node.id)
+          onCardMenu(node.id, { x: event.clientX, y: event.clientY })
+        }}
+        // 不把 Delete / Backspace 交给 xyflow，避免和页面上的确认删除各删一次。
+        deleteKeyCode={[]}
         edgesReconnectable={false}
         onlyRenderVisibleElements={false}
         defaultViewport={{ x: 0, y: 0, zoom: 1 }}

@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import { frontText, resolveProseFork, type AppState } from './document.ts'
 import {
   BEAT_LENGTHS,
@@ -20,12 +20,24 @@ export default function ChapterPage({
   state,
   canEdit,
   onApply,
+  focusId = null,
+  focusNonce = 0,
 }: {
   state: AppState
   canEdit: boolean
   onApply: (recipe: (state: AppState) => AppState) => void
+  focusId?: string | null
+  focusNonce?: number
 }) {
   const [tab, setTab] = useState<'scenes' | 'beats'>('scenes')
+  useEffect(() => {
+    if (!focusId) return
+    setTab('scenes')
+  }, [focusId, focusNonce])
+  useEffect(() => {
+    if (!focusId || tab !== 'scenes') return
+    document.getElementById(`chapter-${focusId}`)?.scrollIntoView({ block: 'nearest' })
+  }, [focusId, focusNonce, tab])
   const chapters = state.chapters ?? []
   const storedBeats = readBookBeats(chapters)
   const length = storedBeats.length
@@ -95,7 +107,7 @@ export default function ChapterPage({
           {chapters.map((chapter, index) => {
             const mark = chapterMark([chapter])
             return (
-              <article key={chapter.id} className="chapter-block">
+              <article key={chapter.id} id={`chapter-${chapter.id}`} className="chapter-block">
                 <h3>
                   第{index + 1}章 {chapter.title.trim() || '未命名'} {mark.filled}/{mark.total}
                 </h3>
