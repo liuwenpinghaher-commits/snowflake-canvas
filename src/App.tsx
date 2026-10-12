@@ -69,6 +69,7 @@ import {
   type LinkKind,
 } from './document.ts'
 import { createPersonEntity } from './person-form.ts'
+import { visibleProse } from './block-editor.ts'
 
 const UNDOABLE = { undoable: true }
 const CONFIRM_DELETE = '删除这张卡片？删错了可以点撤销。服务器模式下也可以用回退到这一版找回。'
@@ -211,7 +212,7 @@ type SaveDialog = {
 }
 
 function countChars(text: string): number {
-  return [...text.replace(/\s/g, '')].length
+  return [...visibleProse(text).replace(/\s/g, '')].length
 }
 
 function syncLabel(view: PersistSnapshot['view']): { text: string; tone: 'ok' | 'busy' | 'bad' | 'muted' } {

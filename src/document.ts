@@ -604,7 +604,64 @@ function paragraphFront(card: Card): string {
   return `${head}${marks}`
 }
 
+const BLOCK_WIRE_MARK = '@@sf-blocks\n'
+const BLOCK_WIRE_LINE = /^(?:p|h|q|t0|t1) /
+
+function unescapeWire(source: string): string {
+  let out = ''
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === '\\' && i + 1 < source.length) {
+      const next = source[i + 1]
+      if (next === 'n') {
+        out += '\n'
+        i += 1
+        continue
+      }
+      if (next === 'r') {
+        out += '\r'
+        i += 1
+        continue
+      }
+      if (next === '\\') {
+        out += '\\'
+        i += 1
+        continue
+      }
+    }
+    out += source[i] ?? ''
+  }
+  return out
+}
+
+// 和服务端单独加载这份文件的方式一致：这里自己认出块字符串，不引用旁边的模块。
+function visibleProse(stored: string): string {
+  if (!stored.startsWith(BLOCK_WIRE_MARK)) return stored
+  const lines = stored.slice(BLOCK_WIRE_MARK.length).split('\n')
+  if (lines.length === 0 || !lines.every((line) => line === 'd' || BLOCK_WIRE_LINE.test(line))) return stored
+  return lines
+    .map((line) => {
+      if (line === 'd') return ''
+      const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
+      return unescapeWire(line.slice(mark.length + 1))
+    })
+    .join('\n')
+}
+
+function proseCard(card: Card): Card {
+  const body = visibleProse(card.body)
+  let changed = body !== card.body
+  const fields: Record<string, string> = {}
+  for (const [key, value] of Object.entries(card.fields)) {
+    const next = visibleProse(value)
+    fields[key] = next
+    if (next !== value) changed = true
+  }
+  if (!changed) return card
+  return { ...card, body, fields }
+}
+
 export function frontText(card: Card): string {
+  card = proseCard(card)
   switch (card.layer) {
     case 'situation':
       return [...card.body].slice(0, 40).join('')
@@ -711,6 +768,7 @@ function countChars(text: string): number {
 }
 
 export function cardFace(card: Card): CardFace {
+  card = proseCard(card)
   const prose = proseWithoutEmptyLabels(card.body)
   switch (card.layer) {
     case 'situation':
@@ -802,12 +860,12 @@ export function bodyTextForCard(card: Card): CardBodySource {
   const face = cardFace(card)
   const faceBody = face.body.trim()
   if (faceBody) {
-    const fieldKey = Object.entries(card.fields).find(([, value]) => (value ?? '').includes(faceBody))?.[0] ?? null
+    const fieldKey = Object.entries(card.fields).find(([, value]) => visibleProse(value ?? '').includes(faceBody))?.[0] ?? null
     return { text: face.body, where: fieldKey ? 'fields' : 'body', fieldKey }
   }
   const title = face.title.trim()
   const fields = Object.entries(card.fields)
-    .map(([key, value]) => ({ key, text: (value ?? '').trim() }))
+    .map(([key, value]) => ({ key, text: visibleProse(value ?? '').trim() }))
     .filter((item) => item.text.length > 0)
     .sort((a, b) => b.text.length - a.text.length || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   const top = fields[0]
@@ -821,10 +879,10 @@ function bodyFor(layer: Layer, fields: Record<string, string>, freeText: string)
   if (layer === 'situation' || layer === '正文草稿') return freeText
   if (layer === '一句话') return fields.sentence ?? ''
   const lines = fieldKeys(layer).map(
-    (key) => `${fieldControlLabel(layer, key)}：${shownFieldValue(key, fields[key] ?? '')}`,
+    (key) => `${fieldControlLabel(layer, key)}：${shownFieldValue(key, visibleProse(fields[key] ?? ''))}`,
   )
   for (const key of extraFieldKeys({ layer, body: '', fields })) {
-    lines.push(`${fieldControlLabel(layer, key)}：${fields[key] ?? ''}`)
+    lines.push(`${fieldControlLabel(layer, key)}：${visibleProse(fields[key] ?? '')}`)
   }
   return lines.join('\n')
 }
