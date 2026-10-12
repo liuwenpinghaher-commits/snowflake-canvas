@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { constants as fsConstants, createReadStream } from 'node:fs'
 import { access, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
@@ -29,7 +29,7 @@ import {
 import { getImportProgress, importPlainText, setImportProgress } from './import-book.mjs'
 import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
-import { finalizedText, pageMissingMessage, parsePageSnapshot, promoteEntityPage, timelineBelow } from './encyclopedia.mjs'
+import { composeEntityPage, finalizedText, pageMissingMessage, parsePageSnapshot, promoteEntityPage, timelineBelow } from './encyclopedia.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 
@@ -974,7 +974,9 @@ function runGbrainOnce(args, stdin) {
       const out = Buffer.concat(stdout).toString('utf8')
       const err = Buffer.concat(stderr).toString('utf8')
       if (code !== 0) {
-        reject(new Error(gbrainDetail(err, out, code)))
+        const error = new Error(gbrainDetail(err, out, code))
+        error.exitCode = code
+        reject(error)
         return
       }
       resolve(out)
@@ -998,15 +1000,95 @@ async function runGbrain(args, stdin) {
   throw last
 }
 
+function flagValue(args, flag) {
+  const index = args.indexOf(flag)
+  if (index < 0 || index + 1 >= args.length) return ''
+  return typeof args[index + 1] === 'string' ? args[index + 1] : ''
+}
+
+function isWritePending(error) {
+  if (!error) return false
+  if (error.exitCode === 10) return true
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('write_pending')
+}
+
+function parseJsonObject(raw) {
+  const text = typeof raw === 'string' ? raw : ''
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end < start) return null
+  try {
+    const value = JSON.parse(text.slice(start, end + 1))
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const WRITE_DONE = new Set(['committed'])
+const WRITE_FAIL = new Set(['failed', 'conflict', 'cancelled'])
+
+async function readWriteReceipt(requestId) {
+  const out = await runGbrain(['write-request', requestId, '--json'])
+  const parsed = parseJsonObject(out)
+  if (!parsed || typeof parsed.state !== 'string') return null
+  return parsed
+}
+
+// write_pending 用同一次 request-id 重跑，或轮询 write-request。不换新 id，也不进 storage_busy 循环。
+async function runGbrainCommitted(args, stdin) {
+  const requestId = flagValue(args, '--request-id')
+  const deadline = Date.now() + 30000
+  let pending = null
+  for (;;) {
+    try {
+      return await runGbrain(args, stdin)
+    } catch (error) {
+      if (!requestId || !isWritePending(error)) throw error
+      pending = error instanceof Error ? error : new Error(String(error))
+    }
+    let receipt = null
+    try {
+      receipt = await readWriteReceipt(requestId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('not_found') && !message.includes('No accessible write request')) {
+        pending = error instanceof Error ? error : new Error(message)
+      }
+    }
+    if (receipt && WRITE_DONE.has(receipt.state)) return JSON.stringify(receipt)
+    if (receipt && WRITE_FAIL.has(receipt.state)) {
+      const detail = [receipt.write_error, receipt.write_error_message, receipt.state].filter((item) => typeof item === 'string' && item).join(' ')
+      throw new Error(detail || receipt.state)
+    }
+    const waitRaw = receipt && Number(receipt.retry_after_ms)
+    const wait = Number.isFinite(waitRaw) && waitRaw > 0 ? Math.min(waitRaw, 3000) : 500
+    if (Date.now() + wait >= deadline) throw pending || new Error('write_pending')
+    await sleepMs(wait)
+  }
+}
+
 async function putCompiled(page, compiled) {
   if (await gbrainDisabled()) throw new Error('gbrain 不可用，没有写入')
   await runGbrain(['put', page], compiled.endsWith('\n') ? compiled : `${compiled}\n`)
 }
 
-async function addTimeline(page, text, failMessage) {
+async function addTimeline(page, text, failMessage, requestId) {
   if (await gbrainDisabled()) throw new Error(failMessage)
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
-  await runGbrain(['timeline-add', page, date, text])
+  const args = ['timeline-add', page, date, text]
+  const id = typeof requestId === 'string' ? requestId.trim() : ''
+  if (id) {
+    args.push('--request-id', id)
+    await runGbrainCommitted(args)
+    return
+  }
+  await runGbrain(args)
 }
 
 function captureText(cardId, content) {
@@ -1232,7 +1314,40 @@ async function putEncyclopediaPage(args) {
     argv.push('--expected-revision', args.expectedRevision)
   }
   const content = args.content.endsWith('\n') ? args.content : `${args.content}\n`
-  await runGbrain(argv, content)
+  await runGbrainCommitted(argv, content)
+}
+
+function timelineCommandText(stdout) {
+  const text = typeof stdout === 'string' ? stdout.trim() : ''
+  if (!text || text === 'No timeline entries.') return ''
+  return text
+}
+
+// 沉淀 requestId 只留给 timeline-add。缺页时用卡面 put，request-id 另造；页已在则不改正文。
+async function ensureSedimentPage(document, entity, sedimentRequestId) {
+  void document
+  const slug = entity && typeof entity.slug === 'string' ? entity.slug.trim() : ''
+  if (!slug) return { ok: false, error: '还没绑定' }
+  try {
+    const out = await runGbrain(['get', slug, '--include-content', '--content-only', '--json'])
+    const parsed = parsePageSnapshot(out)
+    if (!parsed) return { ok: false, error: 'gbrain 没有给回页的版本' }
+    return { ok: true, present: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!pageMissingMessage(message)) return { ok: false, error: message }
+    const body = composeEntityPage(entity)
+    if (!body) return { ok: false, error: message }
+    const putId = randomUUID()
+    if (putId === sedimentRequestId) return { ok: false, error: '建页编号撞上了沉淀编号' }
+    await putEncyclopediaPage({ slug, content: body, requestId: putId })
+    return { ok: true, created: true }
+  }
+}
+
+async function confirmSedimentTimeline(page, requestId) {
+  const out = await runGbrain(['timeline', page])
+  return typeof out === 'string' && out.includes(requestId)
 }
 
 function registerApi(app, prefix) {
@@ -1629,7 +1744,7 @@ function registerApi(app, prefix) {
         const store = raw && !isLegacyRecord(raw) ? normalizeStore(raw) : { cards: {} }
         const result = await writeSediment(
           { document: current.document, store, bookId: book.id, body },
-          { addTimeline, gbrainDisabled, resolveQuote: resolveSedimentQuote },
+          { addTimeline, gbrainDisabled, resolveQuote: resolveSedimentQuote, ensurePage: ensureSedimentPage, confirmTimeline: confirmSedimentTimeline },
         )
         if (result.statusCode >= 400) return result
         const nextText = JSON.stringify(result.document)
@@ -1664,7 +1779,15 @@ function registerApi(app, prefix) {
         return reply.send({ error: 'gbrain 不可用' })
       }
       const raw = await runGbrain(['get', slug])
-      return reply.send({ ok: true, slug, finalized: finalizedText(raw), timeline: timelineBelow(raw) })
+      let rowText = ''
+      try {
+        rowText = timelineCommandText(await runGbrain(['timeline', slug]))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`slug=${slug} requestId= encyclopedia-read ${message}`)
+      }
+      const timeline = [timelineBelow(raw), rowText].filter(Boolean).join('\n')
+      return reply.send({ ok: true, slug, finalized: finalizedText(raw), timeline })
     } catch (error) {
       reply.code(502)
       return reply.send({ error: error instanceof Error ? error.message : 'gbrain 读取失败' })

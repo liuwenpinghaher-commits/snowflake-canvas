@@ -1,4 +1,5 @@
 import { markAdoptionSediment, sessionOwned } from './discuss-store.mjs'
+import { pageMissingMessage } from './encyclopedia.mjs'
 import { loadDocumentModule } from './load-document.mjs'
 
 const ACTIONS = new Set(['append', 'replace', 'negate'])
@@ -42,15 +43,59 @@ function wroteKey(bookId, requestId) {
   return `${bookId}\0${requestId}`
 }
 
-async function appendTimeline(deps, bookId, requestId, page, detail) {
+function timelineFailure(page, requestId, error) {
+  const message = error instanceof Error ? error.message : String(error)
+  const oneLine = message.replace(/\s+/g, ' ').trim()
+  console.error(`slug=${page} requestId=${requestId} ${oneLine}`)
+}
+
+// 页不存在只在这里处理一次：先建页，再补一次 timeline-add。不放进 storage_busy 退避。
+async function writeTimelineOnce(deps, requestId, page, detail, document, entity) {
+  let created = false
+  if (typeof deps.ensurePage === 'function') {
+    const ensured = await deps.ensurePage(document, entity, requestId)
+    if (!ensured || ensured.ok === false) {
+      const message = ensured && typeof ensured.error === 'string' && ensured.error ? ensured.error : '百科页没有准备好'
+      throw new Error(message)
+    }
+    created = ensured.created === true
+  }
+  try {
+    await deps.addTimeline(page, detail, '百科没写上', requestId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (typeof deps.ensurePage !== 'function' || !pageMissingMessage(message)) throw error
+    if (!created) {
+      const ensured = await deps.ensurePage(document, entity, requestId)
+      if (!ensured || ensured.ok === false) {
+        const errText = ensured && typeof ensured.error === 'string' && ensured.error ? ensured.error : message
+        throw new Error(errText)
+      }
+    }
+    await deps.addTimeline(page, detail, '百科没写上', requestId)
+  }
+}
+
+async function appendTimeline(deps, bookId, requestId, page, detail, document, entity) {
   const key = wroteKey(bookId, requestId)
   if (timelineWrote.has(key)) return { ok: true }
-  if (await deps.gbrainDisabled()) return { ok: false }
+  if (await deps.gbrainDisabled()) {
+    timelineFailure(page, requestId, new Error('gbrain 不可用'))
+    return { ok: false }
+  }
   try {
-    await deps.addTimeline(page, detail, '百科没写上')
+    await writeTimelineOnce(deps, requestId, page, detail, document, entity)
+    if (typeof deps.confirmTimeline === 'function') {
+      const confirmed = await deps.confirmTimeline(page, requestId)
+      if (!confirmed) {
+        timelineFailure(page, requestId, new Error(`timeline readback missing requestId=${requestId}`))
+        return { ok: false }
+      }
+    }
     timelineWrote.add(key)
     return { ok: true }
-  } catch {
+  } catch (error) {
+    timelineFailure(page, requestId, error)
     return { ok: false }
   }
 }
@@ -132,6 +177,8 @@ export async function writeSediment(args, deps) {
         adoptionKey,
         requestId,
       }),
+      document,
+      entity,
     )
     const status = timeline.ok ? 'written' : 'failed'
     const next = withStatus(document, requestId, status)
@@ -184,7 +231,16 @@ export async function writeSediment(args, deps) {
     const next = withStatus(folded, requestId, 'failed')
     return finish(next, store, bookId, cardId, sessionId, entityId, fieldKey, adoptionKey, requestId, 'failed')
   }
-  const timeline = await appendTimeline(deps, bookId, requestId, page, detailText({ bookId, cardId, sessionId, adoptionKey, requestId }))
+  const foldedEntity = (folded.entities || []).find((item) => item && item.id === entityId) || entity
+  const timeline = await appendTimeline(
+    deps,
+    bookId,
+    requestId,
+    page,
+    detailText({ bookId, cardId, sessionId, adoptionKey, requestId }),
+    folded,
+    foldedEntity,
+  )
   const status = timeline.ok ? 'written' : 'failed'
   const next = withStatus(folded, requestId, status)
   return finish(next, store, bookId, cardId, sessionId, entityId, fieldKey, adoptionKey, requestId, status)
