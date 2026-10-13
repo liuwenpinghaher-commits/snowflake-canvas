@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import MentionBacklinks from './MentionBacklinks.tsx'
 import type { MentionHit } from './mentions.ts'
 import { bindLabel } from './encyclopedia.ts'
 import {
   ARC_KEYS,
   RENWUGUSHI_KEYS,
-  choiceFields,
   createCard,
   type AppState,
   type Entity,
@@ -14,7 +13,7 @@ import {
   NARRATIVE_FIELD_KEYS,
   NARRATIVE_HINTS,
   actionLabel,
-  applyManualField,
+  commitPersonField,
   archiveGroupTitles,
   eventsForEntity,
   fieldEvents,
@@ -333,25 +332,24 @@ export function PersonZones({
   onOpenIdea: OpenIdea
   focusFieldKey?: string | null
 }) {
-  const [gradeDraft, setGradeDraft] = useState<string | null>(null)
   const [ideaId, setIdeaId] = useState('')
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [notice, setNotice] = useState('')
-  const grade = gradeDraft ?? readPersonField(state, entity, 'grade')
+  const grade = readPersonField(state, entity, 'grade')
   const visibility = gradeVisibility(grade)
   const ideas = ideaOptions(state)
   const projections = projectingIdeas(state, entity.id)
   const ledger = groupEventsByIdea(eventsForEntity(state, entity.id))
 
-  const save = (fieldKey: string, text: string) => {
-    if (!ideaId) {
-      setNotice('不选念头不能保存')
-      return
+  const save = (fieldKey: string, text: string): boolean => {
+    if (!canEdit) {
+      setNotice('现在不能改。')
+      return false
     }
     const requestId = crypto.randomUUID()
     const at = new Date().toISOString()
-    const next = applyManualField(state, {
+    const input = {
       cardId,
       entityId: entity.id,
       fieldKey,
@@ -359,23 +357,15 @@ export function PersonZones({
       ideaId,
       requestId,
       at,
-    })
+    }
+    const next = commitPersonField(state, input)
     if (next === state) {
-      setNotice('没有保存。先写上名字，并选一条已有念头。')
-      return
+      setNotice(fieldKey === 'name' && !text.trim() ? '没有保存。先写上名字。' : '没有保存。')
+      return false
     }
     setNotice('')
-    onApply((current) =>
-      applyManualField(current, {
-        cardId,
-        entityId: entity.id,
-        fieldKey,
-        text,
-        ideaId,
-        requestId,
-        at,
-      }),
-    )
+    onApply((current) => commitPersonField(current, input))
+    return true
   }
 
   const createIdea = () => {
@@ -400,9 +390,9 @@ export function PersonZones({
   return (
     <div className="person-zones">
       <label className="person-idea">
-        挂到念头
-        <select aria-label="挂到念头" value={ideaId} onChange={(event) => setIdeaId(event.target.value)}>
-          <option value="">先选一条念头</option>
+        归入卡片/视图（可选）
+        <select aria-label="归入卡片/视图（可选）" value={ideaId} onChange={(event) => setIdeaId(event.target.value)}>
+          <option value="">不归入</option>
           {ideas.map((idea) => (
             <option key={idea.id} value={idea.id}>
               {idea.title}
@@ -413,7 +403,6 @@ export function PersonZones({
           新建一条念头
         </button>
       </label>
-      {!ideaId ? <p className="hint">不选念头不能保存。</p> : null}
       {notice ? (
         <p className="cast-warn" role="status">
           {notice}
@@ -422,35 +411,19 @@ export function PersonZones({
 
       <section className="person-zone" aria-label="身份">
         <h3>身份</h3>
-        <FieldLine state={state} entity={entity} fieldKey="name" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
+        <FieldLine state={state} entity={entity} fieldKey="name" canEdit={canEdit} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
         {visibility.summaryOnly ? null : (
-          <FieldLine state={state} entity={entity} fieldKey="role" canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
+          <FieldLine state={state} entity={entity} fieldKey="role" canEdit={canEdit} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
         )}
-        <label className="person-field">
+        <div className="person-field">
           <span>类别</span>
-          <select
-            aria-label="类别"
-            value={grade}
-            disabled={!canEdit}
-            onChange={(event) => {
-              setGradeDraft(event.target.value)
-            }}
-          >
-            {choiceFields('renwubiao')[0]?.options.map((option) => (
-              <option key={option.value || 'empty'} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <button type="button" disabled={!canEdit || !ideaId} onClick={() => save('grade', grade)}>
-            保存类别
-          </button>
-        </label>
+          <GradeGhost value={grade} canEdit={canEdit} onCommit={(text) => save('grade', text)} />
+        </div>
         <p className="hint">类别决定这一行露出多少：主要露出叙事功能和弧线，次要露出叙事功能，NPC 只露名字、角色和一句，路人只有这一行摘要。</p>
       </section>
 
       {!visibility.narrative ? (
-        <FieldLine state={state} entity={entity} fieldKey="sentence" hint={NARRATIVE_HINTS.sentence} canEdit={canEdit && Boolean(ideaId)} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
+        <FieldLine state={state} entity={entity} fieldKey="sentence" hint={NARRATIVE_HINTS.sentence} canEdit={canEdit} onSave={save} onOpenIdea={onOpenIdea} focusFieldKey={focusFieldKey} projections={projections} />
       ) : null}
 
       {narrativeKeys.length > 0 || visibility.arc || (visibility.more && moreOpen) ? (
@@ -463,7 +436,7 @@ export function PersonZones({
               entity={entity}
               fieldKey={key}
               hint={NARRATIVE_HINTS[key]}
-              canEdit={canEdit && Boolean(ideaId)}
+              canEdit={canEdit}
               onSave={save}
               onOpenIdea={onOpenIdea}
               focusFieldKey={focusFieldKey}
@@ -480,7 +453,7 @@ export function PersonZones({
                   state={state}
                   entity={entity}
                   fieldKey={`arc.${key}`}
-                  canEdit={canEdit && Boolean(ideaId)}
+                  canEdit={canEdit}
                   onSave={save}
                   onOpenIdea={onOpenIdea}
                   focusFieldKey={focusFieldKey}
@@ -524,7 +497,7 @@ export function PersonZones({
                         state={state}
                         entity={entity}
                         fieldKey={key}
-                        canEdit={canEdit && Boolean(ideaId)}
+                        canEdit={canEdit}
                         onSave={save}
                         onOpenIdea={onOpenIdea}
                         focusFieldKey={focusFieldKey}
@@ -548,7 +521,7 @@ export function PersonZones({
               state={state}
               entity={entity}
               fieldKey={key}
-              canEdit={canEdit && Boolean(ideaId)}
+              canEdit={canEdit}
               onSave={save}
               onOpenIdea={onOpenIdea}
               focusFieldKey={focusFieldKey}
@@ -590,6 +563,137 @@ export function PersonZones({
   )
 }
 
+export function finishGhostEdit(baseline: string, text: string, commit: (text: string) => boolean): string {
+  if (text.trim() === baseline.trim()) return baseline
+  return commit(text) ? text : baseline
+}
+
+function readGhostText(node: HTMLElement | null, multiline: boolean): string {
+  if (!node) return ''
+  const raw = node.innerText.replace(/\u00a0/g, ' ')
+  if (!multiline) return raw.replace(/\r?\n/g, '')
+  return raw.replace(/\n$/, '')
+}
+
+function GhostField({
+  label,
+  value,
+  multiline,
+  canEdit,
+  onCommit,
+}: {
+  label: string
+  value: string
+  multiline: boolean
+  canEdit: boolean
+  onCommit: (text: string) => boolean
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const editing = useRef(false)
+  const baseline = useRef(value)
+  const pending = useRef<string | null>(null)
+  const [live, setLive] = useState(false)
+
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node || editing.current) return
+    if (pending.current !== null) {
+      if (value === pending.current) pending.current = null
+      else return
+    }
+    if ((node.textContent ?? '') !== value) node.textContent = value
+  }, [value])
+
+  return (
+    <div
+      ref={ref}
+      role="textbox"
+      aria-label={label}
+      aria-multiline={multiline || undefined}
+      aria-readonly={canEdit ? undefined : true}
+      className={live ? 'person-ghost is-editing' : 'person-ghost'}
+      contentEditable={canEdit}
+      spellCheck={false}
+      data-placeholder="未填写"
+      suppressContentEditableWarning
+      onFocus={() => {
+        baseline.current = value
+        editing.current = true
+        setLive(true)
+      }}
+      onBlur={() => {
+        if (!editing.current) return
+        const node = ref.current
+        const text = readGhostText(node, multiline)
+        editing.current = false
+        setLive(false)
+        const next = finishGhostEdit(baseline.current, text, onCommit)
+        if (next !== baseline.current) pending.current = next
+        if (node) node.textContent = next
+      }}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.key === 'Process') return
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          const node = ref.current
+          editing.current = false
+          setLive(false)
+          pending.current = null
+          if (node) node.textContent = baseline.current
+          node?.blur()
+          return
+        }
+        if (event.key !== 'Enter') return
+        if (multiline && !(event.metaKey || event.ctrlKey)) return
+        event.preventDefault()
+        ref.current?.blur()
+      }}
+    />
+  )
+}
+
+function GradeGhost({
+  value,
+  canEdit,
+  onCommit,
+}: {
+  value: string
+  canEdit: boolean
+  onCommit: (text: string) => boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const level = gradeVisibility(value).level
+  if (!open) {
+    return (
+      <button type="button" className="person-ghost" aria-label="类别" disabled={!canEdit} onClick={() => setOpen(true)}>
+        {level}
+      </button>
+    )
+  }
+  return (
+    <select
+      className="person-grade"
+      aria-label="类别"
+      autoFocus
+      value={level}
+      onChange={(event) => {
+        const next = event.target.value
+        if (next !== level) onCommit(next)
+        setOpen(false)
+      }}
+      onBlur={() => {
+        window.setTimeout(() => setOpen(false), 150)
+      }}
+    >
+      {PERSON_GRADE_COLUMNS.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function FieldLine({
   state,
   entity,
@@ -606,21 +710,20 @@ function FieldLine({
   fieldKey: string
   hint?: string
   canEdit: boolean
-  onSave: (fieldKey: string, text: string) => void
+  onSave: (fieldKey: string, text: string) => boolean
   onOpenIdea: OpenIdea
   focusFieldKey?: string | null
   projections: { id: string; title: string }[]
 }) {
   const value = readPersonField(state, entity, fieldKey)
-  const [draft, setDraft] = useState<string | null>(null)
   const [openTrace, setOpenTrace] = useState(false)
-  const text = draft ?? value
   const hits = traceField(state, entity.id, fieldKey)
   const count = traceEvents(fieldEvents(state, entity.id, fieldKey)).length
   const showDiscuss = fieldKey !== 'philosophy' && !value.trim() && projections.length > 0
   const focused = focusFieldKey === fieldKey
+  const multiline = fieldKey === 'story' || fieldKey === 'paragraph'
   return (
-    <label className={focused ? 'person-field field-focus' : 'person-field'} data-field-key={fieldKey} data-field-focus={focused ? 'true' : undefined}>
+    <div className={focused ? 'person-field field-focus' : 'person-field'} data-field-key={fieldKey} data-field-focus={focused ? 'true' : undefined}>
       <span>
         {fieldLabel(fieldKey)}
         {count > 0 ? (
@@ -638,15 +741,13 @@ function FieldLine({
         ) : null}
       </span>
       {hint ? <small className="hint">{hint}</small> : null}
-      <textarea
-        aria-label={fieldLabel(fieldKey)}
-        value={text}
-        rows={fieldKey === 'story' || fieldKey === 'paragraph' ? 4 : 2}
-        onChange={(event) => setDraft(event.target.value)}
+      <GhostField
+        label={fieldLabel(fieldKey)}
+        value={value}
+        multiline={multiline}
+        canEdit={canEdit}
+        onCommit={(text) => onSave(fieldKey, text)}
       />
-      <button type="button" disabled={!canEdit || text.trim() === value.trim()} onClick={() => onSave(fieldKey, text)}>
-        保存
-      </button>
       {showDiscuss ? (
         <button
           type="button"
@@ -677,6 +778,6 @@ function FieldLine({
           ))}
         </ul>
       ) : null}
-    </label>
+    </div>
   )
 }

@@ -462,6 +462,78 @@ export function applyManualField(
   return patchEntity(saved, entity.id, (current) => ({ ...current, name: stored.trim() || current.name }))
 }
 
+export function commitPersonField(
+  state: AppState,
+  input: {
+    cardId: string | null
+    entityId: string | null
+    fieldKey: string
+    text: string
+    ideaId: string
+    requestId: string
+    at: string
+  },
+): AppState {
+  if (input.ideaId.trim()) return applyManualField(state, input)
+  return writePersonFieldWithoutIdea(state, input)
+}
+
+function writePersonFieldWithoutIdea(
+  state: AppState,
+  input: {
+    cardId: string | null
+    entityId: string | null
+    fieldKey: string
+    text: string
+    ideaId: string
+    requestId: string
+    at: string
+  },
+): AppState {
+  if (input.fieldKey === 'philosophy') return state
+  const stored = input.fieldKey === 'grade' ? mapGrade(input.text) : input.text
+  if (!stored.trim()) return state
+  const arcKey = arcKeyOf(input.fieldKey)
+  let next = state
+  const preview = ensurePerson(next, input.cardId, input.entityId)
+  if (!arcKey) {
+    const viewId = preview.entity ? viewCardFor(preview.entity, input.fieldKey) : undefined
+    const cardId = viewId && next.snowflake.cards[viewId] ? viewId : input.cardId
+    const card = cardId ? next.snowflake.cards[cardId] : undefined
+    const owned = card ? fieldKeys(card.layer).includes(input.fieldKey) || extraFieldKeys(card).includes(input.fieldKey) : false
+    if (cardId && owned) {
+      const written = commitCardText(next, cardId, stored, input.fieldKey, false)
+      if (written !== next) next = written
+    }
+  }
+  const ensured = ensurePerson(next, input.cardId, input.entityId ?? preview.entity?.id ?? null)
+  next = ensured.state
+  const entity = ensured.entity
+  if (!entity) return state
+  if (arcKey) {
+    if ((entity.arc[arcKey] ?? '') === stored) return state
+    next = patchEntity(next, entity.id, (current) => ({
+      ...current,
+      arc: { ...current.arc, [arcKey]: stored },
+    }))
+    const viewId = entity.views.renwubiao
+    if (viewId) next = putCardArc(next, viewId, arcKey, stored)
+    return next
+  }
+  const beforeEntity = (state.entities ?? []).find((item) => item.id === entity.id) ?? preview.entity
+  const before = beforeEntity ? readPersonField(state, beforeEntity, input.fieldKey) : ''
+  const nameAligned = input.fieldKey !== 'name' || (beforeEntity?.name.trim() ?? '') === stored.trim()
+  if (stored.trim() === before.trim() && nameAligned) return state
+  return patchEntity(next, entity.id, (current) => ({
+    ...current,
+    name: input.fieldKey === 'name' ? stored.trim() || current.name : current.name,
+    fields: {
+      ...current.fields,
+      [input.fieldKey]: { value: stored, events: current.fields[input.fieldKey]?.events ?? [] },
+    },
+  }))
+}
+
 export function mergePendingEntity(state: AppState, name: string): { state: AppState; attached: boolean } {
   const pending = (state.pendingEntities ?? []).find((item) => item.name === name)
   if (!pending || pending.cardIds.length < 2) return { state, attached: false }
