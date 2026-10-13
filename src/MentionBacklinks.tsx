@@ -43,3 +43,18 @@ export default function MentionBacklinks({
     </section>
   )
 }
+
+/** 和反向列表同一计数：mentionsOf。0 次不显示。 */
+export function MentionCountBadge({
+  state,
+  kind,
+  id,
+}: {
+  state: AppState
+  kind: MentionKind
+  id: string
+}) {
+  const count = mentionsOf(state, kind, id).length
+  if (count <= 0) return null
+  return <span className="mention-badge">提到 {count} 次</span>
+}

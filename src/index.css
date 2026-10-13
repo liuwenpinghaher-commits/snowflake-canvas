@@ -3070,3 +3070,118 @@ button.person-ghost {
 .cast-detail td {
   vertical-align: top;
 }
+
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 8px 0 12px;
+}
+
+.table-search,
+.table-tools select {
+  font: inherit;
+  color: inherit;
+  background: #fffdf8;
+  border: 1px solid #c8bfb0;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+
+.table-search {
+  min-width: 12em;
+}
+
+.table-tools label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-secondary);
+}
+
+.col-menu {
+  position: relative;
+}
+
+.col-menu-pop {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 140px;
+  background: #fffdf8;
+  border: 1px solid #c8bfb0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.data-table {
+  table-layout: fixed;
+}
+
+.data-table th {
+  position: relative;
+}
+
+button.col-sort {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 2px;
+  font-weight: 650;
+  color: var(--ink-secondary);
+}
+
+.col-label {
+  font-weight: 650;
+  color: var(--ink-secondary);
+}
+
+.col-grip {
+  display: inline-block;
+  margin-right: 6px;
+  cursor: grab;
+  color: var(--ink-tertiary);
+}
+
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.mention-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--state-selected);
+  color: var(--ink-primary);
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: middle;
+}
+
+.board-card {
+  position: relative;
+}
+
+.board-card:has(.mention-badge) strong {
+  display: block;
+  padding-right: 76px;
+}
+
+.board-card .mention-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin-left: 0;
+}

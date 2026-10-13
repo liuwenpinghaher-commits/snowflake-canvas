@@ -823,7 +823,8 @@ function keptExtraKey(layer: Layer, key: string): boolean {
   if (key === 'adopted' && fieldKeys(layer).length > 0) return true
   if (layer === 'renwubiao') return key === 'legacyFullSummary' || key === 'legacyNotes'
   if (layer === '场景表') return key === 'legacySummary'
-  if (layer === 'changci' && key === 'pov') return true
+  // 视角、章、标题不是场次正式列，但卡上已经有。有内容才留下，刷新后还在。
+  if (layer === 'changci' && (key === 'pov' || key === 'chapter' || key === 'title')) return true
   return false
 }
 

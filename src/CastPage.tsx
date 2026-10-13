@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import MentionBacklinks from './MentionBacklinks.tsx'
+import DataTable, { type DataColumn } from './DataTable.tsx'
+import MentionBacklinks, { MentionCountBadge } from './MentionBacklinks.tsx'
 import type { MentionHit } from './mentions.ts'
+import { parseBindFilter, parseGradeFilter, personRowVisible, type BindFilter, type GradeFilter } from './table-view.ts'
 import { bindLabel } from './encyclopedia.ts'
 import {
   ARC_KEYS,
@@ -70,6 +72,8 @@ export default function CastPage({
   )
   const [mergeNote, setMergeNote] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(focus?.entityId ?? null)
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>('')
+  const [bindFilter, setBindFilter] = useState<BindFilter>('')
   useEffect(() => {
     if (focus?.entityId) setSelectedId(focus.entityId)
   }, [focus?.entityId])
@@ -83,8 +87,70 @@ export default function CastPage({
       writeIdList(store, storageId, 'cast-open', Object.keys(record))
     }
   }, [storageId, focus?.entityId, initialView])
+  useEffect(() => {
+    setGradeFilter('')
+    setBindFilter('')
+  }, [storageId])
   const people = (state.entities ?? []).filter((entity) => entity.entityType === 'person')
   const pending = state.pendingEntities ?? []
+  const castColumns: DataColumn<Entity>[] = [
+    {
+      id: 'name',
+      label: '名字',
+      sortable: true,
+      search: true,
+      defaultWidth: 180,
+      text: (entity) => readPersonField(state, entity, 'name') || entity.name || '未命名',
+      render: (entity) => {
+        const name = readPersonField(state, entity, 'name') || entity.name || '未命名'
+        return (
+          <>
+            <div>
+              {name}
+              <MentionCountBadge state={state} kind="entity" id={entity.id} />
+            </div>
+            {onOpenMention ? <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} /> : null}
+          </>
+        )
+      },
+    },
+    {
+      id: 'grade',
+      label: '类别',
+      sortable: false,
+      search: true,
+      defaultWidth: 96,
+      text: (entity) => gradeVisibility(readPersonField(state, entity, 'grade')).level,
+      render: (entity) => gradeVisibility(readPersonField(state, entity, 'grade')).level,
+    },
+    {
+      id: 'sentence',
+      label: '一句',
+      sortable: true,
+      search: true,
+      defaultWidth: 240,
+      text: (entity) => readPersonField(state, entity, 'sentence'),
+      render: (entity) => readPersonField(state, entity, 'sentence'),
+    },
+    {
+      id: 'bind',
+      label: '百科',
+      sortable: false,
+      search: false,
+      defaultWidth: 160,
+      text: (entity) => bindLabel(entity.slug),
+      render: (entity) => bindLabel(entity.slug),
+    },
+  ]
+  const tablePeople = people.filter((entity) =>
+    personRowVisible(
+      gradeVisibility(readPersonField(state, entity, 'grade')).level,
+      Boolean(entity.slug?.trim()),
+      gradeFilter,
+      bindFilter,
+    ),
+  )
+
 
   const chooseView = (next: 'table' | 'board') => {
     setView(next)
@@ -200,6 +266,7 @@ export default function CastPage({
                       }}
                     >
                       <strong>{name}</strong>
+                      <MentionCountBadge state={state} kind="entity" id={entity.id} />
                       {onOpenMention ? (
                         <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} />
                       ) : null}
@@ -213,44 +280,60 @@ export default function CastPage({
       ) : people.length === 0 ? (
         <p className="hint">这本书还没有人物实体。人物表上写下名字之后，会在这里出现一行。</p>
       ) : (
-        <table className="cast-table">
-          <thead>
-            <tr>
-              <th>名字</th>
-              <th>类别</th>
-              <th>一句</th>
-              <th>百科</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {people.map((entity) => {
-              const visibility = gradeVisibility(readPersonField(state, entity, 'grade'))
-              const open = openRows[entity.id] === true
-              return (
-                <PersonRow
-                  key={entity.id}
-                  state={state}
-                  entity={entity}
-                  visibility={visibility}
-                  open={open && !visibility.summaryOnly}
-                  selected={selectedId === entity.id}
-                  canEdit={canEdit}
-                  onSelect={() => selectRow(entity.id, visibility.summaryOnly)}
-                  onToggle={() => {
-                    if (visibility.summaryOnly) return
-                    toggleRow(entity.id)
-                  }}
-                  onApply={onApply}
-                  onOpenIdea={onOpenIdea}
-                  focusFieldKey={focus?.entityId === entity.id ? focus.fieldKey : null}
-                  onPlaceOnCanvas={onPlaceOnCanvas}
-                  onOpenMention={onOpenMention}
-                />
-              )
-            })}
-          </tbody>
-        </table>
+        <DataTable
+          bookId={storageId}
+          slot="cast-columns"
+          tableClass="cast-table data-table"
+          columns={castColumns}
+          rows={tablePeople}
+          rowKey={(entity) => entity.id}
+          emptyText="没有符合的人物"
+          trailingWidth={180}
+          filters={
+            <>
+              <label>
+                类别
+                <select aria-label="按类别筛选" value={gradeFilter} onChange={(event) => setGradeFilter(parseGradeFilter(event.currentTarget.value))}>
+                  <option value="">全部</option>
+                  {PERSON_GRADE_COLUMNS.map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                百科
+                <select aria-label="按百科绑定筛选" value={bindFilter} onChange={(event) => setBindFilter(parseBindFilter(event.currentTarget.value))}>
+                  <option value="">全部</option>
+                  <option value="bound">已绑定</option>
+                  <option value="unbound">未绑定</option>
+                </select>
+              </label>
+            </>
+          }
+          renderRow={(entity, visible, colSpan) => (
+            <PersonRow
+              state={state}
+              entity={entity}
+              columns={visible}
+              colSpan={colSpan}
+              visibility={gradeVisibility(readPersonField(state, entity, 'grade'))}
+              open={openRows[entity.id] === true && !gradeVisibility(readPersonField(state, entity, 'grade')).summaryOnly}
+              selected={selectedId === entity.id}
+              canEdit={canEdit}
+              onSelect={() => selectRow(entity.id, gradeVisibility(readPersonField(state, entity, 'grade')).summaryOnly)}
+              onToggle={() => {
+                if (gradeVisibility(readPersonField(state, entity, 'grade')).summaryOnly) return
+                toggleRow(entity.id)
+              }}
+              onApply={onApply}
+              onOpenIdea={onOpenIdea}
+              focusFieldKey={focus?.entityId === entity.id ? focus.fieldKey : null}
+              onPlaceOnCanvas={onPlaceOnCanvas}
+            />
+          )}
+        />
       )}
     </section>
   )
@@ -259,6 +342,8 @@ export default function CastPage({
 function PersonRow({
   state,
   entity,
+  columns,
+  colSpan,
   visibility,
   open,
   selected,
@@ -269,10 +354,11 @@ function PersonRow({
   onOpenIdea,
   focusFieldKey = null,
   onPlaceOnCanvas,
-  onOpenMention,
 }: {
   state: AppState
   entity: Entity
+  columns: readonly DataColumn<Entity>[]
+  colSpan: number
   visibility: GradeVisibility
   open: boolean
   selected: boolean
@@ -283,25 +369,16 @@ function PersonRow({
   onOpenIdea: OpenIdea
   focusFieldKey?: string | null
   onPlaceOnCanvas?: (entityId: string) => void
-  onOpenMention?: (hit: MentionHit) => void
 }) {
-  const name = readPersonField(state, entity, 'name') || entity.name
-  const sentence = readPersonField(state, entity, 'sentence')
   return (
     <>
       <tr
         className={selected ? 'cast-summary page-table-row is-selected' : 'cast-summary page-table-row'}
         onClick={() => onSelect()}
       >
-        <td>
-          <div>{name || '未命名'}</div>
-          {onOpenMention ? (
-            <MentionBacklinks state={state} kind="entity" id={entity.id} onOpen={onOpenMention} />
-          ) : null}
-        </td>
-        <td>{visibility.level}</td>
-        <td>{sentence}</td>
-        <td>{bindLabel(entity.slug)}</td>
+        {columns.map((column) => (
+          <td key={column.id}>{column.render(entity)}</td>
+        ))}
         <td>
           <div className="row-actions">
             <button
@@ -347,7 +424,7 @@ function PersonRow({
       </tr>
       {open ? (
         <tr className="cast-detail">
-          <td colSpan={5}>
+          <td colSpan={colSpan}>
             <PersonZones
               state={state}
               entity={entity}

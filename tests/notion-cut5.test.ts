@@ -195,7 +195,7 @@ describe('Notion 切刀5', () => {
     expect(read('src/RelationPage.tsx')).not.toContain('addEdge')
   })
 
-  it('场次按冲突结构拖过去会改 structureKind，按章拖不动章节', () => {
+  it('场次按冲突结构拖过去会改 structureKind，按章拖过去会改 chapter', () => {
     let state = createDocument('scenes')
     state = createCard(state, {
       id: 'sc1',
@@ -224,7 +224,15 @@ describe('Notion 切刀5', () => {
     expect(listScenes(moved)[0]?.structureLabel).toBe('反应')
     expect(applySceneBoardDrop(moved, 'sc1', 'structure', 'empty')).toBe(moved)
     expect(moved.snowflake.cards.sc1?.fields.structureKind).toBe('reactive')
-    expect(applySceneBoardDrop(state, 'sc1', 'chapter', '第二章')).toBe(state)
+    const chapterMoved = applySceneBoardDrop(state, 'sc1', 'chapter', '第二章')
+    expect(chapterMoved.snowflake.cards.sc1?.fields.chapter).toBe('第二章')
+    expect(chapterMoved.snowflake.cards.sc1?.fields.structureKind).toBe('active')
+    expect(chapterMoved.snowflake.cards.sc1?.fields.task).toBe('进门')
+    expect(chapterMoved.snowflake.cards.sc1?.fields.alpha).toBe('城门')
+    expect(chapterMoved.chapters).toBe(state.chapters)
+    expect(chapterMoved.snowflake.cards.sc1?.fields).not.toHaveProperty('act')
+    expect(applySceneBoardDrop(state, 'sc1', 'chapter', '未分章')).toBe(state)
+    expect(applySceneBoardDrop(chapterMoved, 'sc1', 'chapter', '第二章')).toBe(chapterMoved)
     expect(chapterColumns([])).toEqual(['未分章'])
 
     const empty = createDocument('empty-scene')

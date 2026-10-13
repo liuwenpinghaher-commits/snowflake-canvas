@@ -70,8 +70,33 @@ export function structureColumnId(kind: string): StructureColumnId {
   return 'empty'
 }
 
-/** 按章只展示。按冲突结构只把 active / reactive 写进字段。未填列不接收投放。 */
+/** 未分章只展示，不接收投放。其它章列可以投放。 */
+export function chapterColumnDroppable(label: string): boolean {
+  const text = label.trim()
+  return text.length > 0 && text !== '未分章'
+}
+
+function applyChapterDrop(state: AppState, cardId: string, columnId: string): AppState {
+  const chapter = columnId.trim()
+  if (!chapterColumnDroppable(chapter)) return state
+  const card = state.snowflake.cards[cardId]
+  if (!card || card.layer !== 'changci') return state
+  if ((card.fields.chapter ?? '').trim() === chapter) return state
+  return {
+    ...state,
+    snowflake: {
+      ...state.snowflake,
+      cards: {
+        ...state.snowflake.cards,
+        [cardId]: { ...card, fields: { ...card.fields, chapter } },
+      },
+    },
+  }
+}
+
+/** 按章只改这场次卡已有的 chapter。按冲突结构只把 active / reactive 写进 structureKind。未分章、未填不接收投放。 */
 export function applySceneBoardDrop(state: AppState, cardId: string, group: SceneGroup, columnId: string): AppState {
+  if (group === 'chapter') return applyChapterDrop(state, cardId, columnId)
   if (group !== 'structure') return state
   if (columnId !== 'active' && columnId !== 'reactive') return state
   const card = state.snowflake.cards[cardId]
