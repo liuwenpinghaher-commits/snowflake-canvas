@@ -140,12 +140,12 @@ describe('返工 P1c', () => {
     ).toEqual({ step: 4, entityId: 'loc' })
   })
 
-  it('第 5 步没有投影时改成新建人物，不改念头的采纳栏', () => {
+  it('第 5 步没有投影时改成新建人物，不改卡片的采纳栏', () => {
     expect(
       defaultSedimentTarget({ sessionId: 'sess', ideaId: 'idea', sediment: [], entities: [], edges: [] }),
     ).toEqual({ step: 5 })
     let state = createDocument('new-person')
-    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '卡片' })
     const card = state.snowflake.cards.idea
     state = {
       ...state,
@@ -188,7 +188,7 @@ describe('返工 P1c', () => {
     expect(line).toMatchObject({ entityId: 'p1', fieldKey: 'motivation' })
     const side = read('src/SideEditor.tsx')
     expect(side).toContain('traceIdeaFields(')
-    expect(side).toContain('这条念头长出了什么')
+    expect(side).toContain('这条卡片长出了什么')
     expect(side).toContain('onOpen(hit.entityId, hit.fieldKey)')
     expect(read('src/CastPage.tsx')).toContain('data-field-focus')
   })

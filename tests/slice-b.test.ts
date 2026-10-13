@@ -62,12 +62,12 @@ function personDocument(slug: string | null = 'world/ned-stark') {
   if (typeof slug === 'string' && slug.trim()) entity.slug = slug.trim()
   return {
     canvas: {
-      nodes: [{ id: 'card-1', type: 'text', x: 0, y: 0, width: 280, height: 120, text: '念头' }],
+      nodes: [{ id: 'card-1', type: 'text', x: 0, y: 0, width: 280, height: 120, text: '卡片' }],
       edges: [],
     },
     snowflake: {
       fileId: 'sed-file',
-      cards: { 'card-1': { layer: 'situation', body: '念头', fields: {} } },
+      cards: { 'card-1': { layer: 'situation', body: '卡片', fields: {} } },
     },
     entities: [entity],
     sediment: [],
@@ -77,7 +77,7 @@ function personDocument(slug: string | null = 'world/ned-stark') {
 function sessionStore() {
   let store = withSession({ cards: {} }, 'card-1', {
     sessionId: 'sess-1',
-    title: '念头讨论',
+    title: '卡片讨论',
     createdAt: '2026-10-11T00:00:00.000Z',
     cardId: 'card-1',
   })
@@ -576,7 +576,7 @@ describe('采纳定位路由', () => {
           sessions: [
             {
               sessionId: 'sess-1',
-              title: '念头讨论',
+              title: '卡片讨论',
               createdAt: '2026-10-11T00:00:00.000Z',
               cardId: 'card-1',
               adoptions: [{ key: 'k1', text: '原文句子', adoptedAt: '2026-10-11T00:00:01.000Z' }],

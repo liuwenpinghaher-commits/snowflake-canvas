@@ -1,7 +1,7 @@
 import { LAYERS, fieldKeys, layerLabel } from './document.ts'
 import type { Card, Layer } from './document.ts'
 
-// 画布卡面是固定摘要：标题 + 最多 3 行正文 + 顶上的 meta。没有展开全文。
+// 画布卡片是固定摘要：标题 + 最多 3 行正文 + 顶上的 meta。没有展开全文。
 export const BODY_LINE_CAP = 3
 export const COLUMN_GAP = 16
 
@@ -136,7 +136,7 @@ export function shiftOverlappingCards(
   return moves
 }
 
-// 写作工序分组。念头不进这四组。组的顺序固定。
+// 写作工序分组。卡片不进这四组。组的顺序固定。
 export const PIPELINE_GROUPS: readonly { title: string; layers: readonly Layer[] }[] = [
   { title: '立意', layers: ['一句话', '一段'] },
   { title: '人物', layers: ['renwubiao', 'renwugushi', 'renwudangan'] },
@@ -144,7 +144,7 @@ export const PIPELINE_GROUPS: readonly { title: string; layers: readonly Layer[]
   { title: '成稿', layers: ['正文草稿'] },
 ]
 
-// 下一步按十层顺序走，跳过念头。
+// 下一步按十层顺序走，跳过卡片。
 export const NEXT_STEP_LAYERS: readonly Layer[] = LAYERS.filter((layer) => layer !== 'situation')
 
 // 这一层算不算写完。按该层自己的字段判断，不把「名字：」这种空标签正文当成已写。

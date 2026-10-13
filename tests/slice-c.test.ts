@@ -25,7 +25,7 @@ function person(id: string, name = '奈德'): Entity {
 }
 
 describe('切片 C 前端', () => {
-  it('画布估高不随展开态变高，卡面路径不再调用展开全文', () => {
+  it('画布估高不随展开态变高，卡片路径不再调用展开全文', () => {
     const body = Array.from({ length: 20 }, () => '一二三四五六七八九十').join('\n')
     const base = { title: '标题', body, meta: '12 字', width: 280 }
     expect(estimateSnowCardHeight({ ...base, expanded: true })).toBe(estimateSnowCardHeight({ ...base, expanded: false }))
@@ -40,7 +40,7 @@ describe('切片 C 前端', () => {
     expect(read('src/card-layout.ts')).not.toContain('function snowExpandLabel')
   })
 
-  it('折叠属于人物表格行，不在画布卡面上', () => {
+  it('折叠属于人物表格行，不在画布卡片上', () => {
     const cast = read('src/CastPage.tsx')
     expect(cast).toContain('刷新后仍展开')
     expect(cast).not.toContain('刷新后全部收起')
@@ -50,7 +50,7 @@ describe('切片 C 前端', () => {
     expect(flow).not.toContain('snowExpandLabel')
   })
 
-  it('角标能从字段走到念头标题，再从念头走回字段', () => {
+  it('角标能从字段走到卡片标题，再从卡片走回字段', () => {
     let state = createDocument('trace')
     state = createCard(state, { id: 'idea-12', layer: 'situation', x: 0, y: 0, body: '奈德与小指头' })
     state = { ...state, entities: [person('p1')] }
@@ -85,7 +85,7 @@ describe('切片 C 前端', () => {
     expect(traceField(failed, 'p1', 'motivation').find((hit) => hit.eventId === 'e2')?.label).toBe('百科没写上')
   })
 
-  it('手填必须挂念头，账本是 manual 且没有会话号', () => {
+  it('手填必须挂卡片，账本是 manual 且没有会话号', () => {
     let state = createDocument('manual')
     state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '门口的人' })
     state = createCard(state, { id: 'pcard', layer: 'renwubiao', x: 40, y: 0, fields: { name: '奈德', grade: '主要' } })

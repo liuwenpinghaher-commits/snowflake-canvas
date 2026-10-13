@@ -135,11 +135,11 @@ describe('分组流水线完成度', () => {
     expect(cardCountsAsDone({ layer: 'changci', body: '', fields: { structureKind: 'active' } })).toBe(true)
   })
 
-  it('同一层多张卡只算一层，念头不进四组', () => {
+  it('同一层多张卡只算一层，卡片不进四组', () => {
     const cards: Record<string, Card> = {
       a: { layer: '一段', body: '背景：雪', fields: { background: '雪夜' } },
       b: { layer: '一段', body: '背景：雨', fields: { background: '雨夜' } },
-      c: { layer: 'situation', body: '一个念头', fields: {} },
+      c: { layer: 'situation', body: '一个卡片', fields: {} },
     }
     expect(labels(cards)).toEqual(['立意 1/2', '人物 0/3', '结构 0/3', '成稿 0/1'])
   })

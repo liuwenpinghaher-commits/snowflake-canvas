@@ -153,7 +153,7 @@ function clock(iso: string | undefined): { short: string; full: string } | null 
 export function sessionLabel(item: DiscussSession): string {
   const ask = typeof item.firstAsk === 'string' ? item.firstAsk.trim() : ''
   const date = new Date(item.createdAt)
-  if (Number.isNaN(date.getTime())) return ask ? `念头讨论 ${ask}` : '念头讨论'
+  if (Number.isNaN(date.getTime())) return ask ? `卡片讨论 ${ask}` : '卡片讨论'
   const when = new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -161,7 +161,7 @@ export function sessionLabel(item: DiscussSession): string {
     minute: '2-digit',
     second: '2-digit',
   }).format(date)
-  return ask ? `${when} ${ask}` : `念头讨论 ${when}`
+  return ask ? `${when} ${ask}` : `卡片讨论 ${when}`
 }
 
 export function adoptionText(content: string): string {
@@ -249,7 +249,7 @@ export function AssistantActions({
       {item.brainSlug ? <p className="brain-mark">已写入脑：{item.brainSlug}</p> : null}
       <div className="log-actions">
         <button type="button" onClick={onAdopt}>
-          采纳进本念头
+          采纳进本卡片
         </button>
         <button type="button" onClick={() => onSediment?.()}>
           沉淀到…
@@ -965,7 +965,7 @@ export default function CardDiscuss({
       await onCommitRef.current(cardId, next)
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
-      setNotice(message || '正文没有写上。再点一次「采纳进本念头」。')
+      setNotice(message || '正文没有写上。再点一次「采纳进本卡片」。')
       return
     }
     const unsaved = '正文已写进卡片，但「已采纳」记录没存上，重开浮窗后不会显示已采纳。'
@@ -1125,7 +1125,7 @@ export default function CardDiscuss({
             value={draft}
             readOnly={busy}
             rows={2}
-            placeholder="接着这张念头写一句，Enter 发送"
+            placeholder="接着这张卡片写一句，Enter 发送"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onDraftKey}
           />
@@ -1193,7 +1193,7 @@ function SedimentPanel({
   const [busy, setBusy] = useState(false)
   const requestRef = useRef<string | null>(null)
   const idea = cards[cardId]
-  const ideaName = idea ? cardFace(idea).title.trim() || '未命名念头' : '当前念头'
+  const ideaName = idea ? cardFace(idea).title.trim() || '未命名卡片' : '当前卡片'
 
   async function submit() {
     if (blocked || !fieldKey || fieldKey === 'philosophy' || !quote.trim() || !sessionId) return
@@ -1319,8 +1319,8 @@ function SedimentPanel({
         </label>
       </fieldset>
       <label>
-        挂到念头
-        <input aria-label="挂到念头" value={ideaName} disabled readOnly />
+        归入卡片/视图
+        <input aria-label="归入卡片/视图" value={ideaName} disabled readOnly />
       </label>
       <label>
         摘录

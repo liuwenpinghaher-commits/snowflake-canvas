@@ -20,12 +20,12 @@ function personDocument(slug: string | null = 'world/ned-stark') {
   if (typeof slug === 'string' && slug.trim()) entity.slug = slug.trim()
   return {
     canvas: {
-      nodes: [{ id: 'card-1', type: 'text', x: 0, y: 0, width: 280, height: 120, text: '念头' }],
+      nodes: [{ id: 'card-1', type: 'text', x: 0, y: 0, width: 280, height: 120, text: '卡片' }],
       edges: [],
     },
     snowflake: {
       fileId: 'sed-file',
-      cards: { 'card-1': { layer: 'situation', body: '念头', fields: {} } },
+      cards: { 'card-1': { layer: 'situation', body: '卡片', fields: {} } },
     },
     entities: [entity],
     sediment: [] as Array<Record<string, unknown>>,
@@ -35,7 +35,7 @@ function personDocument(slug: string | null = 'world/ned-stark') {
 function sessionStore() {
   let store = withSession({ cards: {} }, 'card-1', {
     sessionId: 'sess-1',
-    title: '念头讨论',
+    title: '卡片讨论',
     createdAt: '2026-10-11T00:00:00.000Z',
     cardId: 'card-1',
   })
@@ -131,7 +131,7 @@ describe('沉淀和升格的页竞态', () => {
     expect(calls).toBe(2)
   })
 
-  it('卡面建页被拒绝时不调用 addTimeline，日志仍有 page_not_found', async () => {
+  it('卡片建页被拒绝时不调用 addTimeline，日志仍有 page_not_found', async () => {
     let adds = 0
     const result = await writeSediment(
       { document: personDocument(), store: sessionStore(), bookId: 'book-1', body: sedimentBody('req-empty') },
@@ -151,7 +151,7 @@ describe('沉淀和升格的页竞态', () => {
     expect(logged).toContain('page_not_found')
   })
 
-  it('页已在时不把正文当需要覆盖，读回通过才标 written，建页用的是折进书之后的卡面', async () => {
+  it('页已在时不把正文当需要覆盖，读回通过才标 written，建页用的是折进书之后的卡片', async () => {
     let adds = 0
     let seenValue = ''
     const result = await writeSediment(

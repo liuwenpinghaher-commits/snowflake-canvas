@@ -37,7 +37,7 @@ async function loadPage(slug: string, bookId: string | null): Promise<LoadedPage
 }
 
 function ideaOptionTitle(state: AppState, id: string): string {
-  if (!state.snowflake.cards[id]) return '新念头'
+  if (!state.snowflake.cards[id]) return '新卡片'
   return ideaTitle(state, id)
 }
 
@@ -155,7 +155,7 @@ function EntityDetail({
         layer: 'situation',
         x: 40,
         y: 40,
-        body: entity.name.trim() || '念头',
+        body: entity.name.trim() || '卡片',
       })
       if (withCard === current) return current
       return addEdge(withCard, id, entity.id, 'projects-onto')
@@ -165,7 +165,7 @@ function EntityDetail({
   function pull() {
     if (!canEdit) return
     if (!ideaId.trim()) {
-      setPullError('没有念头不能保存')
+      setPullError('没有卡片不能保存')
       return
     }
     if (!pageText || pageText.failed) {
@@ -174,14 +174,14 @@ function EntityDetail({
     }
     const text = pageText.finalized.trim()
     if (!text) {
-      setPullError('定稿是空的，没有写回卡面')
+      setPullError('定稿是空的，没有写回卡片')
       return
     }
     const requestId = crypto.randomUUID()
     const at = new Date().toISOString()
     const preview = pullFinalized(state, { entityId: entity.id, ideaId, text, requestId, at })
     if (!preview.saved) {
-      setPullError('没有写回卡面')
+      setPullError('没有写回卡片')
       return
     }
     setPullError('')
@@ -235,12 +235,12 @@ function EntityDetail({
       ) : null}
       <div className="encyclopedia-actions">
         <button type="button" disabled={!canEdit || pending} onClick={() => void promote()}>
-          升格卡面到定稿
+          把卡片写入定稿
         </button>
         <label>
-          念头
-          <select aria-label="念头" value={ideaId} onChange={(event) => setIdeaId(event.target.value)}>
-            <option value="">选一条已有投影念头</option>
+          卡片
+          <select aria-label="卡片" value={ideaId} onChange={(event) => setIdeaId(event.target.value)}>
+            <option value="">选一条已有卡片</option>
             {options.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title}
@@ -249,10 +249,10 @@ function EntityDetail({
           </select>
         </label>
         <button type="button" disabled={!canEdit} onClick={createIdea}>
-          新建一条念头
+          新建一条卡片
         </button>
         <button type="button" disabled={!canEdit} onClick={pull}>
-          拉定稿回卡面
+          用定稿覆盖卡片正文
         </button>
       </div>
       {pullError ? (

@@ -221,7 +221,7 @@ export default function SideEditor({
         <div className="side-face-wrap">
           <div className="side-face-bar">
             <button type="button" onClick={() => setFaceOpen((open) => !open)}>
-              {faceOpen ? '收起卡面' : '展开卡面'}
+              {faceOpen ? '收起卡片' : '展开卡片'}
             </button>
           </div>
           <div className={faceOpen ? 'side-face is-open' : 'side-face'}>
@@ -315,7 +315,7 @@ export default function SideEditor({
         <p className="hint">
           {groupSelected
             ? '这是分组，没有雪花卡片。删分组不会带走圈里的卡片。'
-            : '点一张卡片，在这里改。空白处双击，或点「新建念头」，放一张念头。'}
+            : '点一张卡片，在这里改。空白处双击，或点「新建卡片」，放一张卡片。'}
         </p>
       )}
 
@@ -429,8 +429,8 @@ function IdeaGrowthList({
   const hits = traceIdeaFields(state, ideaId)
   if (hits.length === 0) return null
   return (
-    <section className="idea-growth" aria-label="这条念头长出了什么">
-      <h3>这条念头长出了什么</h3>
+    <section className="idea-growth" aria-label="这条卡片长出了什么">
+      <h3>这条卡片长出了什么</h3>
       <ul>
         {hits.map((hit) => {
           const line = formatGrowthLine(state, hit)

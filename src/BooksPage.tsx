@@ -110,7 +110,7 @@ function NewBookWizard({
             </label>
             <label className="wizard-choice">
               <input type="radio" name="import" checked={importMode === 'text'} onChange={() => setImportMode('text')} />
-              贴一段设定文字，建书后放成第一张念头卡
+              贴一段设定文字，建书后放成第一张卡片
             </label>
             <label className="wizard-choice">
               <input type="radio" name="import" checked={importMode === 'json'} onChange={() => setImportMode('json')} />
@@ -120,7 +120,7 @@ function NewBookWizard({
               <textarea
                 className="wizard-seed"
                 aria-label="设定文字"
-                placeholder="世界观、主角、开头的念头……"
+                placeholder="世界观、主角、开头的卡片……"
                 value={seedText}
                 onChange={(event) => setSeedText(event.currentTarget.value)}
               />
@@ -249,7 +249,7 @@ function NewBookWizard({
                 {importMode === 'none'
                   ? '空白画布'
                   : importMode === 'text'
-                    ? `一张念头卡（${[...seedText.trim()].length} 字）`
+                    ? `一张卡片（${[...seedText.trim()].length} 字）`
                     : `导入 ${preview?.stats.cards ?? 0} 张卡`}
               </dd>
             </dl>

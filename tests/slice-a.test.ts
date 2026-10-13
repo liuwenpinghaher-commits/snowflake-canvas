@@ -84,7 +84,7 @@ function sediment(partial: Partial<SedimentEvent> & Pick<SedimentEvent, 'id' | '
 describe('切片 A 数据模型', () => {
   it('账本按追加、替换、否定折叠，同一 requestId 不重复折进字段', () => {
     let state = createDocument('fold')
-    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '卡片' })
     state = { ...state, entities: [personEntity('p1')] }
 
     state = applySediment(state, sediment({ id: 'a', requestId: 'ra', action: 'append', quote: '第一段', at: '2026-10-11T00:00:01.000Z' }))
@@ -116,7 +116,7 @@ describe('切片 A 数据模型', () => {
 
   it('addEdge 拒绝非法组合并返回原来的 state', () => {
     let state = createDocument('edges')
-    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '卡片' })
     state = createCard(state, { id: 'scene', layer: '场景表', x: 20, y: 0, fields: { title: '门口' } })
     state = createCard(state, { id: 'beat', layer: 'changci', x: 40, y: 0, fields: { task: '问一句' } })
     state = { ...state, entities: [personEntity('ent-person')] }
@@ -137,7 +137,7 @@ describe('切片 A 数据模型', () => {
     let state = createDocument('merge')
     state = createCard(state, { id: 'keep', layer: 'renwubiao', x: 0, y: 0, fields: { name: '奈德' } })
     state = createCard(state, { id: 'drop', layer: 'renwubiao', x: 40, y: 0, fields: { name: '奈德' } })
-    state = createCard(state, { id: 'other', layer: 'situation', x: 80, y: 0, body: '另一条念头' })
+    state = createCard(state, { id: 'other', layer: 'situation', x: 80, y: 0, body: '另一条卡片' })
     state = setCardBody(state, 'keep', '留下的正文')
     state = setCardBody(state, 'drop', '被并的正文')
     state = {
@@ -184,7 +184,7 @@ describe('切片 A 数据模型', () => {
     expect(next.canvas.edges.some((edge) => edge.fromNode === 'keep' && edge.toNode === 'other' && edge.kind === 'relates')).toBe(true)
   })
 
-  it('正文四步：空正文抄入卡面，两边不同则标分叉且两份都留着', () => {
+  it('正文四步：空正文抄入卡片，两边不同则标分叉且两份都留着', () => {
     const copied = open({
       canvas: { nodes: [], edges: [] },
       snowflake: {

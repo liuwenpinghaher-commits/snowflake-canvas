@@ -109,11 +109,11 @@ describe('界面审查第 2 轮：其余条目', () => {
     expect(css).toContain('border: 1px solid #c8bfb0')
   })
 
-  it('没有卡片时提示一直在，并且能新建念头', () => {
+  it('没有卡片时提示一直在，并且能新建卡片', () => {
     expect(app).toContain('const noCards = Object.keys(state.snowflake.cards).length === 0')
     expect(app).toContain('{noCards || hintOpen ? (')
     const hint = app.slice(app.indexOf('className="canvas-hint"'), app.indexOf('className="canvas-hint"') + 500)
-    expect(hint).toContain('新建念头')
+    expect(hint).toContain('新建卡片')
     expect(hint).toContain('createThought')
     expect(hint).toContain('知道了')
   })

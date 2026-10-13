@@ -134,7 +134,7 @@ export function ideaOptions(state: AppState): { id: string; title: string }[] {
   const options: { id: string; title: string }[] = []
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
     if (card.layer !== 'situation') continue
-    const title = cardFace(card).title.trim() || '未命名念头'
+    const title = cardFace(card).title.trim() || '未命名卡片'
     options.push({ id, title })
   }
   return options
@@ -142,8 +142,8 @@ export function ideaOptions(state: AppState): { id: string; title: string }[] {
 
 export function ideaTitle(state: AppState, ideaId: string): string {
   const card = state.snowflake.cards[ideaId]
-  if (!card) return '找不到这条念头'
-  return cardFace(card).title.trim() || '未命名念头'
+  if (!card) return '找不到这条卡片'
+  return cardFace(card).title.trim() || '未命名卡片'
 }
 
 export function projectingIdeas(state: AppState, entityId: string): { id: string; title: string }[] {
@@ -163,7 +163,7 @@ export function projectedPersons(entities: readonly Entity[], edges: readonly Ca
   return entities.filter((entity) => entity.entityType === 'person' && ids.has(entity.id))
 }
 
-export const MANY_PERSONS_HINT = '这条念头连着多个人，先点一个'
+export const MANY_PERSONS_HINT = '这条卡片连着多个人，先点一个'
 
 export type SedimentDefault =
   | { step: 1 | 2 | 4; entityId: string }

@@ -202,7 +202,7 @@ export const FIELD_LABEL: Record<string, string> = {
 }
 
 const LAYER_LABEL: Record<Layer, string> = {
-  situation: '念头',
+  situation: '卡片',
   一句话: '一句话',
   一段: '一段',
   renwubiao: '人物表',
@@ -979,7 +979,7 @@ export type CardBodySource = {
   fieldKey: string | null
 }
 
-// 卡片上要画进 .snow-body 的那段。卡面正文有字就用它；没有时改用字段里比标题更长的那段。
+// 卡片上要画进 .snow-body 的那段。卡片正文有字就用它；没有时改用字段里比标题更长的那段。
 export function bodyTextForCard(card: Card): CardBodySource {
   const face = cardFace(card)
   const faceBody = face.body.trim()

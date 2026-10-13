@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { estimateSnowCardHeight } from '../src/card-layout.ts'
 import { bodyTextForCard, cardFace, type Card } from '../src/document.ts'
 
-describe('画布卡面不再按溢出决定展开全文', () => {
-  it('卡面正文为空时，改量字段里比标题更长的那段', () => {
+describe('画布卡片不再按溢出决定展开全文', () => {
+  it('卡片正文为空时，改量字段里比标题更长的那段', () => {
     const card: Card = {
       layer: 'renwubiao',
       body: '',
@@ -21,7 +21,7 @@ describe('画布卡面不再按溢出决定展开全文', () => {
     expect(bodyTextForCard(sentence).text).toBe('')
   })
 
-  it('卡面没有展开全文或收起，估高不随展开态变高', () => {
+  it('卡片没有展开全文或收起，估高不随展开态变高', () => {
     const flow = readFileSync(join(process.cwd(), 'src/FlowCanvas.tsx'), 'utf8')
     const snow = flow.slice(flow.indexOf('function SnowCard('), flow.indexOf('function SnowGroup('))
     expect(snow).not.toContain('展开全文')

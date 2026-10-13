@@ -73,7 +73,7 @@ async function startServer(mode: GbrainMode): Promise<Running> {
   const home = await mkdtemp(join(tmpdir(), 'snowflake-capture-home-'))
   const store = withSession({ cards: {} }, 'card-a', {
     sessionId: 's1',
-    title: '念头讨论',
+    title: '卡片讨论',
     createdAt: '2026-10-09T02:00:00.000Z',
     cardId: 'card-a',
   })
@@ -164,7 +164,7 @@ function actions(item: ChatMessage, extra: { writing?: boolean; finished?: boole
 describe('写入脑按钮在 AI 回复上', () => {
   it('写完的 AI 回复：采纳、复制旁边有「写入脑」', () => {
     const html = actions(reply())
-    expect(html).toContain('采纳进本念头')
+    expect(html).toContain('采纳进本卡片')
     expect(html).toContain('复制')
     expect(html).toMatch(/<button[^>]*>写入脑<\/button>/)
     expect(html.indexOf('写入脑')).toBeGreaterThan(html.indexOf('复制'))
@@ -174,7 +174,7 @@ describe('写入脑按钮在 AI 回复上', () => {
     expect(actions(reply({ role: 'user' }))).toBe('')
     expect(actions(reply({ content: '  \n ' }))).toBe('')
     const streaming = actions(reply(), { finished: false })
-    expect(streaming).toContain('采纳进本念头')
+    expect(streaming).toContain('采纳进本卡片')
     expect(streaming).not.toContain('写入脑')
   })
 

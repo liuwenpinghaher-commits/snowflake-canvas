@@ -86,7 +86,7 @@ describe('书籍页统计和导入预览', () => {
   })
 
   it('导入认信封和裸正本，读不出画布就拒绝', () => {
-    const doc = { canvas: { nodes: [{ type: 'text', text: '念头' }], edges: [] } }
+    const doc = { canvas: { nodes: [{ type: 'text', text: '卡片' }], edges: [] } }
     expect(readImportFile(JSON.stringify({ version: 3, document: doc }))?.stats.words).toBe(2)
     expect(readImportFile(JSON.stringify(doc))?.stats.cards).toBe(1)
     expect(readImportFile('{"a":1}')).toBeNull()
@@ -101,7 +101,7 @@ describe('书籍页统计和导入预览', () => {
   })
 })
 
-describe('卡面默认折叠到 160px，展开后不限高', () => {
+describe('卡片默认折叠到 160px，展开后不限高', () => {
   it('.side-face 限高可滚动，.side-face.is-open 取消限高', () => {
     const css = read('src/index.css')
     const rule = (selector: string) => {

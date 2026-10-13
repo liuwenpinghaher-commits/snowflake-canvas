@@ -51,10 +51,10 @@ function groups(on: RelationGroup | null): RelationFilter['groups'] {
 }
 
 describe('切片 D 关系图与章节', () => {
-  it('默认只看设定物和出场、实体关系，打开念头层后念头和横向关系才出现', () => {
+  it('默认只看设定物和出场、实体关系，打开卡片层后卡片和横向关系才出现', () => {
     let state = createDocument('dual')
-    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '门口的念头' })
-    state = createCard(state, { id: 'idea-2', layer: 'situation', x: 20, y: 0, body: '城里的念头' })
+    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '门口的卡片' })
+    state = createCard(state, { id: 'idea-2', layer: 'situation', x: 20, y: 0, body: '城里的卡片' })
     state = createCard(state, { id: 'beat', layer: 'changci', x: 40, y: 0, fields: { task: '进门' } })
     state = {
       ...state,
@@ -104,7 +104,7 @@ describe('切片 D 关系图与章节', () => {
     expect(opened.edges.some((edge) => edge.kind === 'relates' && edge.relation === '冲突')).toBe(true)
 
     const html = renderToStaticMarkup(createElement(RelationPage, { state }))
-    expect(html).toContain('念头层')
+    expect(html).toContain('卡片层')
     expect(html).toContain('生长派生')
     expect(html).toContain('横向关系')
     expect(html).toContain('投影边')
@@ -112,7 +112,7 @@ describe('切片 D 关系图与章节', () => {
     expect(html).toContain('实体关系')
     expect(html).toContain('伏笔线')
     expect(html).toContain('出场：奈德')
-    expect(html).not.toContain('门口的念头')
+    expect(html).not.toContain('门口的卡片')
   })
 
   it('六组开关各自只放行对应 kind', () => {

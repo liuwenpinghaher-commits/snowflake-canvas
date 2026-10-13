@@ -483,7 +483,7 @@ export default function App() {
     lastVersionRef.current = { bookId, version: liveVersion }
   }, [bookId, liveVersion])
 
-  // 向导里贴的设定文字，等新书能写了再放成第一张念头卡。
+  // 向导里贴的设定文字，等新书能写了再放成第一张卡片。
   useEffect(() => {
     const seed = seedRef.current
     if (!seed || seed.bookId !== bookId || !snap.view.canEdit) return
@@ -807,7 +807,7 @@ export default function App() {
             disabled={!canEdit}
             onClick={createThought}
           >
-            新建念头
+            新建卡片
           </button>
           <NamedMenu id="more-menu-pop" label="更多">
           <span className="top-chip is-muted" aria-label={`正本状态：${canonLabel(view)}`}>
@@ -1096,10 +1096,10 @@ export default function App() {
         <h1 className="sr-only">{currentBook?.name || '未命名书'}</h1>
         {noCards || hintOpen ? (
           <div className="canvas-hint" role="note">
-            <p>空白处双击放一张念头。点一张卡片，左边改字段，右边单独打开讨论；窄屏时字段收在底部。从卡片右边拖出去，长出后面的层。</p>
+            <p>空白处双击放一张卡片。点一张卡片，左边改字段，右边单独打开讨论；窄屏时字段收在底部。从卡片右边拖出去，长出后面的层。</p>
             {noCards ? (
               <button type="button" disabled={!canEdit} onClick={createThought}>
-                新建念头
+                新建卡片
               </button>
             ) : (
               <button type="button" onClick={closeHint}>

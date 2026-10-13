@@ -39,7 +39,7 @@ export function mentionLabel(state: AppState, kind: MentionKind, id: string): st
   return entity.name.trim() || '未命名'
 }
 
-/** 卡面摘要走 visibleProse：标记换成当前名字，没有目标时是「找不到」。 */
+/** 卡片摘要走 visibleProse：标记换成当前名字，没有目标时是「找不到」。 */
 export function shownProse(text: string, state: AppState): string {
   return visibleProse(text, (kind, id) => mentionLabel(state, kind, id))
 }
@@ -65,7 +65,7 @@ export function filterMentionTargets(targets: readonly MentionCandidate[], query
 }
 
 /**
- * 念头和正文草稿的正文在 body。一句话写在 sentence，body 是同一份拷贝，只计一次。
+ * 卡片和正文草稿的正文在 body。一句话写在 sentence，body 是同一份拷贝，只计一次。
  * 其它层用户写在 fields；body 是字段拼出来的摘要，再计一次会把同一处算成两处。
  * 有落盘块时按块计，不用拼回后的整段字符串。
  */

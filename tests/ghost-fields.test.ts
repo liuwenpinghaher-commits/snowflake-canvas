@@ -142,7 +142,7 @@ async function blurSave(fieldKey: string, from: string, to: string, ideaId = '')
   return { shown, state: again.ctl.snapshot().state, bytes }
 }
 
-describe('人物字段隐形框，不选念头也能落盘', () => {
+describe('人物字段隐形框，不选卡片也能落盘', () => {
   it('人物名编辑后失焦提交，重进页面仍是新名字', async () => {
     const saved = await blurSave('name', '奈德', '林晚')
     expect(saved.shown).toBe('林晚')
@@ -172,7 +172,7 @@ describe('人物字段隐形框，不选念头也能落盘', () => {
     expect(saved.state.sediment ?? []).toEqual([])
   })
 
-  it('选了念头时，改动仍归到那条念头', async () => {
+  it('选了卡片时，改动仍归到那条卡片', async () => {
     const saved = await blurSave('role', '守门人', '守夜人', 'idea')
     expect(saved.shown).toBe('守夜人')
     const entity = personOf(saved.state)
@@ -210,18 +210,18 @@ describe('人物字段隐形框，不选念头也能落盘', () => {
     expect(bytes && Buffer.from(bytes).equals(Buffer.from(before!))).toBe(true)
   })
 
-  it('页面文案不再要求先选念头，保存按钮已去掉', () => {
+  it('页面文案不再要求先选卡片，保存按钮已去掉', () => {
     const cast = read('src/CastPage.tsx')
     expect(cast).toContain('归入卡片/视图（可选）')
     expect(cast).toContain('finishGhostEdit')
     expect(cast).toContain('commitPersonField')
     expect(cast).toContain('onBlur')
     expect(cast).toContain("event.key === 'Escape'")
-    expect(cast).not.toContain('不选念头不能保存')
+    expect(cast).not.toContain('不选卡片不能保存')
     expect(cast).not.toContain('保存类别')
     expect(cast).not.toContain('>保存<')
     expect(cast).toContain('去讨论')
-    expect(cast).toContain('新建一条念头')
+    expect(cast).toContain('新建一条卡片')
     expect(cast).toContain('沉淀账本')
   })
 })

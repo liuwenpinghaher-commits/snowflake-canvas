@@ -500,7 +500,7 @@ export function PersonZones({
     const shift = state.canvas.nodes.length * 28
     const next = createCard(state, { id, layer: 'situation', x: 80 + shift, y: 80 + shift, body: '' })
     if (next === state) {
-      setNotice('新念头没有建成')
+      setNotice('新卡片没有建成')
       return
     }
     setIdeaId(id)
@@ -526,7 +526,7 @@ export function PersonZones({
           ))}
         </select>
         <button type="button" disabled={!canEdit} onClick={createIdea}>
-          新建一条念头
+          新建一条卡片
         </button>
       </label>
       {notice ? (
@@ -897,7 +897,7 @@ function FieldLine({
                 </button>
               ) : (
                 <button type="button" onClick={() => onOpenIdea(hit.ideaId)}>
-                  打开念头
+                  打开卡片
                 </button>
               )}
             </li>

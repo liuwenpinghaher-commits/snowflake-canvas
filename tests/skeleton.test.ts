@@ -197,7 +197,7 @@ describe('雪花画布骨架', () => {
 
   it('从卡片拖出下一层，也可以改成更后面的层', () => {
     let state = createDocument('file-2')
-    state = createCard(state, { id: 'a', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'a', layer: 'situation', x: 0, y: 0, body: '卡片' })
     state = spawnChild(state, 'a', undefined, 300, 0, 'b')
     expect(cardOf(state, 'b').layer).toBe('一句话')
     expect(state.canvas.edges.some((edge) => edge.fromNode === 'a' && edge.toNode === 'b')).toBe(true)

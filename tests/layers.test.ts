@@ -17,7 +17,7 @@ import {
 import { parseCompleteDocument } from '../src/persist.ts'
 
 const LABEL: Record<Layer, string> = {
-  situation: '念头',
+  situation: '卡片',
   一句话: '一句话',
   一段: '一段',
   renwubiao: '人物表',
@@ -44,7 +44,7 @@ function load(document: unknown) {
 describe('十层雪花', () => {
   it('界面层名是中文，十层颜色互不重复，默认下一层按这个顺序', () => {
     expect(LAYERS.map((layer) => layerLabel(layer))).toEqual(Object.values(LABEL))
-    expect(layerLabel('situation')).toBe('念头')
+    expect(layerLabel('situation')).toBe('卡片')
     let layer: Layer | null = 'situation'
     const seen: Layer[] = []
     while (layer) {
@@ -59,7 +59,7 @@ describe('十层雪花', () => {
     expect(new Set(colors).size).toBe(LAYERS.length)
   })
 
-  it('从念头按默认顺序长出十层，边把相邻两层连上', () => {
+  it('从卡片按默认顺序长出十层，边把相邻两层连上', () => {
     let state = createDocument('chain')
     state = createCard(state, { id: 'n0', layer: 'situation', x: 0, y: 0, body: '门口那个人' })
     for (let index = 1; index < LAYERS.length; index += 1) {
@@ -269,7 +269,7 @@ describe('十层雪花', () => {
     })
   })
 
-  it('认不出的层名不会让整份文档打不开，原文留在念头正文开头', () => {
+  it('认不出的层名不会让整份文档打不开，原文留在卡片正文开头', () => {
     const state = load({
       canvas: { nodes: [node('odd', 0), node('sent', 20)], edges: [] },
       snowflake: {

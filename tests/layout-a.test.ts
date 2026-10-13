@@ -22,8 +22,8 @@ function card(partial: Partial<ShiftBox> & Pick<ShiftBox, 'id' | 'x' | 'y' | 'he
   }
 }
 
-describe('画布卡面按 3 行摘要估高', () => {
-  it('正文最多按 3 行计入，卡面不再为展开条留样式', () => {
+describe('画布卡片按 3 行摘要估高', () => {
+  it('正文最多按 3 行计入，卡片不再为展开条留样式', () => {
     expect(BODY_LINE_CAP).toBe(3)
     const css = read('src/index.css')
     expect(css).not.toContain('line-clamp')
@@ -69,7 +69,7 @@ describe('画布卡面按 3 行摘要估高', () => {
     expect(estimateSnowCardHeight(input(20, false, true))).toBe(h20)
   })
 
-  it('卡面没有展开全文或收起，折叠不在画布上', () => {
+  it('卡片没有展开全文或收起，折叠不在画布上', () => {
     const flow = read('src/FlowCanvas.tsx')
     const snow = flow.slice(flow.indexOf('function SnowCard('), flow.indexOf('function SnowGroup('))
     expect(snow).not.toContain('snowExpandLabel(')
@@ -94,8 +94,8 @@ describe('画布卡面按 3 行摘要估高', () => {
 
 describe('讨论标题用卡片标题，没有标题就用层名', () => {
   it('有标题用标题，空白标题退回层名', () => {
-    expect(discussCardName('门口的人', '念头')).toBe('门口的人')
-    expect(discussCardName('  ', '念头')).toBe('念头')
+    expect(discussCardName('门口的人', '卡片')).toBe('门口的人')
+    expect(discussCardName('  ', '卡片')).toBe('卡片')
     expect(discussCardName('', '人物表')).toBe('人物表')
   })
 })
@@ -109,12 +109,12 @@ describe('顶栏常用按钮留在外面，其余分进版本、书籍、设置'
   const settings = header.slice(header.indexOf('label="设置"'))
   const menuFn = app.slice(app.indexOf('function NamedMenu'), app.indexOf('export default function App'))
 
-  it('顶栏一行：当前书、字数、保存状态、正本状态、新建念头，以及版本、书籍、设置', () => {
+  it('顶栏一行：当前书、字数、保存状态、正本状态、新建卡片，以及版本、书籍、设置', () => {
     expect(header).toContain('aria-label="当前书"')
     expect(header).toContain('className="top-words"')
     expect(header).toContain('保存状态')
     expect(header).toContain('正本状态')
-    expect(resident).toContain('新建念头')
+    expect(resident).toContain('新建卡片')
     expect(header).not.toContain('<h1>')
     expect(header).not.toContain('top-hint')
     expect(resident).not.toContain('MSG_KEEP_SNAPSHOT')

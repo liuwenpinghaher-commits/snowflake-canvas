@@ -49,7 +49,7 @@ export const RELATION_GROUP_LABEL: Record<RelationGroup, string> = {
 const IDEA_GROUPS: readonly RelationGroup[] = ['grows-from', 'relates', 'projects-onto', 'foreshadow']
 
 export interface RelationFilter {
-  /** 勾上后念头节点出现，生长派生、横向关系、投影边、伏笔线也跟着出现。 */
+  /** 勾上后卡片节点出现，生长派生、横向关系、投影边、伏笔线也跟着出现。 */
   ideaLayer: boolean
   groups: Record<RelationGroup, boolean>
   /**
@@ -98,7 +98,7 @@ export interface RelationGraph {
 
 function ideaLabel(body: string): string {
   const text = body.trim()
-  if (!text) return '念头'
+  if (!text) return '卡片'
   return [...text].slice(0, 40).join('')
 }
 
@@ -184,7 +184,7 @@ export function buildRelationGraph(state: AppState, filter: RelationFilter = def
     const fromNode = catalog.get(edge.fromNode)
     const toNode = catalog.get(edge.toNode)
     if (edge.kind === 'appears-in') {
-      // 出场的一端是场次卡，不在念头层，也不占设定物节点。设定物那一端在图上就保留这条边。
+      // 出场的一端是场次卡，不在卡片层，也不占设定物节点。设定物那一端在图上就保留这条边。
       const entityNode = [fromNode, toNode].find((node) => node !== undefined && node.layer === 'entity' && visible.has(node.id))
       const otherId = entityNode?.id === edge.fromNode ? edge.toNode : edge.fromNode
       const otherKnown = Boolean(state.snowflake.cards[otherId] || catalog.get(otherId))

@@ -96,7 +96,7 @@ describe('P1d 实体上画布、拖线、脚注、前提、出场', () => {
     expect(read('src/SideEditor.tsx')).toContain('标为全书前提')
   })
 
-  it('念头拖到实体时合法选项含投影，确认后脚注是投影 1，边不往字段写字', () => {
+  it('卡片拖到实体时合法选项含投影，确认后脚注是投影 1，边不往字段写字', () => {
     let state = createDocument('b8')
     state = createCard(state, { id: 'idea-ned', layer: 'situation', x: 0, y: 0, body: '奈德与小指头' })
     state = {
@@ -139,7 +139,7 @@ describe('P1d 实体上画布、拖线、脚注、前提、出场', () => {
 
   it('两端不能连时不写边，章节归属不进拖线面板', () => {
     let state = createDocument('illegal')
-    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '卡片' })
     state = createCard(state, { id: 'beat', layer: 'changci', x: 20, y: 0, fields: { task: '进门' } })
     state = {
       ...state,
@@ -453,7 +453,7 @@ describe('P1d 关系图点击面板', () => {
     expect(projectHtml).toContain('账上这句话')
 
     const bareProject = chooseCanvasLink(
-      createCard({ ...createDocument('bare'), entities: [person('ned', '奈德')] }, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '念头' }),
+      createCard({ ...createDocument('bare'), entities: [person('ned', '奈德')] }, { id: 'idea', layer: 'situation', x: 0, y: 0, body: '卡片' }),
       'idea',
       'ned',
       'projects-onto',

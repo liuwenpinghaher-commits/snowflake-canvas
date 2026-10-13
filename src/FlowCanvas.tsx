@@ -68,7 +68,7 @@ function FootnoteRow({
 }) {
   if (segments.length === 0) return null
   return (
-    <div className="snow-footnotes" aria-label="卡面脚注">
+    <div className="snow-footnotes" aria-label="卡片脚注">
       {segments.map((segment, index) => (
         <span key={segment.text}>
           {index > 0 ? ' · ' : null}
@@ -182,11 +182,11 @@ function toFlowNode(
     }
   }
   const face = card ? cardFace(card) : { title: node.text ?? '', body: '', meta: '' }
-  // 卡面 body 为空时，用字段里多出来、会画在正文上的那段，避免只去量一段空正文。
-  // 引用标记在这里换成当前名字，卡面上不出现 [[sf:...]]。
+  // 卡片 body 为空时，用字段里多出来、会画在正文上的那段，避免只去量一段空正文。
+  // 引用标记在这里换成当前名字，卡片上不出现 [[sf:...]]。
   const bodyText = card ? shownProse(bodyTextForCard(card).text, state) : shownProse(face.body, state)
   const title = shownProse(face.title, state)
-  // 念头和正文草稿的「N 字」跟侧栏同一口径：标记本身不计，显示出来的名字计。
+  // 卡片和正文草稿的「N 字」跟侧栏同一口径：标记本身不计，显示出来的名字计。
   const counted =
     card && (card.layer === 'situation' || card.layer === '正文草稿')
       ? shownCharCount(card.body, state)

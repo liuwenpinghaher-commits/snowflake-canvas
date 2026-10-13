@@ -659,7 +659,7 @@ export default function RelationPage({
             checked={filter.ideaLayer}
             onChange={() => setFilter((current) => ({ ...current, ideaLayer: !current.ideaLayer }))}
           />
-          <span>念头层</span>
+          <span>卡片层</span>
           <RowCount n={visibleIdeaCount(displayed)} />
         </label>
         {RELATION_GROUPS.map((group) => (
@@ -718,7 +718,7 @@ export default function RelationPage({
             </tbody>
           </table>
         ) : displayed.nodes.length === 0 ? (
-          <p>还没有可画的设定物或念头。</p>
+          <p>还没有可画的设定物或卡片。</p>
         ) : (
           <div className="relation-graph">
             <div ref={hostRef} className="relation-cyto" role="img" aria-label="关系图" />
@@ -758,7 +758,7 @@ export default function RelationPage({
               ))}
               <span className="relation-legend-item">
                 <i className="relation-swatch is-circle" style={{ background: IDEA_COLOR }} />
-                念头
+                卡片
               </span>
               {EDGE_LOOKS.map((look) => (
                 <span key={look.cls} className="relation-legend-item">

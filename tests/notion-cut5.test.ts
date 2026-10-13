@@ -133,8 +133,8 @@ describe('Notion 切刀5', () => {
 
   it('关系表的行就是当前筛选下的那些边，从、到、种类对得上', () => {
     let state = createDocument('rel')
-    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '门口的念头' })
-    state = createCard(state, { id: 'idea-2', layer: 'situation', x: 20, y: 0, body: '城里的念头' })
+    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '门口的卡片' })
+    state = createCard(state, { id: 'idea-2', layer: 'situation', x: 20, y: 0, body: '城里的卡片' })
     state = createCard(state, { id: 'beat', layer: 'changci', x: 40, y: 0, fields: { task: '进门' } })
     state = {
       ...state,

@@ -17,7 +17,7 @@ export const ENTITY_TYPE_LABEL: Record<EntityType, string> = {
   'foreshadow-line': '伏笔线',
 }
 
-/** 拉回只写一条 replace。整页定稿落在「一句」上，人物卡面能看见。 */
+/** 拉回只写一条 replace。整页定稿落在「一句」上，人物卡片能看见。 */
 export const PULL_FIELD = 'sentence'
 
 export function bindLabel(slug: string | undefined): string {

@@ -68,7 +68,7 @@ function fakeGateway(rows: GatewayRow[]) {
 function storeWith(cardId: string, sessionId: string, extra: Record<string, unknown> = {}) {
   return withSession({ cards: {} }, cardId, {
     sessionId,
-    title: '念头讨论',
+    title: '卡片讨论',
     createdAt: '2026-10-09T02:00:00.000Z',
     cardId,
     ...extra,
@@ -330,15 +330,15 @@ describe('历史下拉显示每条首句', () => {
     const withAsk = sessionLabel({ sessionId: 's1', title: 't', createdAt, cardId: 'card-a', firstAsk: '主角为什么在门口犹豫' })
     const plain = sessionLabel({ sessionId: 's2', title: 't', createdAt, cardId: 'card-a' })
     expect(withAsk).toContain('主角为什么在门口犹豫')
-    expect(plain.startsWith('念头讨论 ')).toBe(true)
+    expect(plain.startsWith('卡片讨论 ')).toBe(true)
     expect(plain).not.toContain('主角')
-    const when = plain.slice('念头讨论 '.length)
+    const when = plain.slice('卡片讨论 '.length)
     expect(withAsk).toBe(`${when} 主角为什么在门口犹豫`)
   })
 
   it('新建会话发出第一条后存首问（截到 24 字）；旧会话不编；不覆盖已有首问', () => {
     let store = storeWith('card-a', 'new', { firstAskOpen: true })
-    store = withSession(store, 'card-a', { sessionId: 'old', title: '念头讨论', createdAt: '2026-10-01T00:00:00.000Z', cardId: 'card-a' })
+    store = withSession(store, 'card-a', { sessionId: 'old', title: '卡片讨论', createdAt: '2026-10-01T00:00:00.000Z', cardId: 'card-a' })
     const long = '这一段我想问问看主角在门口犹豫的那一刻到底是在怕什么还有后面的事'
     const first = withFirstAsk(store, 'card-a', 'new', `  ${long}  `)
     expect(first.changed).toBe(true)

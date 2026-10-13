@@ -57,7 +57,7 @@ describe('会话是日志行，不再左右分叉', () => {
     expect(discuss).not.toContain('className="avatar"')
     expect(discuss).toContain('className="log-row"')
     expect(discuss).toContain("mine ? '我' : 'AI'")
-    expect(discuss).toContain('采纳进本念头')
+    expect(discuss).toContain('采纳进本卡片')
     expect(discuss).toContain('写入脑')
     expect(discuss).toContain('重试')
     expect(discuss).toContain('已采纳')

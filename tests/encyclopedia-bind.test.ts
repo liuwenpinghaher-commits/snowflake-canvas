@@ -44,7 +44,7 @@ function person(id: string, name: string, type: Entity['entityType'] = 'person',
 function sessionStore() {
   let store = withSession({ cards: {} }, 'card-1', {
     sessionId: 'sess-1',
-    title: '念头讨论',
+    title: '卡片讨论',
     createdAt: '2026-10-11T00:00:00.000Z',
     cardId: 'card-1',
   })
@@ -80,7 +80,7 @@ function sedimentDocument(slug: string | null) {
     canvas: { nodes: [], edges: [] },
     snowflake: {
       fileId: 'sed-file',
-      cards: { 'card-1': { layer: 'situation', body: '念头', fields: {} } },
+      cards: { 'card-1': { layer: 'situation', body: '卡片', fields: {} } },
     },
     entities: [entity],
     sediment: [],
@@ -200,8 +200,8 @@ describe('百科绑定', () => {
     expect(html).toContain('临冬城')
     expect(html).toContain('地点')
     expect(html).toContain('还没绑定')
-    expect(html).toContain('升格卡面到定稿')
-    expect(html).toContain('拉定稿回卡面')
+    expect(html).toContain('把卡片写入定稿')
+    expect(html).toContain('用定稿覆盖卡片正文')
     expect(html).not.toContain('百科页还没做')
     const source = read('src/EncyclopediaPage.tsx')
     expect(source).not.toContain('百科页还没做')
@@ -211,9 +211,9 @@ describe('百科绑定', () => {
     expect(read('src/CastPage.tsx')).toContain('bindLabel(')
   })
 
-  it('拉定稿回卡面在没有念头时拒绝', () => {
+  it('用定稿覆盖卡片正文在没有卡片时拒绝', () => {
     let state = createDocument('pull')
-    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '念头' })
+    state = createCard(state, { id: 'idea-1', layer: 'situation', x: 0, y: 0, body: '卡片' })
     state = createCard(state, {
       id: 'card-ned',
       layer: 'renwubiao',
@@ -270,7 +270,7 @@ describe('百科绑定', () => {
     expect(entityForPersonCard(linked, 'card-ned')?.slug).toBe('world/ned-stark')
   })
 
-  it('升格把卡面整页 put，带上读到的版本，同一个 requestId 不写第二次', async () => {
+  it('升格把卡片整页 put，带上读到的版本，同一个 requestId 不写第二次', async () => {
     const existing = '---\ntitle: 奈德\n---\n\n旧定稿\n\n<!-- timeline -->\n10-11 旧时间线\n'
     const puts: Array<{ expectedRevision?: string; requestId: string; content: string; slug: string }> = []
     const document = {

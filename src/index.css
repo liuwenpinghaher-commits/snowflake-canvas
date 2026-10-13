@@ -59,7 +59,7 @@ button.on {
   flex-direction: column;
 }
 
-/* 顶栏主按钮：当前书、保存状态、新建念头。版本、书籍、行高、分组和删除收在更多里。 */
+/* 顶栏主按钮：当前书、保存状态、新建卡片。版本、书籍、行高、分组和删除收在更多里。 */
 .topbar {
   position: relative;
   z-index: 25;

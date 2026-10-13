@@ -289,7 +289,7 @@ describe('折进此场', () => {
     }
   })
 
-  it('人物表、一页大纲、人物故事、人物档案、一句话、一段和念头不能折出建议', () => {
+  it('人物表、一页大纲、人物故事、人物档案、一句话、一段和卡片不能折出建议', () => {
     const layers: Layer[] = ['renwubiao', 'yiyedagang', 'renwugushi', 'renwudangan', '一句话', '一段', 'situation']
     expect(REASON_LAYER).toContain('场景表')
     expect(REASON_LAYER).toContain('场次')

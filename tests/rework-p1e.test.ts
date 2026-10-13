@@ -334,7 +334,7 @@ describe('C1 讨论上下文', () => {
     const none = await collectDiscussContext(book({ parent: false, body: '   ' }), 'idea', io)
     expect(none).toContain('这张卡\n这张卡还没有正文')
     expect(none).toContain('父卡摘要\n没有父卡')
-    const clipped = await collectDiscussContext(book({ parent: '父'.repeat(230), body: '短念头' }), 'idea', io)
+    const clipped = await collectDiscussContext(book({ parent: '父'.repeat(230), body: '短卡片' }), 'idea', io)
     expect(clipped.split('\n\n')[1]).toBe(`父卡摘要\n${'父'.repeat(200)}`)
   })
 })
