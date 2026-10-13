@@ -313,7 +313,7 @@ export default function EncyclopediaPage({
                 <li key={entity.id} id={`encyclopedia-entity-${entity.id}`} className="encyclopedia-item">
                   <button
                     type="button"
-                    className="encyclopedia-row"
+                    className="encyclopedia-row page-table-row"
                     aria-current={selected ? 'true' : undefined}
                     onClick={() => setSelectedId(entity.id)}
                   >

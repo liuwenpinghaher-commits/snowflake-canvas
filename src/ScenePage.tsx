@@ -36,6 +36,7 @@ export default function ScenePage({
   const [group, setGroup] = useState<SceneGroup>(
     () => initialGroup ?? readChoice(browserViewStore(), storageId, 'scene-group', ['chapter', 'structure'] as const, 'chapter'),
   )
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   useEffect(() => {
     const store = browserViewStore()
     if (!initialView) setView(readChoice(store, storageId, 'scene', ['table', 'board'] as const, 'table'))
@@ -95,7 +96,14 @@ export default function ScenePage({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} onClick={() => onOpenCard(row.id)}>
+              <tr
+                key={row.id}
+                className={selectedId === row.id ? 'page-table-row is-selected' : 'page-table-row'}
+                onClick={() => {
+                  setSelectedId(row.id)
+                  onOpenCard(row.id)
+                }}
+              >
                 <td>{row.title}</td>
                 <td>{row.chapter}</td>
                 <td>{row.structureLabel}</td>

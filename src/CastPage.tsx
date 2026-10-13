@@ -69,6 +69,10 @@ export default function CastPage({
     openRowRecord(readIdList(browserViewStore(), storageId, 'cast-open'), focus?.entityId),
   )
   const [mergeNote, setMergeNote] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(focus?.entityId ?? null)
+  useEffect(() => {
+    if (focus?.entityId) setSelectedId(focus.entityId)
+  }, [focus?.entityId])
   useEffect(() => {
     if (initialView) return
     const store = browserViewStore()
@@ -85,6 +89,17 @@ export default function CastPage({
   const chooseView = (next: 'table' | 'board') => {
     setView(next)
     writeChoice(browserViewStore(), storageId, 'cast', next)
+  }
+
+  const selectRow = (entityId: string, summaryOnly: boolean) => {
+    setSelectedId(entityId)
+    if (summaryOnly) return
+    setOpenRows((current) => {
+      if (current[entityId]) return current
+      const next: Record<string, true> = { ...current, [entityId]: true }
+      writeIdList(browserViewStore(), storageId, 'cast-open', Object.keys(next))
+      return next
+    })
   }
 
   const toggleRow = (entityId: string) => {
@@ -219,7 +234,9 @@ export default function CastPage({
                   entity={entity}
                   visibility={visibility}
                   open={open && !visibility.summaryOnly}
+                  selected={selectedId === entity.id}
                   canEdit={canEdit}
+                  onSelect={() => selectRow(entity.id, visibility.summaryOnly)}
                   onToggle={() => {
                     if (visibility.summaryOnly) return
                     toggleRow(entity.id)
@@ -244,7 +261,9 @@ function PersonRow({
   entity,
   visibility,
   open,
+  selected,
   canEdit,
+  onSelect,
   onToggle,
   onApply,
   onOpenIdea,
@@ -256,7 +275,9 @@ function PersonRow({
   entity: Entity
   visibility: GradeVisibility
   open: boolean
+  selected: boolean
   canEdit: boolean
+  onSelect: () => void
   onToggle: () => void
   onApply: (recipe: (state: AppState) => AppState) => void
   onOpenIdea: OpenIdea
@@ -269,12 +290,8 @@ function PersonRow({
   return (
     <>
       <tr
-        className="cast-summary"
-        draggable={canEdit}
-        onDragStart={(event) => {
-          event.dataTransfer.setData('text/plain', `place-entity:${entity.id}`)
-          event.dataTransfer.effectAllowed = 'copy'
-        }}
+        className={selected ? 'cast-summary page-table-row is-selected' : 'cast-summary page-table-row'}
+        onClick={() => onSelect()}
       >
         <td>
           <div>{name || '未命名'}</div>
@@ -286,14 +303,46 @@ function PersonRow({
         <td>{sentence}</td>
         <td>{bindLabel(entity.slug)}</td>
         <td>
-          <button type="button" disabled={!canEdit} onClick={() => onPlaceOnCanvas?.(entity.id)}>
-            放到画布
-          </button>
-          {visibility.summaryOnly ? null : (
-            <button type="button" aria-expanded={open} onClick={onToggle}>
-              {open ? '收起' : '展开'}
+          <div className="row-actions">
+            <button
+              type="button"
+              className="row-handle"
+              draggable={canEdit}
+              aria-label="拖动这一行"
+              disabled={!canEdit}
+              onClick={(event) => event.stopPropagation()}
+              onDragStart={(event) => {
+                event.stopPropagation()
+                event.dataTransfer.setData('text/plain', `place-entity:${entity.id}`)
+                event.dataTransfer.effectAllowed = 'copy'
+              }}
+            >
+              ⋮⋮
             </button>
-          )}
+            <button
+              type="button"
+              disabled={!canEdit}
+              onClick={(event) => {
+                event.stopPropagation()
+                onPlaceOnCanvas?.(entity.id)
+              }}
+            >
+              放到画布
+            </button>
+            {visibility.summaryOnly ? null : (
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  if (open) onToggle()
+                  else onSelect()
+                }}
+              >
+                {open ? '收起' : '展开'}
+              </button>
+            )}
+          </div>
         </td>
       </tr>
       {open ? (

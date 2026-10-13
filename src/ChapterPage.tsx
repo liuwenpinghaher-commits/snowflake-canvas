@@ -30,9 +30,12 @@ export default function ChapterPage({
   focusNonce?: number
 }) {
   const [tab, setTab] = useState<'scenes' | 'beats'>('scenes')
+  const [selectedKey, setSelectedKey] = useState<string | null>(focusId)
+  const [dropSceneId, setDropSceneId] = useState<string | null>(null)
   useEffect(() => {
     if (!focusId) return
     setTab('scenes')
+    setSelectedKey(focusId)
   }, [focusId, focusNonce])
   useEffect(() => {
     if (!focusId || tab !== 'scenes') return
@@ -104,67 +107,90 @@ export default function ChapterPage({
             ))}
           </div>
           {chapters.length === 0 ? <p>还没有章节。</p> : null}
-          {chapters.map((chapter, index) => {
-            const mark = chapterMark([chapter])
-            return (
-              <article key={chapter.id} id={`chapter-${chapter.id}`} className="chapter-block">
-                <h3>
-                  第{index + 1}章 {chapter.title.trim() || '未命名'} {mark.filled}/{mark.total}
-                </h3>
-                {chapter.scenes.map((scene) => {
-                  const names = sceneAppearanceNames(state, scene)
-                  return (
-                    <div
-                      key={scene.id}
-                      className="scene-drop"
-                      onDragOver={(event) => {
-                        if (!canEdit) return
-                        event.preventDefault()
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault()
-                        if (!canEdit) return
-                        const raw = readDrag(event)
-                        if (!raw.startsWith('card:')) return
-                        const cardId = raw.slice('card:'.length)
-                        onApply((current) => placeBeat(current, scene.id, cardId))
-                      }}
-                    >
-                      <p>{scene.title.trim() || '未命名场'}</p>
-                      <ul>
-                        {(scene.beatIds ?? []).map((id) => {
-                          const card = state.snowflake.cards[id]
-                          return <li key={id}>{card ? frontText(card) || '场次' : id}</li>
-                        })}
-                      </ul>
-                      {names.map((name) => (
-                        <p key={name}>出场：{name}</p>
-                      ))}
-                      {scene.proseFork ? (
-                        <div className="prose-fork">
-                          <p>正文分叉</p>
-                          <button
-                            type="button"
-                            disabled={!canEdit}
-                            onClick={() => onApply((current) => resolveProseFork(current, scene.id, 'scene'))}
+          <ul className="chapter-tree">
+            {chapters.map((chapter, index) => {
+              const mark = chapterMark([chapter])
+              return (
+                <li key={chapter.id}>
+                  <div
+                    id={`chapter-${chapter.id}`}
+                    className={selectedKey === chapter.id ? 'chapter-tree-row is-selected' : 'chapter-tree-row'}
+                    data-depth="0"
+                    onClick={() => setSelectedKey(chapter.id)}
+                  >
+                    <h3>
+                      第{index + 1}章 {chapter.title.trim() || '未命名'} {mark.filled}/{mark.total}
+                    </h3>
+                  </div>
+                  <ul>
+                    {chapter.scenes.map((scene) => {
+                      const names = sceneAppearanceNames(state, scene)
+                      const sceneBeats = scene.beatIds ?? []
+                      return (
+                        <li key={scene.id}>
+                          <div
+                            className={'chapter-tree-row scene-drop' + (selectedKey === scene.id ? ' is-selected' : '') + (dropSceneId === scene.id ? ' is-drop' : '')}
+                            data-depth="1"
+                            onClick={() => setSelectedKey(scene.id)}
+                            onDragOver={(event) => {
+                              if (!canEdit) return
+                              event.preventDefault()
+                              setDropSceneId(scene.id)
+                            }}
+                            onDragLeave={() => {
+                              setDropSceneId((current) => (current === scene.id ? null : current))
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              setDropSceneId(null)
+                              if (!canEdit) return
+                              const raw = readDrag(event)
+                              if (!raw.startsWith('card:')) return
+                              onApply((current) => placeBeat(current, scene.id, raw.slice('card:'.length)))
+                            }}
                           >
-                            留场上的
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canEdit}
-                            onClick={() => onApply((current) => resolveProseFork(current, scene.id, 'card'))}
-                          >
-                            留卡上的
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </article>
-            )
-          })}
+                            <p>{scene.title.trim() || '未命名场'}</p>
+                            {scene.proseFork ? (
+                              <div className="prose-fork row-actions">
+                                <p>正文分叉</p>
+                                <button type="button" disabled={!canEdit} onClick={(event) => { event.stopPropagation(); onApply((current) => resolveProseFork(current, scene.id, 'scene')) }}>
+                                  留场上的
+                                </button>
+                                <button type="button" disabled={!canEdit} onClick={(event) => { event.stopPropagation(); onApply((current) => resolveProseFork(current, scene.id, 'card')) }}>
+                                  留卡上的
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                          {sceneBeats.length > 0 || names.length > 0 ? (
+                            <ul>
+                              {sceneBeats.map((id) => {
+                                const card = state.snowflake.cards[id]
+                                return (
+                                  <li key={id}>
+                                    <div className="chapter-tree-row" data-depth="2">
+                                      <span>{card ? frontText(card) || '场次' : id}</span>
+                                    </div>
+                                  </li>
+                                )
+                              })}
+                              {names.map((name) => (
+                                <li key={name}>
+                                  <div className="chapter-tree-row" data-depth="2">
+                                    <p>出场：{name}</p>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       ) : (
         <div className="chapter-beats" role="tabpanel">

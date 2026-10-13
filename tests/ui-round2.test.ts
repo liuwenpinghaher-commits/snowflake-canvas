@@ -38,7 +38,7 @@ describe('界面审查第 2 轮：保存失败、键盘、动效、换行', () =
     expect(drawer).toContain('clampDrawerWidth(width + (event.key === \'ArrowRight\' ? 10 : -10))')
     expect(drawer).toContain('onWidth(next)')
     expect(css).toContain('.drawer-resizer:focus-visible::after {')
-    expect(css).toMatch(/\.drawer-resizer:focus-visible::after \{[^}]*background:\s*#8c4a32/)
+    expect(css).toMatch(/\.drawer-resizer:focus-visible::after \{[^}]*background:\s*var\(--state-focus\)/)
   })
 
   it('窄屏滑入只在不减少动态效果时播放', () => {
