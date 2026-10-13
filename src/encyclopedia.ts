@@ -1,8 +1,10 @@
 import {
   addEdge,
   applySediment,
+  blocksVisibleText,
   commitCardText,
   fieldKeys,
+  markdownToBlocks,
   type AppState,
   type Entity,
   type EntityType,
@@ -83,5 +85,6 @@ export function pullFinalized(
   const viewId = entity.views.renwubiao
   const view = viewId ? saved.snowflake.cards[viewId] : undefined
   if (!viewId || !view || !fieldKeys(view.layer).includes(PULL_FIELD)) return { state: saved, saved: true }
-  return { state: commitCardText(saved, viewId, text, PULL_FIELD, false), saved: true }
+  const blocks = markdownToBlocks(text)
+  return { state: commitCardText(saved, viewId, blocksVisibleText(blocks), PULL_FIELD, false, blocks), saved: true }
 }

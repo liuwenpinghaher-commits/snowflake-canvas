@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import MentionBacklinks from './MentionBacklinks.tsx'
 import type { MentionHit } from './mentions.ts'
 import { bookScopedPath } from './books.ts'
+import { assetUrl } from './asset-client.ts'
+import { CoverField } from './cover-field.tsx'
 import { addEdge, createCard, type AppState, type Entity } from './document.ts'
 import {
   ENTITY_TYPE_LABEL,
@@ -39,6 +41,24 @@ async function loadPage(slug: string, bookId: string | null): Promise<LoadedPage
 function ideaOptionTitle(state: AppState, id: string): string {
   if (!state.snowflake.cards[id]) return '新卡片'
   return ideaTitle(state, id)
+}
+
+function FinalizedBody({ text }: { text: string }) {
+  const pattern = /!\[([^\]]*)\]\(([^)\s]+)\)/g
+  const nodes: ReactNode[] = []
+  let last = 0
+  let index = 0
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0
+    if (start > last) nodes.push(<span key={`t-${index}`}>{text.slice(last, start)}</span>)
+    const alt = match[1] ?? ''
+    const path = match[2] ?? ''
+    nodes.push(<img key={`i-${index}`} className="encyclopedia-inline" alt={alt} src={assetUrl(path)} />)
+    last = start + match[0].length
+    index += 1
+  }
+  if (last < text.length || nodes.length === 0) nodes.push(<span key="tail">{text.slice(last)}</span>)
+  return <div className="encyclopedia-text">{nodes}</div>
 }
 
 function EntityDetail({
@@ -193,7 +213,9 @@ function EntityDetail({
 
   if (!readySlug) {
     return (
-      <form className="encyclopedia-detail" onSubmit={(event) => void confirmBind(event)}>
+      <div className="encyclopedia-detail">
+        <CoverField entity={entity} canEdit={canEdit} onApply={onApply} />
+      <form onSubmit={(event) => void confirmBind(event)}>
         <label>
           页名
           <input
@@ -213,6 +235,7 @@ function EntityDetail({
           </p>
         ) : null}
       </form>
+      </div>
     )
   }
 
@@ -226,8 +249,9 @@ function EntityDetail({
 
   return (
     <div className="encyclopedia-detail">
+      <CoverField entity={entity} canEdit={canEdit} onApply={onApply} />
       <h3>定稿</h3>
-      <p className="encyclopedia-text">{finalized}</p>
+      <FinalizedBody text={finalized} />
       {promoteError ? (
         <p className="status-line is-error" role="alert">
           {promoteError}

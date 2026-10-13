@@ -15,6 +15,8 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import { estimateSnowCardHeight, shiftOverlappingCards, type ShiftBox } from './card-layout.ts'
+import { assetUrl } from './asset-client.ts'
+import { personEntityForCard } from './person-form.ts'
 import {
   bodyTextForCard,
   cardFace,
@@ -49,6 +51,7 @@ type CardData = {
   footnotes: FootnoteSegment[]
   footnoteKey: string
   onFootnote: (target: FootnoteTarget) => void
+  coverSrc: string
 }
 type GroupData = { text: string; conflict: boolean }
 type EntityData = {
@@ -57,6 +60,7 @@ type EntityData = {
   shape: 'square'
   footnotes: FootnoteSegment[]
   onFootnote: (target: FootnoteTarget) => void
+  coverSrc: string
 }
 
 function FootnoteRow({
@@ -116,6 +120,7 @@ function SnowCard({ id, data }: NodeProps<Node<CardData, 'snowCard'>>) {
         {data.conflict ? <div className="conflict-badge">待选</div> : null}
         {data.premise ? <div className="premise-badge">前提</div> : null}
         <div className="snow-kicker">
+          {data.coverSrc ? <img className="snow-cover-badge" alt="封面" src={data.coverSrc} /> : null}
           <div className="snow-layer">{data.layerLabel}</div>
           {data.meta ? <div className="snow-meta">{data.meta}</div> : null}
         </div>
@@ -144,6 +149,7 @@ function SnowEntity({ data }: NodeProps<Node<EntityData, 'snowEntity'>>) {
   return (
     <div className="snow-node">
       <div className="snow-entity" data-shape={data.shape} style={{ background: data.color, borderColor: data.color }}>
+        {data.coverSrc ? <img className="snow-cover-badge" alt="封面" src={data.coverSrc} /> : null}
         <div className="snow-entity-name">{data.name}</div>
         <FootnoteRow segments={data.footnotes} onOpen={data.onFootnote} />
       </div>
@@ -223,9 +229,15 @@ function toFlowNode(
       footnotes,
       footnoteKey: footnotes.map((segment) => segment.text).join('|'),
       onFootnote,
+      coverSrc: personCover(state, node.id),
     },
     style: { width: node.width, height },
   }
+}
+
+function personCover(state: AppState, cardId: string): string {
+  const person = personEntityForCard(state, cardId)
+  return person?.cover ? assetUrl(person.cover) : ''
 }
 
 function entityFlowNode(
@@ -250,6 +262,7 @@ function entityFlowNode(
       shape: 'square',
       footnotes,
       onFootnote,
+      coverSrc: entity?.entityType === 'person' && entity.cover ? assetUrl(entity.cover) : '',
     },
     style: { width: node.width, height: node.height },
   }

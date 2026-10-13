@@ -4,6 +4,7 @@ import MentionBacklinks, { MentionCountBadge } from './MentionBacklinks.tsx'
 import type { MentionHit } from './mentions.ts'
 import { parseBindFilter, parseGradeFilter, personRowVisible, type BindFilter, type GradeFilter } from './table-view.ts'
 import { bindLabel } from './encyclopedia.ts'
+import { CoverField } from './cover-field.tsx'
 import {
   ARC_KEYS,
   RENWUGUSHI_KEYS,
@@ -515,6 +516,7 @@ export function PersonZones({
 
   return (
     <div className="person-zones">
+      <CoverField entity={entity} canEdit={canEdit} onApply={onApply} />
       <label className="person-idea">
         归入卡片/视图（可选）
         <select aria-label="归入卡片/视图（可选）" value={ideaId} onChange={(event) => setIdeaId(event.target.value)}>

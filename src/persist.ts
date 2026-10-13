@@ -1387,6 +1387,13 @@ function parseEntityList(value: unknown): Entity[] {
       premise: item.premise === true,
     }
     if (typeof item.slug === 'string' && item.slug.trim()) entity.slug = item.slug.trim()
+    if (
+      typeof item.cover === 'string' &&
+      item.cover.trim() &&
+      (item.entityType === 'person' || item.entityType === 'place' || item.entityType === 'org' || item.entityType === 'concept')
+    ) {
+      entity.cover = item.cover.trim()
+    }
     entities.push(entity)
   }
   return entities
@@ -1582,8 +1589,19 @@ function isEnd(value: unknown): value is CanvasEdge['fromEnd'] {
 
 function parseProseBlock(value: unknown): ProseBlock | null {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0) return null
-  if (typeof value.text !== 'string') return null
   if (value.type === 'divider') return { id: value.id, type: 'divider', text: '' }
+  if (value.type === 'image') {
+    if (typeof value.relativePath !== 'string') return null
+    const alt = typeof value.alt === 'string' ? value.alt : typeof value.text === 'string' ? value.text : ''
+    return { id: value.id, type: 'image', text: alt, alt, relativePath: value.relativePath.trim() }
+  }
+  if (value.type === 'file') {
+    if (typeof value.relativePath !== 'string') return null
+    const name = typeof value.name === 'string' ? value.name : typeof value.text === 'string' ? value.text : ''
+    const size = typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0 ? Math.floor(value.size) : 0
+    return { id: value.id, type: 'file', text: name, name, relativePath: value.relativePath.trim(), size }
+  }
+  if (typeof value.text !== 'string') return null
   if (value.type === 'todo') return { id: value.id, type: 'todo', text: value.text, checked: value.checked === true }
   if (value.type === 'paragraph' || value.type === 'heading' || value.type === 'quote') {
     return { id: value.id, type: value.type, text: value.text }
@@ -1609,8 +1627,11 @@ function parseProseBlocks(value: unknown): Record<string, ProseBlock[]> | undefi
 function parseCard(value: unknown): LooseCard | null {
   if (!isRecord(value) || typeof value.layer !== 'string') return null
   const known = isStoredLayer(value.layer)
-  if (known && (typeof value.body !== 'string' || !isRecord(value.fields))) return null
-  const body = typeof value.body === 'string' ? value.body : ''
+  const hasBody = typeof value.body === 'string'
+  if (known && value.body !== undefined && !hasBody) return null
+  if (known && !isRecord(value.fields)) return null
+  if (known && !hasBody && value.blocks === undefined) return null
+  const body = typeof value.body === "string" ? value.body : ""
   const fields: Record<string, string> = {}
   if (isRecord(value.fields)) {
     for (const [key, field] of Object.entries(value.fields)) {

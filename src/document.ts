@@ -260,6 +260,12 @@ export type EdgeKind = (typeof EDGE_KINDS)[number]
 export const ENTITY_TYPES = ['person', 'place', 'org', 'concept', 'theme', 'foreshadow-line'] as const
 export type EntityType = (typeof ENTITY_TYPES)[number]
 
+export const COVER_ENTITY_TYPES = ['person', 'place', 'org', 'concept'] as const
+
+export function entityCoverAllowed(entityType: EntityType): boolean {
+  return (COVER_ENTITY_TYPES as readonly string[]).includes(entityType)
+}
+
 export const SEDIMENT_KINDS = ['discuss', 'manual', 'import'] as const
 export type SedimentKind = (typeof SEDIMENT_KINDS)[number]
 export const SEDIMENT_ACTIONS = ['append', 'replace', 'negate'] as const
@@ -293,6 +299,8 @@ export interface Entity {
   premise: boolean
   // 百科页名，例如 world/ned-stark。空字符串不算。
   slug?: string
+  /** 封面相对路径，只给人物、地点、组织、概念。不进定稿正文。 */
+  cover?: string
 }
 
 export interface SedimentTarget {
@@ -398,7 +406,7 @@ export interface PendingEntity {
   cardIds: string[]
 }
 
-export const PROSE_BLOCK_TYPES = ['paragraph', 'heading', 'quote', 'todo', 'divider'] as const
+export const PROSE_BLOCK_TYPES = ['paragraph', 'heading', 'quote', 'todo', 'divider', 'image', 'file'] as const
 export type ProseBlockType = (typeof PROSE_BLOCK_TYPES)[number]
 
 export interface ProseBlock {
@@ -406,6 +414,10 @@ export interface ProseBlock {
   type: ProseBlockType
   text: string
   checked?: boolean
+  relativePath?: string
+  alt?: string
+  name?: string
+  size?: number
 }
 
 export interface Card {
@@ -418,7 +430,7 @@ export interface Card {
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
-  /** 这一格已经落盘的块，或用户拆过块后要落盘的块。键是 body，或字段名。没有这个键时，正文仍只是字符串。 */
+  /** 有块时以块为准。落盘的 body 是从块投影出的可见文字，旧读者仍能看见这段字。没有块的老正文仍只是字符串。 */
   blocks?: Record<string, ProseBlock[]>
 }
 
@@ -618,7 +630,7 @@ function paragraphFront(card: Card): string {
 }
 
 const BLOCK_WIRE_MARK = '@@sf-blocks\n'
-const BLOCK_WIRE_LINE = /^(?:p|h|q|t0|t1) /
+const BLOCK_WIRE_LINE = /^(?:p|h|q|t0|t1|i|f) /
 
 function unescapeWire(source: string): string {
   let out = ''
@@ -660,6 +672,12 @@ function visibleProse(stored: string): string {
     .split('\n')
     .map((line) => {
       if (line === 'd') return ''
+      if (line.startsWith('i ')) {
+        const raw = unescapeWire(line.slice(2))
+        const tab = raw.indexOf('\t')
+        return tab < 0 ? raw : raw.slice(0, tab)
+      }
+      if (line.startsWith('f ')) return unescapeWire(line.slice(2)).split('\t')[0] ?? ''
       const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
       return unescapeWire(line.slice(mark.length + 1))
     })
@@ -670,8 +688,15 @@ function isProseBlockType(value: string): value is ProseBlockType {
   return (PROSE_BLOCK_TYPES as readonly string[]).includes(value)
 }
 
+export function blockVisibleText(block: ProseBlock): string {
+  if (block.type === 'divider') return ''
+  if (block.type === 'image') return block.alt ?? block.text
+  if (block.type === 'file') return block.name ?? block.text
+  return block.text
+}
+
 export function blocksVisibleText(blocks: readonly ProseBlock[]): string {
-  return blocks.map((block) => (block.type === 'divider' ? '' : block.text)).join('\n')
+  return blocks.map((block) => blockVisibleText(block)).join('\n')
 }
 
 export function cloneProseBlocks(blocks: readonly ProseBlock[]): ProseBlock[] {
@@ -685,6 +710,19 @@ export function cloneProseBlocks(blocks: readonly ProseBlock[]): ProseBlock[] {
     }
     if (block.type === 'todo') {
       out.push({ id: block.id, type: 'todo', text: block.text, checked: block.checked === true })
+      continue
+    }
+    if (block.type === 'image') {
+      const relativePath = typeof block.relativePath === 'string' ? block.relativePath.trim() : ''
+      const alt = typeof block.alt === 'string' ? block.alt : block.text
+      out.push({ id: block.id, type: 'image', text: alt, relativePath, alt })
+      continue
+    }
+    if (block.type === 'file') {
+      const relativePath = typeof block.relativePath === 'string' ? block.relativePath.trim() : ''
+      const name = typeof block.name === 'string' ? block.name : block.text
+      const size = typeof block.size === 'number' && Number.isFinite(block.size) && block.size >= 0 ? Math.floor(block.size) : 0
+      out.push({ id: block.id, type: 'file', text: name, relativePath, name, size })
       continue
     }
     out.push({ id: block.id, type: block.type, text: block.text })
@@ -703,7 +741,14 @@ export function cloneBlockMap(blocks: Record<string, ProseBlock[]> | undefined):
 }
 
 function blockStructureKey(blocks: readonly ProseBlock[]): string {
-  return blocks.map((block) => (block.type === 'todo' ? `todo:${block.checked === true ? 1 : 0}` : block.type)).join('\n')
+  return blocks
+    .map((block) => {
+      if (block.type === 'todo') return `todo:${block.checked === true ? 1 : 0}`
+      if (block.type === 'image') return `image:${block.relativePath ?? ''}`
+      if (block.type === 'file') return `file:${block.relativePath ?? ''}:${block.size ?? 0}`
+      return block.type
+    })
+    .join('\n')
 }
 
 function storedToBlocks(text: string): ProseBlock[] {
@@ -714,6 +759,30 @@ function storedToBlocks(text: string): ProseBlock[] {
     .map((line, index) => {
       const id = `wire-${index + 1}`
       if (line === 'd') return { id, type: 'divider' as const, text: '' }
+      if (line.startsWith('i ')) {
+        const raw = unescapeWire(line.slice(2))
+        const tab = raw.indexOf('\t')
+        const alt = tab < 0 ? raw : raw.slice(0, tab)
+        const relativePath = tab < 0 ? '' : raw.slice(tab + 1)
+        if (!relativePath) return { id, type: 'paragraph' as const, text: alt }
+        return { id, type: 'image' as const, text: alt, alt, relativePath }
+      }
+      if (line.startsWith('f ')) {
+        const raw = unescapeWire(line.slice(2))
+        const parts = raw.split('\t')
+        const name = parts[0] ?? ''
+        const size = Number(parts[1] ?? 0)
+        const relativePath = parts[2] ?? ''
+        if (!relativePath) return { id, type: 'paragraph' as const, text: name }
+        return {
+          id,
+          type: 'file' as const,
+          text: name,
+          name,
+          relativePath,
+          size: Number.isFinite(size) ? size : 0,
+        }
+      }
       const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
       const body = unescapeWire(line.slice(mark.length + 1))
       if (mark === 'h') return { id, type: 'heading' as const, text: body }
@@ -722,6 +791,246 @@ function storedToBlocks(text: string): ProseBlock[] {
       if (mark === 't1') return { id, type: 'todo' as const, text: body, checked: true }
       return { id, type: 'paragraph' as const, text: body }
     })
+}
+
+
+function restoredLooseBody(card: LooseCard): string {
+  if (card.body) return card.body
+  if (card.blocks?.body && card.blocks.body.length > 0) return blocksVisibleText(card.blocks.body)
+  if (card.layer === '一句话' && card.blocks?.sentence && card.blocks.sentence.length > 0) {
+    return blocksVisibleText(card.blocks.sentence)
+  }
+  return ''
+}
+
+function projectCardFromBlocks(card: Card): Card {
+  const blocks = card.blocks
+  if (!blocks) return card
+  const fields = { ...card.fields }
+  let body = card.body
+  if (blocks.body && blocks.body.length > 0) body = blocksVisibleText(blocks.body)
+  for (const [key, list] of Object.entries(blocks)) {
+    if (key === 'body') continue
+    fields[key] = blocksVisibleText(list)
+  }
+  if (card.layer === '一句话') {
+    const sentence = fields.sentence ?? body
+    fields.sentence = sentence
+    body = sentence
+  }
+  return { ...card, body, fields, blocks }
+}
+
+export function ensureCardBlocks(card: Card): Card {
+  const blocks: Record<string, ProseBlock[]> = { ...(cloneBlockMap(card.blocks) ?? {}) }
+  const key = card.layer === '一句话' ? 'sentence' : 'body'
+  if (!blocks[key] || blocks[key].length === 0) {
+    const source = key === 'sentence' ? (card.fields[key] ?? card.body) : card.body
+    blocks[key] = storedToBlocks(source)
+  }
+  for (const [field, value] of Object.entries(card.fields)) {
+    if (blocks[field] && blocks[field].length > 0) continue
+    if (isStoredBlockWire(value)) blocks[field] = storedToBlocks(value)
+  }
+  return projectCardFromBlocks({ ...card, blocks })
+}
+
+export function blockToMarkdown(block: ProseBlock): string {
+  if (block.type === 'heading') return `# ${block.text}`
+  if (block.type === 'quote') return block.text.split('\n').map((line) => `> ${line}`).join('\n')
+  if (block.type === 'todo') return `- [${block.checked === true ? 'x' : ' '}] ${block.text}`
+  if (block.type === 'divider') return '---'
+  if (block.type === 'image') return `![${block.alt ?? block.text}](${block.relativePath ?? ''})`
+  if (block.type === 'file') return `[${block.name ?? block.text}](${block.relativePath ?? ''} "${block.size ?? 0}")`
+  return block.text
+}
+
+export function blocksToMarkdown(blocks: readonly ProseBlock[]): string {
+  return blocks.map((block) => blockToMarkdown(block)).join('\n\n')
+}
+
+export function markdownToBlocks(markdown: string): ProseBlock[] {
+  const source = markdown.replace(/\r\n/g, '\n')
+  const blocks: ProseBlock[] = []
+  let serial = 0
+  const nextId = () => {
+    serial += 1
+    return `md-${serial}`
+  }
+  const pushPieces = (chunk: string) => {
+    const image = /!\[([^\]]*)\]\(([^)\s]+)\)/g
+    let last = 0
+    let match: RegExpExecArray | null
+    let any = false
+    while ((match = image.exec(chunk))) {
+      any = true
+      const before = chunk.slice(last, match.index).replace(/^\n+|\n+$/g, '')
+      if (before) blocks.push({ id: nextId(), type: 'paragraph', text: before })
+      blocks.push({
+        id: nextId(),
+        type: 'image',
+        text: match[1] ?? '',
+        alt: match[1] ?? '',
+        relativePath: match[2] ?? '',
+      })
+      last = match.index + match[0].length
+    }
+    const rest = (any ? chunk.slice(last) : chunk).replace(/^\n+|\n+$/g, '')
+    if (!any) {
+      if (chunk.length > 0) blocks.push({ id: nextId(), type: 'paragraph', text: chunk })
+      return
+    }
+    if (rest) blocks.push({ id: nextId(), type: 'paragraph', text: rest })
+  }
+  const lines = source.split('\n')
+  let paragraph: string[] = []
+  let quote: string[] = []
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return
+    const chunk = paragraph.join('\n')
+    paragraph = []
+    pushPieces(chunk)
+  }
+  const flushQuote = () => {
+    if (quote.length === 0) return
+    blocks.push({ id: nextId(), type: 'quote', text: quote.join('\n') })
+    quote = []
+  }
+  const flush = () => {
+    flushQuote()
+    flushParagraph()
+  }
+  for (const line of lines) {
+    const file = line.match(/^\[([^\]]*)\]\(([^)\s]+)(?:\s+"(\d+)")?\)$/)
+    const imageLine = line.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
+    if (line.trim() === '---') {
+      flush()
+      blocks.push({ id: nextId(), type: 'divider', text: '' })
+      continue
+    }
+    if (line.startsWith('# ')) {
+      flush()
+      blocks.push({ id: nextId(), type: 'heading', text: line.slice(2) })
+      continue
+    }
+    if (line.startsWith('> ')) {
+      flushParagraph()
+      quote.push(line.slice(2))
+      continue
+    }
+    const todo = line.match(/^- \[([ xX])\] (.*)$/)
+    if (todo) {
+      flush()
+      blocks.push({ id: nextId(), type: 'todo', text: todo[2] ?? '', checked: todo[1] !== ' ' })
+      continue
+    }
+    if (imageLine) {
+      flush()
+      blocks.push({
+        id: nextId(),
+        type: 'image',
+        text: imageLine[1] ?? '',
+        alt: imageLine[1] ?? '',
+        relativePath: imageLine[2] ?? '',
+      })
+      continue
+    }
+    if (file && /\.(pdf|epub|m4a)$/i.test(file[2] ?? '')) {
+      flush()
+      const size = Number(file[3] ?? 0)
+      blocks.push({
+        id: nextId(),
+        type: 'file',
+        text: file[1] ?? '',
+        name: file[1] ?? '',
+        relativePath: file[2] ?? '',
+        size: Number.isFinite(size) ? size : 0,
+      })
+      continue
+    }
+    if (line.trim() === '') {
+      flush()
+      continue
+    }
+    flushQuote()
+    paragraph.push(line)
+  }
+  flush()
+  if (blocks.length === 0) blocks.push({ id: nextId(), type: 'paragraph', text: source })
+  return blocks
+}
+
+function isCoverPath(path: string): boolean {
+  return /^assets\/[0-9a-f]{2}\/[0-9a-f]{16}\.(jpg|png|webp|gif)$/.test(path)
+}
+
+export function setEntityCover(state: AppState, entityId: string, relativePath: string): AppState {
+  const entities = state.entities ?? []
+  const index = entities.findIndex((entity) => entity.id === entityId)
+  if (index < 0) return state
+  const current = entities[index]
+  if (!current || !entityCoverAllowed(current.entityType)) return state
+  const path = relativePath.trim()
+  if (!path) {
+    if (!current.cover) return state
+    const next: Entity = { ...current }
+    delete next.cover
+    const copy = entities.slice()
+    copy[index] = next
+    return { ...state, entities: copy }
+  }
+  if (!isCoverPath(path) || current.cover === path) return state
+  const copy = entities.slice()
+  copy[index] = { ...current, cover: path }
+  return { ...state, entities: copy }
+}
+
+export function normalizeStoredDocument(document: unknown): unknown {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return document
+  const doc = document as Record<string, unknown>
+  const snowflake = doc.snowflake
+  if (!snowflake || typeof snowflake !== 'object' || Array.isArray(snowflake)) return document
+  const snow = snowflake as Record<string, unknown>
+  const cards = snow.cards
+  if (!cards || typeof cards !== 'object' || Array.isArray(cards)) return document
+  const nextCards: Record<string, unknown> = {}
+  let changed = false
+  for (const [id, raw] of Object.entries(cards as Record<string, unknown>)) {
+    const next = normalizeStoredCard(raw)
+    nextCards[id] = next
+    if (next !== raw) changed = true
+  }
+  if (!changed) return document
+  return { ...doc, snowflake: { ...snow, cards: nextCards } }
+}
+
+function normalizeStoredCard(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const value = raw as Record<string, unknown>
+  if (value.blocks === undefined) return raw
+  const layer = typeof value.layer === 'string' ? value.layer : 'situation'
+  const body = typeof value.body === 'string' ? value.body : ''
+  const fields: Record<string, string> = {}
+  if (value.fields && typeof value.fields === 'object' && !Array.isArray(value.fields)) {
+    for (const [key, field] of Object.entries(value.fields as Record<string, unknown>)) {
+      if (typeof field === 'string') fields[key] = field
+    }
+  }
+  const card = {
+    layer: (isLayerNameSafe(layer) ? layer : 'situation') as Layer,
+    body,
+    fields,
+    blocks: cloneBlockMap(value.blocks as Card['blocks']),
+  } as Card
+  const projected = withPersistedBlocks(card)
+  const out: Record<string, unknown> = { ...value, body: projected.body, fields: projected.fields }
+  if (projected.blocks) out.blocks = projected.blocks
+  else delete out.blocks
+  return out
+}
+
+function isLayerNameSafe(value: string): boolean {
+  return (LAYERS as readonly string[]).includes(value)
 }
 
 function cellString(card: Card, key: string): string {
@@ -1350,12 +1659,20 @@ function commitCellKey(card: Card, fieldKey: string | null): string | null {
   return key
 }
 
-function incomingBlocks(blocks: readonly ProseBlock[] | undefined, text: string): ProseBlock[] {
+function incomingBlocks(
+  blocks: readonly ProseBlock[] | undefined,
+  text: string,
+  previous?: readonly ProseBlock[],
+): ProseBlock[] {
   if (blocks && blocks.length > 0) {
     const cloned = cloneProseBlocks(blocks)
     if (cloned.length > 0) return cloned
   }
-  return storedToBlocks(text)
+  const fromText = storedToBlocks(text)
+  if (blocks) return fromText
+  const media = cloneProseBlocks((previous ?? []).filter((block) => block.type === 'image' || block.type === 'file'))
+  const kept = media.filter((block) => !fromText.some((item) => item.relativePath && item.relativePath === block.relativePath))
+  return kept.length > 0 ? [...fromText, ...kept] : fromText
 }
 
 export function commitCardText(
@@ -1373,9 +1690,11 @@ export function commitCardText(
   if (!cell) return state
   const hadList = current.blocks?.[cell]
   const had = Boolean(hadList && hadList.length > 0)
-  const incoming = incomingBlocks(blocks, text)
+  const incoming = incomingBlocks(blocks, text, hadList)
   const before = hadList && hadList.length > 0 ? hadList : storedToBlocks(cellString(current, cell))
-  const keep = !isChoiceField(cell) && (had || blockStructureKey(before) !== blockStructureKey(incoming))
+  const hasMedia = incoming.some((block) => block.type === 'image' || block.type === 'file')
+  // 图片和文件没有可见文字也算结构还在。纯文本单段不额外写块数组。
+  const keep = !isChoiceField(cell) && (had || hasMedia || blockStructureKey(before) !== blockStructureKey(incoming))
   const written = keep ? blocksVisibleText(incoming) : text
   const nextBlocks = keep ? { ...(cloneBlockMap(current.blocks) ?? {}), [cell]: cloneProseBlocks(incoming) } : undefined
   let card: Card
@@ -1396,6 +1715,19 @@ export function commitCardText(
     card = { ...current, layer: current.layer, body: bodyFor(current.layer, fields, ''), fields }
   }
   if (keep && nextBlocks) card = { ...card, blocks: nextBlocks }
+  if (
+    card.blocks?.body &&
+    card.blocks.body.length === 1 &&
+    card.blocks.body[0]?.type === 'paragraph' &&
+    cell !== 'body' &&
+    card.layer !== 'situation' &&
+    card.layer !== '正文草稿' &&
+    card.layer !== '一句话' &&
+    card.blocks.body[0].text !== card.body
+  ) {
+    const head = card.blocks.body[0]
+    card = { ...card, blocks: { ...card.blocks, body: [{ ...head, text: card.body }] } }
+  }
   const painted = paintCard(state, cardId, card)
   if (current.layer === 'renwubiao' && fieldKey === 'motivation') return mirrorPhilosophy(painted)
   return painted
@@ -1625,7 +1957,7 @@ export function loadCards(
   for (const [id, card] of Object.entries(loose)) {
     drafts.set(id, {
       layer: card.layer,
-      body: card.body,
+      body: restoredLooseBody(card),
       fields: { ...card.fields },
       rebuild: false,
       mergeNote: card.mergeNote,
@@ -1765,6 +2097,9 @@ export function cloneEntity(entity: Entity): Entity {
     premise: entity.premise === true,
   }
   if (typeof entity.slug === 'string' && entity.slug.trim()) copy.slug = entity.slug.trim()
+  if (typeof entity.cover === 'string' && entity.cover.trim() && entityCoverAllowed(entity.entityType)) {
+    copy.cover = entity.cover.trim()
+  }
   return copy
 }
 

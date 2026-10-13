@@ -13,13 +13,17 @@ import {
   type MentionKind,
 } from './mention-mark.ts'
 
-export type BlockType = 'paragraph' | 'heading' | 'quote' | 'todo' | 'divider'
+export type BlockType = 'paragraph' | 'heading' | 'quote' | 'todo' | 'divider' | 'image' | 'file'
 
 export interface Block {
   id: string
   type: BlockType
   text: string
   checked?: boolean
+  relativePath?: string
+  alt?: string
+  name?: string
+  size?: number
 }
 
 export interface SlashState {
@@ -70,9 +74,11 @@ export const SLASH_ITEMS: readonly { type: BlockType; label: string }[] = [
   { type: 'quote', label: '引用' },
   { type: 'todo', label: '待办' },
   { type: 'divider', label: '分隔线' },
+  { type: 'image', label: '图片' },
+  { type: 'file', label: '文件' },
 ]
 
-const BLOCK_LINE = /^(?:p|h|q|t0|t1) /
+const BLOCK_LINE = /^(?:p|h|q|t0|t1|i|f) /
 
 let serial = 0
 
@@ -155,6 +161,10 @@ function encodeLine(block: Block): string {
       return `${block.checked ? 't1' : 't0'} ${escapeText(block.text)}`
     case 'divider':
       return 'd'
+    case 'image':
+      return `i ${escapeText(block.alt ?? block.text)}\t${escapeText(block.relativePath ?? '')}`
+    case 'file':
+      return `f ${escapeText(block.name ?? block.text)}\t${block.size ?? 0}\t${escapeText(block.relativePath ?? '')}`
     default:
       return `p ${escapeText(block.text)}`
   }
@@ -163,6 +173,21 @@ function encodeLine(block: Block): string {
 function decodeLine(line: string, index: number): Block {
   const id = `wire-${index + 1}`
   if (line === 'd') return { id, type: 'divider', text: '' }
+  if (line.startsWith('i ')) {
+    const raw = unescapeText(line.slice(2))
+    const tab = raw.indexOf('\t')
+    const alt = tab < 0 ? raw : raw.slice(0, tab)
+    const relativePath = tab < 0 ? '' : raw.slice(tab + 1)
+    return { id, type: 'image', text: alt, alt, relativePath }
+  }
+  if (line.startsWith('f ')) {
+    const raw = unescapeText(line.slice(2))
+    const parts = raw.split('\t')
+    const name = parts[0] ?? ''
+    const size = Number(parts[1] ?? 0)
+    const relativePath = parts[2] ?? ''
+    return { id, type: 'file', text: name, name, relativePath, size: Number.isFinite(size) ? size : 0 }
+  }
   const mark = line.startsWith('t0 ') || line.startsWith('t1 ') ? line.slice(0, 2) : line.slice(0, 1)
   const text = unescapeText(line.slice(mark.length + 1))
   if (mark === 'h') return { id, type: 'heading', text }
@@ -191,7 +216,7 @@ export function visibleProse(
   const raw = !isBlockWire(stored)
     ? stored
     : textToBlocks(stored)
-        .map((block) => (block.type === 'divider' ? '' : block.text))
+        .map((block) => (block.type === 'divider' ? '' : block.type === 'image' ? (block.alt ?? '') : block.type === 'file' ? (block.name ?? '') : block.text))
         .join('\n')
   return labelOf ? replaceMentionMarks(raw, labelOf) : raw
 }
@@ -226,6 +251,8 @@ function stripSlashLine(text: string): string {
 function asType(block: Block, type: BlockType, text: string): Block {
   if (type === 'divider') return { id: block.id, type, text: '' }
   if (type === 'todo') return { id: block.id, type, text, checked: false }
+  if (type === 'image') return { id: block.id, type, text: '', alt: '', relativePath: block.relativePath ?? '' }
+  if (type === 'file') return { id: block.id, type, text: '', name: text, size: block.size ?? 0, relativePath: block.relativePath ?? '' }
   return { id: block.id, type, text }
 }
 
@@ -238,7 +265,7 @@ function splitAt(session: BlockComposeSession, index: number, cursor: number): B
   const block = session.blocks[index]
   if (!block) return session
   const past = withPast(session)
-  if (block.type === 'divider') {
+  if (block.type === 'divider' || block.type === 'image' || block.type === 'file') {
     const created = paragraph('')
     const blocks = [...session.blocks.slice(0, index + 1), created, ...session.blocks.slice(index + 1)]
     return { ...session, blocks, past, active: index + 1, selected: null, slash: null, mention: null }
@@ -390,7 +417,7 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
 
   if (event.type === 'shiftEnter') {
     const block = session.blocks[event.index]
-    if (!block || block.type === 'divider') return session
+    if (!block || block.type === 'divider' || block.type === 'image' || block.type === 'file') return session
     const at = clampCursor(event.cursor, block.text.length)
     const text = `${block.text.slice(0, at)}\n${block.text.slice(at)}`
     const blocks = session.blocks.map((item, index) => (index === event.index ? { ...item, text } : item))
@@ -434,12 +461,8 @@ export function applyBlockEvent(session: BlockComposeSession, event: BlockEvent)
     const block = session.blocks[event.index]
     if (!block) return session
     const past = withPast(session)
-    const copy: Block =
-      block.type === 'todo'
-        ? { id: freshBlockId(), type: 'todo', text: block.text, checked: block.checked === true }
-        : block.type === 'divider'
-          ? { id: freshBlockId(), type: 'divider', text: '' }
-          : { id: freshBlockId(), type: block.type, text: block.text }
+    const copy: Block = { ...block, id: freshBlockId() }
+    if (copy.type === 'divider') copy.text = ''
     const blocks = [...session.blocks.slice(0, event.index + 1), copy, ...session.blocks.slice(event.index + 1)]
     return { ...session, blocks, past, slash: null, mention: null, active: event.index + 1, selected: event.index + 1 }
   }

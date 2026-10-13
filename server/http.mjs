@@ -30,6 +30,8 @@ import { getImportProgress, importPlainText, setImportProgress } from './import-
 import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
 import { composeEntityPage, finalizedText, pageMissingMessage, parsePageSnapshot, promoteEntityPage, timelineBelow } from './encyclopedia.mjs'
+import { loadDocumentModule } from './load-document.mjs'
+import { registerAssetRoutes } from './assets.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 
@@ -442,10 +444,18 @@ async function commitEnvelope(book, next) {
 }
 
 // 快照正文只在独立文件里，响应里的 snapshots 恒为空数组。
-function sendCanvas(reply, record, extra) {
+async function presentDocument(document) {
+  const mod = await loadDocumentModule()
+  if (!mod || typeof mod.normalizeStoredDocument !== 'function') return document
+  const normalized = mod.normalizeStoredDocument(document)
+  return normalized && typeof normalized === 'object' ? normalized : document
+}
+
+async function sendCanvas(reply, record, extra) {
+  const document = await presentDocument(record.document)
   reply.header('ETag', strongEtag(record.version))
   reply.header('Cache-Control', 'no-store')
-  return reply.send({ ...envelope(record.version, record.document, []), ...extra })
+  return reply.send({ ...envelope(record.version, document, []), ...extra })
 }
 
 function gatewayHeaders(extra) {
@@ -1336,7 +1346,7 @@ async function ensureSedimentPage(document, entity, sedimentRequestId) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (!pageMissingMessage(message)) return { ok: false, error: message }
-    const body = composeEntityPage(entity)
+    const body = composeEntityPage(entity, document)
     if (!body) return { ok: false, error: message }
     const putId = randomUUID()
     if (putId === sedimentRequestId) return { ok: false, error: '建页编号撞上了沉淀编号' }
@@ -1351,6 +1361,7 @@ async function confirmSedimentTimeline(page, requestId) {
 }
 
 function registerApi(app, prefix) {
+  registerAssetRoutes(app, { prefix, bookFor, sendNoBook })
   // 画布和讨论接口各挂两份：旧路径落到活动书，/api/books/:bookId/... 落到指定的书。
   const scoped = (method, path, handler) => {
     app.route({ method, url: `${prefix}/api${path}`, handler })
@@ -1456,7 +1467,8 @@ function registerApi(app, prefix) {
       const outcome = await exclusive(book, async () => {
         const current = await readCanonical(book)
         const imported = importPlainText(current.document, text)
-        await commitEnvelope(book, envelope(current.version + 1, imported.document, current.snapshots))
+        const importedDocument = await presentDocument(imported.document)
+        await commitEnvelope(book, envelope(current.version + 1, importedDocument, current.snapshots))
         return imported.counts
       })
       const progress = {
@@ -1514,7 +1526,11 @@ function registerApi(app, prefix) {
   scoped('PUT', '/canvas', async (request, reply) => {
     const book = await bookFor(request)
     if (!book) return sendNoBook(reply)
-    const document = request.body
+    if (!isDocument(request.body)) {
+      reply.code(400)
+      return reply.send({ error: '正文不是一份完整画布 JSON' })
+    }
+    const document = await presentDocument(request.body)
     if (!isDocument(document)) {
       reply.code(400)
       return reply.send({ error: '正文不是一份完整画布 JSON' })
@@ -1607,7 +1623,9 @@ function registerApi(app, prefix) {
         }
         if (!isDocument(selected)) return { status: 422, error: '这份快照不是完整画布' }
         await writeSnapshotFile(book, current.document, new Date())
-        const saved = await commitEnvelope(book, envelope(current.version + 1, selected, current.snapshots))
+        const restored = await presentDocument(selected)
+        if (!isDocument(restored)) return { status: 422, error: '这份快照不是完整画布' }
+        const saved = await commitEnvelope(book, envelope(current.version + 1, restored, current.snapshots))
         return { status: 200, record: saved }
       })
     } catch (error) {
@@ -1749,7 +1767,8 @@ function registerApi(app, prefix) {
         if (result.statusCode >= 400) return result
         const nextText = JSON.stringify(result.document)
         if (nextText !== JSON.stringify(current.document)) {
-          await commitEnvelope(book, envelope(current.version + 1, result.document, current.snapshots))
+          const stored = await presentDocument(result.document)
+          await commitEnvelope(book, envelope(current.version + 1, stored, current.snapshots))
         }
         if (raw && !isLegacyRecord(raw)) {
           const before = JSON.stringify(normalizeStore(raw))
@@ -1997,6 +2016,10 @@ const app = Fastify({
   requestTimeout: 0,
   connectionTimeout: 0,
   trustProxy: false,
+})
+
+app.addContentTypeParser(/^multipart\/form-data/i, { parseAs: 'buffer', bodyLimit: 10 * 1024 * 1024 + 256 * 1024 }, (request, body, done) => {
+  done(null, body)
 })
 
 app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {

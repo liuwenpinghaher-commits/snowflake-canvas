@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { history, historyKeymap, insertNewline, undo, undoDepth, defaultKeymap } from '@codemirror/commands'
 import { Compartment, EditorState, Prec, Transaction } from '@codemirror/state'
 import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from '@codemirror/view'
+import { assetUrl, uploadAsset } from './asset-client.ts'
 import { latestWriteSeq } from './persist.ts'
 import { ActionMenu } from './ActionMenu.tsx'
 import {
@@ -69,7 +70,11 @@ function sameBlockList(left: readonly Block[], right: readonly Block[]): boolean
       block.id === other.id &&
       block.type === other.type &&
       block.text === other.text &&
-      (block.checked === true) === (other.checked === true)
+      (block.checked === true) === (other.checked === true) &&
+      (block.relativePath ?? '') === (other.relativePath ?? '') &&
+      (block.alt ?? '') === (other.alt ?? '') &&
+      (block.name ?? '') === (other.name ?? '') &&
+      (block.size ?? 0) === (other.size ?? 0)
     )
   })
 }
@@ -600,6 +605,14 @@ export default function BlockField({
     commitSession(session, focus && token ? { id: focus.id, cursor: at + token.length } : undefined)
   }
 
+  const replaceBlock = (index: number, next: Block) => {
+    if (composingRef.current || !canTypeRef.current) return
+    const session = sessionNow()
+    const past = [...session.past, cloneBlockList(session.blocks)]
+    const blocks = session.blocks.map((block, item) => (item === index ? next : block))
+    commitSession({ ...session, blocks, past: past.length > 100 ? past.slice(past.length - 100) : past, slash: null, mention: null })
+  }
+
   const pick = (blockType: BlockType) => {
     if (composingRef.current || !canTypeRef.current) return
     let session = sessionNow()
@@ -701,6 +714,8 @@ export default function BlockField({
           handlersRef={handlersRef}
           onPick={pick}
           onMentionPick={pickMention}
+          onMedia={replaceBlock}
+          canEdit={canType && editable}
           onMove={moveBlock}
           onToggle={() => toggleTodo(index)}
           onDividerEnter={() => enterDivider(index)}
@@ -729,6 +744,8 @@ function BlockRow({
   handlersRef,
   onPick,
   onMentionPick,
+  onMedia,
+  canEdit,
   onMove,
   onToggle,
   onDividerEnter,
@@ -750,6 +767,8 @@ function BlockRow({
   handlersRef: { current: Handlers }
   onPick: (type: BlockType) => void
   onMentionPick: (kind: MentionKind, id: string) => void
+  onMedia: (index: number, next: Block) => void
+  canEdit: boolean
   onMove: (from: number, to: number) => void
   onToggle: () => void
   onDividerEnter: () => void
@@ -760,7 +779,7 @@ function BlockRow({
 
   useEffect(() => {
     const host = hostRef.current
-    if (!host || block.type === 'divider') return
+    if (!host || block.type === 'divider' || block.type === 'image' || block.type === 'file') return
     const compartment = new Compartment()
     compartmentsRef.current.set(block.id, compartment)
     const id = block.id
@@ -848,7 +867,7 @@ function BlockRow({
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view || block.type === 'divider') return
+    if (!view || block.type === 'divider' || block.type === 'image' || block.type === 'file') return
     if (composingRef.current || view.composing) return
     const current = view.state.doc.toString()
     if (current !== block.text) {
@@ -868,7 +887,48 @@ function BlockRow({
     }
   }, [applyingRef, block.id, block.text, block.type, composingRef, focusRef])
 
+  const [caption, setCaption] = useState(block.type === 'image' ? (block.alt ?? block.text) : (block.name ?? block.text))
+  const [mediaError, setMediaError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  useEffect(() => {
+    setCaption(block.type === 'image' ? (block.alt ?? block.text) : (block.name ?? block.text))
+  }, [block.alt, block.name, block.text, block.type])
+
+  function commitCaption() {
+    if (block.type === 'image') {
+      if ((block.alt ?? '') === caption) return
+      onMedia(index, { ...block, alt: caption, text: caption })
+      return
+    }
+    if (block.type === 'file') {
+      if ((block.name ?? '') === caption) return
+      onMedia(index, { ...block, name: caption, text: caption })
+    }
+  }
+
+  async function onPickFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !canEdit || uploading) return
+    setUploading(true)
+    setMediaError('')
+    try {
+      const stored = await uploadAsset(file)
+      if (block.type === 'image') {
+        onMedia(index, { ...block, relativePath: stored.relativePath, alt: caption, text: caption })
+        return
+      }
+      const name = stored.name || caption || file.name
+      onMedia(index, { ...block, relativePath: stored.relativePath, name, text: name, size: stored.size })
+    } catch (caught) {
+      setMediaError(caught instanceof Error && caught.message ? caught.message : '文件没有收下')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const items = slash ? filterSlash(slash.query) : []
+  const bytes = block.size && block.size > 0 ? `${block.size} 字节` : ''
   return (
     <div
       className={selected ? `sf-block is-selected sf-${block.type}` : `sf-block sf-${block.type}`}
@@ -926,6 +986,49 @@ function BlockRow({
             }
           }}
         />
+      ) : block.type === 'image' || block.type === 'file' ? (
+        <div className="sf-media">
+          {block.type === 'image' ? (
+            block.relativePath ? (
+              <img src={assetUrl(block.relativePath)} alt={block.alt ?? ''} />
+            ) : (
+              <p className="hint">还没有图片</p>
+            )
+          ) : block.relativePath ? (
+            <a href={assetUrl(block.relativePath)}>{block.name || '文件'}{bytes ? `（${bytes}）` : ''}</a>
+          ) : (
+            <p className="hint">还没有文件</p>
+          )}
+          <label>
+            {block.type === 'image' ? '替代文字' : '文件名'}
+            <input
+              aria-label={block.type === 'image' ? '替代文字' : '文件名'}
+              value={caption}
+              disabled={!canEdit}
+              onChange={(event) => setCaption(event.target.value)}
+              onBlur={commitCaption}
+            />
+          </label>
+          <label>
+            {block.type === 'image' ? '从相册或本地选择图片' : '从本地选择文件'}
+            <input
+              type="file"
+              aria-label={block.type === 'image' ? '从相册或本地选择图片' : '从本地选择文件'}
+              accept={
+                block.type === 'image'
+                  ? 'image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif'
+                  : '.pdf,.epub,.m4a,application/pdf,application/epub+zip,audio/mp4,audio/x-m4a'
+              }
+              disabled={!canEdit || uploading}
+              onChange={(event) => void onPickFile(event)}
+            />
+          </label>
+          {mediaError ? (
+            <p className="status-line is-error" role="alert">
+              {mediaError}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <div className={`sf-editor sf-${block.type}`} ref={hostRef} />
       )}

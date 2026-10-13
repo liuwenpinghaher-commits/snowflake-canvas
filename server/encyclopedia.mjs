@@ -77,17 +77,65 @@ export function fieldLineLabel(key) {
   return LABEL[key] || key
 }
 
-export function composeEntityPage(entity) {
+function blocksToMarkdown(blocks) {
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .map((block) => {
+      if (!block || typeof block !== 'object') return ''
+      const value = typeof block.text === 'string' ? block.text : ''
+      if (block.type === 'heading') return `# ${value}`
+      if (block.type === 'quote') return value.split('\n').map((line) => `> ${line}`).join('\n')
+      if (block.type === 'todo') return `- [${block.checked === true ? 'x' : ' '}] ${value}`
+      if (block.type === 'divider') return '---'
+      if (block.type === 'image') {
+        const alt = typeof block.alt === 'string' ? block.alt : value
+        const relativePath = typeof block.relativePath === 'string' ? block.relativePath : ''
+        return `![${alt}](${relativePath})`
+      }
+      if (block.type === 'file') {
+        const name = typeof block.name === 'string' ? block.name : value
+        const relativePath = typeof block.relativePath === 'string' ? block.relativePath : ''
+        const size = typeof block.size === 'number' && Number.isFinite(block.size) ? block.size : 0
+        return `[${name}](${relativePath} "${size}")`
+      }
+      return value
+    })
+    .filter((line) => line.length > 0)
+    .join('\n\n')
+}
+
+function blocksForField(document, entity, key) {
+  const cards = document && document.snowflake && document.snowflake.cards
+  if (!cards || typeof cards !== 'object') return null
+  const views = entity.views && typeof entity.views === 'object' ? entity.views : {}
+  const ids = [views.renwubiao, views.renwugushi, views.renwudangan]
+  for (const id of ids) {
+    if (typeof id !== 'string' || !cards[id]) continue
+    const list = cards[id].blocks && cards[id].blocks[key]
+    if (Array.isArray(list) && list.length > 0) return list
+  }
+  return null
+}
+
+export function composeEntityPage(entity, document) {
   if (!entity || typeof entity !== 'object') return ''
   const lines = []
   const name = text(entity.name)
   if (name) lines.push(name)
   const fields = entity.fields && typeof entity.fields === 'object' ? entity.fields : {}
   for (const [key, field] of Object.entries(fields)) {
+    if (key === 'cover') continue
     if (!field || typeof field.value !== 'string') continue
     const value = field.value.trim()
-    if (!value) continue
+    if (!value && !blocksForField(document, entity, key)) continue
     if (key === 'name' && value === name) continue
+    const rich = blocksForField(document, entity, key)
+    if (rich) {
+      const markdown = blocksToMarkdown(rich)
+      if (markdown) lines.push(markdown)
+      continue
+    }
+    if (!value) continue
     lines.push(`${fieldLineLabel(key)}：${value}`)
   }
   return lines.join('\n\n')
@@ -197,6 +245,6 @@ export async function promoteEntityPage(document, entityId, requestId, deps) {
   if (!entity) return { ok: false, statusCode: 404, error: '没有这个实体' }
   const slug = text(entity.slug)
   if (!slug) return { ok: false, statusCode: 400, error: '还没绑定' }
-  const body = composeEntityPage(entity)
+  const body = composeEntityPage(entity, document)
   return promoteEncyclopedia({ slug, body, requestId, bookId: deps.bookId || '' }, deps)
 }
