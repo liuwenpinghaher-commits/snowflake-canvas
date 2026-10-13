@@ -2082,15 +2082,20 @@ button.person-ghost {
 
 .relation-page {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .relation-filter {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .relation-filter label,
@@ -2100,6 +2105,15 @@ button.person-ghost {
   align-items: center;
 }
 
+.relation-count {
+  margin-left: auto;
+  color: #6d6256;
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .relation-sub {
   display: flex;
   flex-direction: column;
@@ -2107,27 +2121,131 @@ button.person-ghost {
   margin: 4px 0 8px 22px;
 }
 
-.relation-svg {
-  width: 100%;
-  height: auto;
-  color: #6b645b;
+.relation-graph {
+  position: relative;
+  flex: 1;
+  min-height: 0;
   background: #fffdf8;
   border: 1px solid #e4d9cc;
   border-radius: 8px;
+  overflow: hidden;
 }
 
-.relation-svg text {
-  fill: #241c16;
+.relation-cyto {
+  position: absolute;
+  inset: 0;
+}
+
+.relation-scope {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.relation-legend {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 8px 10px;
+  background: rgb(255 253 248 / 92%);
+  border: 1px solid #e4d9cc;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.relation-legend-item {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #241c16;
   font-size: 12px;
 }
 
-.relation-edge-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
+.relation-swatch {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.relation-swatch.is-square {
+  border-radius: 2px;
+}
+
+.relation-swatch.is-circle {
+  border-radius: 50%;
+}
+
+.relation-legend-line {
+  width: 28px;
+  flex: none;
+  border-top-width: 2px;
+}
+
+.relation-legend-line.is-solid {
+  border-top-style: solid;
+}
+
+.relation-legend-line.is-dashed {
+  border-top-style: dashed;
+}
+
+.relation-legend-line.is-dotted {
+  border-top-style: dotted;
+}
+
+.relation-legend-line.is-thin {
+  border-top-width: 1px;
+}
+
+.relation-legend-line.is-dash-8-4 {
+  height: 2px;
+  border-top-style: none;
+  background: repeating-linear-gradient(90deg, var(--legend-line) 0 8px, transparent 8px 12px);
+}
+
+.relation-legend-line.is-arrow {
+  position: relative;
+  margin-right: 6px;
+}
+
+.relation-legend-line.is-arrow::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 7px solid var(--legend-line);
+  transform: translateY(-50%);
+}
+
+.relation-badge {
+  position: absolute;
+  z-index: 3;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 999px;
+  color: #fffdf8;
+  font-size: 11px;
+  line-height: 18px;
+  visibility: hidden;
+  cursor: pointer;
+}
+
+.relation-faded {
+  opacity: 0.15;
 }
 
 .chapter-head {
@@ -2318,6 +2436,10 @@ button.person-ghost {
 
 .relation-stage {
   position: relative;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .relation-side {
@@ -2331,7 +2453,7 @@ button.person-ghost {
   border: 1px solid #d9d0c3;
   border-radius: 8px;
   padding: 12px;
-  z-index: 2;
+  z-index: 4;
 }
 
 .relation-side h3 {
@@ -2346,11 +2468,6 @@ button.person-ghost {
 .relation-side p {
   margin: 0 0 6px;
   white-space: pre-wrap;
-}
-
-.relation-node,
-.relation-edge {
-  cursor: pointer;
 }
 
 .encyclopedia-page {

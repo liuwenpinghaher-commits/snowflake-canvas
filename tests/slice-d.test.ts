@@ -269,4 +269,43 @@ describe('切片 D 关系图与章节', () => {
       expect(second / width).toBeLessThanOrEqual(0.75)
     }
   })
+
+  it('≥9 个节点时，默认缩放下节点名不是全部同时画在图上', async () => {
+    const names = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬']
+    let state = createDocument('zoom-labels')
+    state = {
+      ...state,
+      entities: names.map((name, index) => entity(`zoom-${index}`, index % 2 === 0 ? 'person' : 'place', name)),
+    }
+    for (let index = 0; index < names.length - 1; index += 1) {
+      state = addEdge(state, `zoom-${index}`, `zoom-${index + 1}`, 'relates-entity')
+    }
+    const html = renderToStaticMarkup(createElement(RelationPage, { state }))
+    if (html.includes('relation-svg')) {
+      const drawn = names.filter((name) => html.includes(name)).length
+      expect(drawn).toBeLessThan(names.length)
+      return
+    }
+    const page = await import('../src/RelationPage.tsx')
+    const graph = buildRelationGraph(state)
+    const cy = page.mountRelationCy({
+      graph,
+      focusId: null,
+      viewport: { width: 960, height: 640 },
+    })
+    const drawn = cy.nodes().filter((node) => {
+      const label = String(node.style('label') ?? '')
+      if (!label) return false
+      return page.nodeLabelVisible(
+        Number(node.numericStyle('font-size')),
+        cy.zoom(),
+        Number(node.numericStyle('min-zoomed-font-size')),
+        1,
+      )
+    }).length
+    expect(cy.nodes().length).toBeGreaterThanOrEqual(9)
+    expect(Number(cy.nodes()[0]?.numericStyle('min-zoomed-font-size'))).toBeGreaterThan(0)
+    expect(drawn).toBeLessThan(names.length)
+    cy.destroy()
+  })
 })
