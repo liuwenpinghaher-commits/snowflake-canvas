@@ -35,6 +35,7 @@ import { registerAssetRoutes } from './assets.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 import { validateDocumentFlows } from './flow-validate.mjs'
+import { draftFlow, readDraftScope, resolveDraftComplete } from './flow-draft.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
@@ -1786,6 +1787,41 @@ function registerApi(app, prefix) {
     }
     reply.code(outcome.status)
     return sendCanvas(reply, outcome.record)
+  })
+
+  // 起草只返回草稿。不写 snowflake.json，不把草稿塞进 flows。
+  scoped('POST', '/flows/draft', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    let scope
+    try {
+      scope = readDraftScope(request.body)
+    } catch (error) {
+      reply.code(400)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ error: error instanceof Error && error.message ? error.message : '范围没有给对' })
+    }
+    let record
+    try {
+      record = await exclusive(book, () => readCanonical(book))
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      if (error && error.statusCode === 404) return sendNoBook(reply)
+      throw error
+    }
+    try {
+      const complete = await resolveDraftComplete()
+      const draft = await draftFlow(record.document, scope, { complete })
+      reply.header('Cache-Control', 'no-store')
+      return reply.send(draft)
+    } catch (error) {
+      const status = error && error.statusCode === 400 ? 400 : 502
+      reply.code(status)
+      reply.header('Cache-Control', 'no-store')
+      const fallback = status === 400 ? '范围没有给对' : '连不上起草服务'
+      const message = error instanceof Error && error.message ? error.message : fallback
+      return reply.send({ error: message })
+    }
   })
 
   scoped('POST', '/canvas/keep', async (request, reply) => {
