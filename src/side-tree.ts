@@ -1,6 +1,6 @@
 import type { AppState } from './document.ts'
 
-export type WorkPage = 'canvas' | 'cast' | 'relation' | 'chapter' | 'encyclopedia' | 'scenes'
+export type WorkPage = 'canvas' | 'cast' | 'relation' | 'chapter' | 'encyclopedia' | 'scenes' | 'flow'
 
 export type TreeTarget =
   | { kind: 'book' }
@@ -64,6 +64,7 @@ export function bookTree(bookName: string, state: AppState): TreeNode {
         })),
       },
       { id: 'page:scenes', label: '场次', target: { kind: 'page', page: 'scenes' } },
+      { id: 'page:flow', label: '流程', target: { kind: 'page', page: 'flow' } },
     ],
   }
 }

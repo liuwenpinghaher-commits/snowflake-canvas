@@ -12,6 +12,7 @@ import SideTree from './SideTree.tsx'
 import ChapterPage from './ChapterPage.tsx'
 import RelationPage from './RelationPage.tsx'
 import EncyclopediaPage from './EncyclopediaPage.tsx'
+import { FlowPage } from './FlowPage.tsx'
 import { defaultRelationFilter, type RelationFilter } from './relations.ts'
 import {
   DEFAULT_BOOK_NAME,
@@ -316,7 +317,7 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState<string | null>(null)
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
-  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter' | 'scenes'>('canvas')
+  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter' | 'scenes' | 'flow'>('canvas')
   const [encyclopediaEntityId, setEncyclopediaEntityId] = useState<string | null>(null)
   const [linkAsk, setLinkAsk] = useState<{ from: string; to: string } | null>(null)
   const [pickingRelation, setPickingRelation] = useState(false)
@@ -965,6 +966,7 @@ export default function App() {
             ['encyclopedia', '百科'],
             ['chapter', '章节'],
             ['scenes', '场次'],
+            ['flow', '流程'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1089,6 +1091,15 @@ export default function App() {
             void ctlRef.current?.mutate(recipe, UNDOABLE)
           }}
           onOpenCard={(id) => showCard(id, false)}
+        />
+      ) : null}
+      {page === 'flow' ? (
+        <FlowPage
+          state={state}
+          canEdit={canEdit}
+          onApply={(recipe) => {
+            void ctlRef.current?.mutate(recipe, UNDOABLE)
+          }}
         />
       ) : null}
       {page === 'canvas' || page === 'books' ? (
