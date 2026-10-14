@@ -30,6 +30,10 @@ import {
   type LooseCard,
   type PendingProseScene,
   type PendingEntity,
+  type Flow,
+  type FlowIssue,
+  type FlowScope,
+  type FlowSourceRef,
   type OriginAnchor,
   type ProseBlock,
   type SedimentEvent,
@@ -1157,6 +1161,7 @@ export function mergeDocuments(
       sediment,
       chapters,
       pendingProseScenes,
+      flows: local.state.flows,
       activeId: local.state.activeId,
     }),
     conflicts,
@@ -1287,6 +1292,109 @@ function isStoredLayer(value: string): boolean {
   return (LAYERS as readonly string[]).includes(value) || value === '人物'
 }
 
+function readFlowScopeId(value: unknown, required: boolean): string | undefined | null {
+  if (value === undefined) return required ? null : undefined
+  if (typeof value !== 'string') return null
+  if (required && value.length === 0) return null
+  return value
+}
+
+function parseFlowScope(value: unknown): FlowScope | null {
+  if (!isRecord(value)) return null
+  if (value.kind !== 'book' && value.kind !== 'chapter' && value.kind !== 'scene') return null
+  const chapterId = readFlowScopeId(value.chapterId, value.kind === 'chapter' || value.kind === 'scene')
+  const sceneId = readFlowScopeId(value.sceneId, value.kind === 'scene')
+  if (chapterId === null || sceneId === null) return null
+  const scope: FlowScope = { kind: value.kind }
+  if (chapterId !== undefined) scope.chapterId = chapterId
+  if (sceneId !== undefined) scope.sceneId = sceneId
+  return scope
+}
+
+function parseFlowIssue(value: unknown, requireRule: boolean): FlowIssue | null {
+  if (!isRecord(value) || typeof value.message !== 'string') return null
+  const issue: FlowIssue = { message: value.message }
+  if (requireRule) {
+    if (typeof value.ruleId !== 'string') return null
+    issue.ruleId = value.ruleId
+  } else if (value.ruleId !== undefined) {
+    if (typeof value.ruleId !== 'string') return null
+    issue.ruleId = value.ruleId
+  }
+  if (value.elementId !== undefined) {
+    if (typeof value.elementId !== 'string') return null
+    issue.elementId = value.elementId
+  }
+  return issue
+}
+
+function parseFlowSourceRef(value: unknown): FlowSourceRef | null {
+  if (!isRecord(value)) return null
+  if (value.kind !== 'card' && value.kind !== 'edge' && value.kind !== 'chapter' && value.kind !== 'scene' && value.kind !== 'entity') {
+    return null
+  }
+  if (typeof value.id !== 'string' || value.id.length === 0) return null
+  return { kind: value.kind, id: value.id }
+}
+
+function parseFlow(value: unknown): Flow | null {
+  if (!isRecord(value)) return null
+  if (typeof value.id !== 'string' || value.id.length === 0) return null
+  if (typeof value.title !== 'string') return null
+  const scope = parseFlowScope(value.scope)
+  if (!scope) return null
+  if (typeof value.xml !== 'string' || typeof value.beta !== 'string') return null
+  if (value.origin !== 'llm' && value.origin !== 'human') return null
+  if (!Array.isArray(value.sourceRefs)) return null
+  const sourceRefs: FlowSourceRef[] = []
+  for (const item of value.sourceRefs) {
+    const parsed = parseFlowSourceRef(item)
+    if (!parsed) return null
+    sourceRefs.push(parsed)
+  }
+  if (!isRecord(value.validation)) return null
+  const validation = value.validation
+  if (typeof validation.ranAt !== 'string' || typeof validation.valid !== 'boolean') return null
+  if (!Array.isArray(validation.errors) || !Array.isArray(validation.warnings)) return null
+  const errors: FlowIssue[] = []
+  for (const item of validation.errors) {
+    const parsed = parseFlowIssue(item, true)
+    if (!parsed) return null
+    errors.push(parsed)
+  }
+  const warnings: FlowIssue[] = []
+  for (const item of validation.warnings) {
+    const parsed = parseFlowIssue(item, false)
+    if (!parsed) return null
+    warnings.push(parsed)
+  }
+  return {
+    id: value.id,
+    title: value.title,
+    scope,
+    xml: value.xml,
+    beta: value.beta,
+    origin: value.origin,
+    sourceRefs,
+    validation: { ranAt: validation.ranAt, valid: validation.valid, errors, warnings },
+  }
+}
+
+// 缺省、null、非数组当成没有流程。数组里有坏条目或重复 id，整份文档失败。
+function parseFlowList(value: unknown): Flow[] | null {
+  if (value === undefined || value === null || !Array.isArray(value)) return []
+  const flows: Flow[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    const parsed = parseFlow(item)
+    if (!parsed) return null
+    if (seen.has(parsed.id)) return null
+    seen.add(parsed.id)
+    flows.push(parsed)
+  }
+  return flows
+}
+
 function toAppState(value: unknown): AppState | null {
   if (!isRecord(value)) return null
   const canvas = value.canvas
@@ -1314,12 +1422,15 @@ function toAppState(value: unknown): AppState | null {
     loose[id] = parsed
   }
   const cards = loadCards(loose, edges)
+  const flows = parseFlowList(value.flows)
+  if (flows === null) return null
   const parsedEntities = parseEntityList(value.entities)
   const sediment = parseSedimentList(value.sediment)
   const chapters = parseChapterList(value.chapters)
   let state: AppState = {
     canvas: { nodes, edges: migrateEdges(edges, cards) },
     snowflake: { fileId: snowflake.fileId, cards },
+    flows,
     entities: parsedEntities.length > 0 ? parsedEntities : collectPersonEntities(cards),
     sediment,
     chapters,

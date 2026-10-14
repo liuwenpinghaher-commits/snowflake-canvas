@@ -98,6 +98,71 @@ function ifMatchSatisfied(header, version) {
   return false
 }
 
+function flowIssueOk(value, requireRule) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if (typeof value.message !== 'string') return false
+  if (requireRule) {
+    if (typeof value.ruleId !== 'string') return false
+  } else if (value.ruleId !== undefined && typeof value.ruleId !== 'string') {
+    return false
+  }
+  if (value.elementId !== undefined && typeof value.elementId !== 'string') return false
+  return true
+}
+
+function flowScopeIdOk(value, required) {
+  if (value === undefined) return !required
+  if (typeof value !== 'string') return false
+  if (required && value.length === 0) return false
+  return true
+}
+
+function flowScopeOk(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const kind = value.kind
+  if (kind !== 'book' && kind !== 'chapter' && kind !== 'scene') return false
+  if (!flowScopeIdOk(value.chapterId, kind === 'chapter' || kind === 'scene')) return false
+  if (!flowScopeIdOk(value.sceneId, kind === 'scene')) return false
+  return true
+}
+
+function flowSourceRefOk(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if (value.kind !== 'card' && value.kind !== 'edge' && value.kind !== 'chapter' && value.kind !== 'scene' && value.kind !== 'entity') {
+    return false
+  }
+  return typeof value.id === 'string' && value.id.length > 0
+}
+
+function flowItemOk(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if (typeof value.id !== 'string' || value.id.length === 0) return false
+  if (typeof value.title !== 'string') return false
+  if (!flowScopeOk(value.scope)) return false
+  if (typeof value.xml !== 'string' || typeof value.beta !== 'string') return false
+  if (value.origin !== 'llm' && value.origin !== 'human') return false
+  if (!Array.isArray(value.sourceRefs) || !value.sourceRefs.every(flowSourceRefOk)) return false
+  const validation = value.validation
+  if (!validation || typeof validation !== 'object' || Array.isArray(validation)) return false
+  if (typeof validation.ranAt !== 'string' || typeof validation.valid !== 'boolean') return false
+  if (!Array.isArray(validation.errors) || !validation.errors.every((item) => flowIssueOk(item, true))) return false
+  if (!Array.isArray(validation.warnings) || !validation.warnings.every((item) => flowIssueOk(item, false))) return false
+  return true
+}
+
+// flows 缺省放行（旧正本）。在则必须是数组；坏条目或重复 id 拒绝。不因其它未知顶层字段拒绝。
+function flowsDocumentOk(flows) {
+  if (flows === undefined) return true
+  if (!Array.isArray(flows)) return false
+  const seen = new Set()
+  for (const item of flows) {
+    if (!flowItemOk(item)) return false
+    if (seen.has(item.id)) return false
+    seen.add(item.id)
+  }
+  return true
+}
+
 function isDocument(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const canvas = value.canvas
@@ -107,6 +172,7 @@ function isDocument(value) {
   if (!Array.isArray(canvas.nodes) || !Array.isArray(canvas.edges)) return false
   if (typeof snowflake.fileId !== 'string' || snowflake.fileId.length === 0) return false
   if (!snowflake.cards || typeof snowflake.cards !== 'object' || Array.isArray(snowflake.cards)) return false
+  if (!flowsDocumentOk(value.flows)) return false
   return true
 }
 

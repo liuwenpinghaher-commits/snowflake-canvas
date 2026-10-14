@@ -446,6 +446,45 @@ export interface LooseCard {
   blocks?: Record<string, ProseBlock[]>
 }
 
+export type FlowScopeKind = 'book' | 'chapter' | 'scene'
+
+export interface FlowScope {
+  kind: FlowScopeKind
+  chapterId?: string
+  sceneId?: string
+}
+
+export type FlowOrigin = 'llm' | 'human'
+
+export interface FlowSourceRef {
+  kind: 'card' | 'edge' | 'chapter' | 'scene' | 'entity'
+  id: string
+}
+
+export interface FlowIssue {
+  ruleId?: string
+  message: string
+  elementId?: string
+}
+
+export interface FlowValidation {
+  ranAt: string
+  valid: boolean
+  errors: FlowIssue[]
+  warnings: FlowIssue[]
+}
+
+export interface Flow {
+  id: string
+  title: string
+  scope: FlowScope
+  xml: string
+  beta: string
+  origin: FlowOrigin
+  sourceRefs: FlowSourceRef[]
+  validation: FlowValidation
+}
+
 export interface AppState {
   canvas: {
     nodes: CanvasNode[]
@@ -455,6 +494,7 @@ export interface AppState {
     fileId: string
     cards: Record<string, Card>
   }
+  flows: Flow[]
   entities?: Entity[]
   sediment?: SedimentEvent[]
   chapters?: BookChapter[]
@@ -1345,6 +1385,7 @@ export function createDocument(fileId: string): AppState {
   return {
     canvas: { nodes: [], edges: [] },
     snowflake: { fileId, cards: {} },
+    flows: [],
     entities: [],
     sediment: [],
     chapters: [],
@@ -1834,9 +1875,38 @@ function pickEdge(edge: CanvasEdge): CanvasEdge {
   return out
 }
 
+function cloneFlowIssue(issue: FlowIssue): FlowIssue {
+  const out: FlowIssue = { message: issue.message }
+  if (issue.ruleId !== undefined) out.ruleId = issue.ruleId
+  if (issue.elementId !== undefined) out.elementId = issue.elementId
+  return out
+}
+
+function cloneFlow(flow: Flow): Flow {
+  const scope: FlowScope = { kind: flow.scope.kind }
+  if (flow.scope.chapterId !== undefined) scope.chapterId = flow.scope.chapterId
+  if (flow.scope.sceneId !== undefined) scope.sceneId = flow.scope.sceneId
+  return {
+    id: flow.id,
+    title: flow.title,
+    scope,
+    xml: flow.xml,
+    beta: flow.beta,
+    origin: flow.origin,
+    sourceRefs: flow.sourceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+    validation: {
+      ranAt: flow.validation.ranAt,
+      valid: flow.validation.valid,
+      errors: flow.validation.errors.map(cloneFlowIssue),
+      warnings: flow.validation.warnings.map(cloneFlowIssue),
+    },
+  }
+}
+
 export function serializeDocument(state: AppState): {
   canvas: { nodes: CanvasNode[]; edges: CanvasEdge[] }
   snowflake: { fileId: string; cards: Record<string, Card> }
+  flows?: Flow[]
   entities?: Entity[]
   sediment?: SedimentEvent[]
   chapters?: BookChapter[]
@@ -1877,6 +1947,7 @@ export function serializeDocument(state: AppState): {
   const chapters = state.chapters ?? []
   const pending = state.pendingProseScenes ?? []
   const pendingEntities = (state.pendingEntities ?? []).map((item) => ({ name: item.name, cardIds: [...item.cardIds] }))
+  const flows = (state.flows ?? []).map(cloneFlow)
   return {
     canvas: {
       nodes: state.canvas.nodes.map(pickNode),
@@ -1891,6 +1962,7 @@ export function serializeDocument(state: AppState): {
     ...(chapters.length > 0 ? { chapters } : {}),
     ...(pending.length > 0 ? { pendingProseScenes: pending } : {}),
     ...(pendingEntities.length > 0 ? { pendingEntities } : {}),
+    ...(flows.length > 0 ? { flows } : {}),
   }
 }
 
