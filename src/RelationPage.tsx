@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type ElementDefinition, type EventObject, type NodeSingular } from 'cytoscape'
 import {
   ENTITY_TYPES,
@@ -116,6 +116,10 @@ export function relationCenter(state: AppState, focusId: string | null): string 
 export const NODE_SIZE_MIN = 44
 export const NODE_SIZE_MAX = 96
 const NODE_SIZE_DEGREE_CAP = 8
+/** 最低相连边数滑杆的上限，和节点尺寸封顶用的边数是同一个数。 */
+export const DEGREE_HIDE_MAX = NODE_SIZE_DEGREE_CAP
+export const BRAIN_EDGE_CLASS = 'rel-brain'
+export const BRAIN_EDGE_COLOR = '#7a5ea7'
 
 /** 相连边数为 0 时用下限。边数到封顶后停在上限，枢纽点不会再被撑大。 */
 export function nodeSizeForDegree(degree: number): number {
@@ -182,6 +186,48 @@ function degreeByNode(graph: RelationGraph): Map<string, number> {
   return counts
 }
 
+export function clampDegreeThreshold(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  const whole = Math.floor(value)
+  if (whole < 0) return 0
+  if (whole > DEGREE_HIDE_MAX) return DEGREE_HIDE_MAX
+  return whole
+}
+
+/** 勾上「隐藏孤点」时，至少按 1 条边来藏；滑杆更高就用滑杆。 */
+export function activeDegreeThreshold(minEdges: number, hideIsolates: boolean): number {
+  const slider = clampDegreeThreshold(minEdges)
+  if (!hideIsolates) return slider
+  return Math.max(slider, 1)
+}
+
+/**
+ * 只改返回给画面的那一份。阈值为 0 时原样交还，不复制、不改传入的 nodes / edges。
+ * 藏掉节点后，连到这些节点上的边也不再进入这份图，尺寸按这份图重算。
+ */
+export function hideLowDegree(graph: RelationGraph, minEdges: number, hideIsolates = false): RelationGraph {
+  const threshold = activeDegreeThreshold(minEdges, hideIsolates)
+  if (threshold <= 0) return graph
+  const degree = degreeByNode(graph)
+  const hidden = new Set<string>()
+  for (const node of graph.nodes) {
+    if ((degree.get(node.id) ?? 0) < threshold) hidden.add(node.id)
+  }
+  if (hidden.size === 0) return graph
+  const nodes = graph.nodes.filter((node) => !hidden.has(node.id))
+  const edges = graph.edges.filter((edge) => !hidden.has(edge.from) && !hidden.has(edge.to))
+  return { nodes, edges }
+}
+
+export function relationDisplayElements(
+  graph: RelationGraph,
+  focusId: string | null,
+  options?: { minDegree?: number; hideIsolates?: boolean },
+): ElementDefinition[] {
+  const shown = hideLowDegree(graph, options?.minDegree ?? 0, options?.hideIsolates === true)
+  return relationElements(shown, focusId)
+}
+
 function relationElements(graph: RelationGraph, focusId: string | null): ElementDefinition[] {
   const nodeIds = new Set(graph.nodes.map((node) => node.id))
   const degree = degreeByNode(graph)
@@ -217,7 +263,106 @@ function relationElements(graph: RelationGraph, focusId: string | null): Element
   return [...nodes, ...edges]
 }
 
-function relationStylesheet(): cytoscape.StylesheetJson {
+export interface BrainBacklink {
+  fromSlug: string
+  toSlug: string
+  label: string
+}
+
+/** 当前画面里的设定物，有百科页名才去问脑。同一个页名只问一次。 */
+export function entitySlugsForBacklinks(
+  entities: readonly { id: string; slug?: string }[],
+  nodeIds: readonly string[],
+): string[] {
+  const ids = new Set(nodeIds)
+  const slugs: string[] = []
+  const seen = new Set<string>()
+  for (const entity of entities) {
+    if (!ids.has(entity.id)) continue
+    const slug = typeof entity.slug === 'string' ? entity.slug.trim() : ''
+    if (!slug || seen.has(slug)) continue
+    seen.add(slug)
+    slugs.push(slug)
+  }
+  return slugs
+}
+
+/** 两端的页名都对得上当前画面里的设定物才画。对不上的不新建节点。 */
+export function brainBacklinkElements(
+  graph: RelationGraph,
+  entities: readonly { id: string; slug?: string }[],
+  links: readonly BrainBacklink[],
+): ElementDefinition[] {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id))
+  const slugToId = new Map<string, string>()
+  for (const entity of entities) {
+    if (!nodeIds.has(entity.id)) continue
+    const slug = typeof entity.slug === 'string' ? entity.slug.trim() : ''
+    if (!slug || slugToId.has(slug)) continue
+    slugToId.set(slug, entity.id)
+  }
+  const elements: ElementDefinition[] = []
+  const seen = new Set<string>()
+  for (const link of links) {
+    const source = slugToId.get(link.fromSlug)
+    const target = slugToId.get(link.toSlug)
+    if (!source || !target) continue
+    const key = `${source}\0${target}\0${link.label}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    elements.push({
+      data: {
+        id: `brain:${source}:${target}:${seen.size}`,
+        source,
+        target,
+      },
+      classes: BRAIN_EDGE_CLASS,
+    })
+  }
+  return elements
+}
+
+function relationBacklinksUrl(slug: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  return `${prefix}/api/relation/backlinks?slug=${encodeURIComponent(slug)}`
+}
+
+/** 失败、非 JSON、ok 为 false、中途取消：这一页的脑反链当空的，不往外抛。 */
+export async function fetchRelationBacklinks(slug: string, signal?: AbortSignal): Promise<BrainBacklink[]> {
+  try {
+    const response = await fetch(relationBacklinksUrl(slug), { cache: 'no-store', signal })
+    if (!response.ok) return []
+    const body = (await response.json()) as { ok?: unknown; edges?: unknown }
+    if (!body || body.ok !== true || !Array.isArray(body.edges)) return []
+    const links: BrainBacklink[] = []
+    for (const edge of body.edges) {
+      if (!edge || typeof edge !== 'object') continue
+      const record = edge as { fromSlug?: unknown; toSlug?: unknown; label?: unknown }
+      const fromSlug = typeof record.fromSlug === 'string' ? record.fromSlug : ''
+      const toSlug = typeof record.toSlug === 'string' ? record.toSlug : ''
+      if (!fromSlug || !toSlug) continue
+      const label = typeof record.label === 'string' && record.label.trim() ? record.label : '脑反链'
+      links.push({ fromSlug, toSlug, label })
+    }
+    return links
+  } catch {
+    return []
+  }
+}
+
+/** 默认只有引用边带三角。总开关打开后，当前画面上每一种边都指向 target。 */
+export function relationArrowByClass(showAllArrows = false): Record<string, 'triangle' | 'none'> {
+  const arrows: Record<string, 'triangle' | 'none'> = {}
+  for (const look of EDGE_LOOKS) {
+    arrows[look.cls] = showAllArrows || look.arrow ? 'triangle' : 'none'
+  }
+  arrows[BRAIN_EDGE_CLASS] = showAllArrows ? 'triangle' : 'none'
+  return arrows
+}
+
+export function relationStylesheet(showAllArrows = false): cytoscape.StylesheetJson {
+  const arrows = relationArrowByClass(showAllArrows)
   return [
     {
       selector: 'node',
@@ -287,13 +432,30 @@ function relationStylesheet(): cytoscape.StylesheetJson {
             : look.dash === '2,3'
               ? { 'line-dash-pattern': [2, 3] }
               : {}),
-        'target-arrow-shape': look.arrow ? 'triangle' : 'none',
+        'target-arrow-shape': arrows[look.cls],
         'target-arrow-color': look.color,
-        ...(look.arrow ? { 'arrow-scale': 1 } : {}),
+        ...(arrows[look.cls] === 'triangle' ? { 'arrow-scale': 1 } : {}),
         label: look.caption,
         'text-background-opacity': look.caption ? 0.92 : 0,
       },
     })),
+    {
+      selector: `edge.${BRAIN_EDGE_CLASS}`,
+      style: {
+        width: 1.5,
+        'line-color': BRAIN_EDGE_COLOR,
+        'line-style': 'dashed',
+        'line-dash-pattern': [6, 3],
+        'target-arrow-shape': arrows[BRAIN_EDGE_CLASS],
+        'target-arrow-color': BRAIN_EDGE_COLOR,
+        ...(arrows[BRAIN_EDGE_CLASS] === 'triangle' ? { 'arrow-scale': 1 } : {}),
+        label: '',
+        'font-size': 11,
+        'min-zoomed-font-size': 0,
+        color: '#241c16',
+        'text-background-opacity': 0,
+      },
+    },
     {
       selector: '.faded',
       style: { opacity: 0.15 },
@@ -351,6 +513,7 @@ export function mountRelationCy(options: {
   graph: RelationGraph
   focusId?: string | null
   viewport?: { width: number; height: number }
+  showAllArrows?: boolean
 }): Core {
   const container = options.container ?? undefined
   const cy = cytoscape({
@@ -358,7 +521,7 @@ export function mountRelationCy(options: {
     headless: !container,
     styleEnabled: true,
     elements: relationElements(options.graph, options.focusId ?? null),
-    style: relationStylesheet(),
+    style: relationStylesheet(options.showAllArrows === true),
     layout: {
       name: 'cose',
       animate: Boolean(container),
@@ -617,6 +780,9 @@ export default function RelationPage({
   const centerId = relationCenter(state, focusId)
   const [scope, setScope] = useState<RelationScope>(() => (centerId ? 'local' : 'book'))
   const [localDepth, setLocalDepth] = useState(LOCAL_DEPTH_DEFAULT)
+  const [showArrows, setShowArrows] = useState(false)
+  const [minDegree, setMinDegree] = useState(0)
+  const [hideIsolates, setHideIsolates] = useState(false)
   useLayoutEffect(() => {
     setScope(centerId ? 'local' : 'book')
   }, [centerId])
@@ -629,25 +795,38 @@ export default function RelationPage({
     () => (scope === 'local' ? localNeighborhood(graph, centerId, localDepth) : graph),
     [graph, scope, centerId, localDepth],
   )
-  const graphKey = `${scope}|${scope === 'local' ? localDepth : ''}|${focusId ?? ''}|${displayed.nodes.map((node) => node.id).join(',')}|${displayed.edges
+  const shown = useMemo(
+    () => hideLowDegree(displayed, minDegree, hideIsolates),
+    [displayed, minDegree, hideIsolates],
+  )
+  const brainSlugs = useMemo(
+    () => entitySlugsForBacklinks(state.entities ?? [], shown.nodes.map((node) => node.id)),
+    [state.entities, shown],
+  )
+  const graphKey = `${scope}|${scope === 'local' ? localDepth : ''}|${focusId ?? ''}|${showArrows ? 1 : 0}|${activeDegreeThreshold(minDegree, hideIsolates)}|${shown.nodes.map((node) => node.id).join(',')}|${shown.edges
     .map((edge) => edge.id)
     .join(',')}`
-  const badges = useMemo(() => appearanceBadges(displayed), [displayed])
+  const badges = useMemo(() => {
+    const ids = new Set(shown.nodes.map((node) => node.id))
+    return appearanceBadges(displayed).filter((badge) => ids.has(badge.nodeId))
+  }, [displayed, shown])
   const kept = open?.kind === 'node' ? keptNodeIds(displayed, open.id) : null
   const rows = relationTableRows(state, filter)
   const hasRelates = state.canvas.edges.some((edge) => edge.kind === 'relates')
   const hostRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<Core | null>(null)
   const badgeEls = useRef(new Map<string, HTMLElement>())
+  const openRef = useRef(open)
+  openRef.current = open
 
   useLayoutEffect(() => {
     const host = hostRef.current
-    if (!host || view !== 'graph' || displayed.nodes.length === 0) {
+    if (!host || view !== 'graph' || displayed.nodes.length === 0 || shown.nodes.length === 0) {
       cyRef.current?.destroy()
       cyRef.current = null
       return
     }
-    const cy = mountRelationCy({ container: host, graph: displayed, focusId })
+    const cy = mountRelationCy({ container: host, graph: shown, focusId, showAllArrows: showArrows })
     cyRef.current = cy
     const place = () => placeAppearanceBadges(cy, badgeEls.current)
     place()
@@ -666,7 +845,9 @@ export default function RelationPage({
     })
     cy.on('tap', 'edge', (event) => {
       stopNative(event)
-      setOpen({ kind: 'edge', id: event.target.id() })
+      const target = event.target
+      if (target !== cy && target.hasClass(BRAIN_EDGE_CLASS)) return
+      setOpen({ kind: 'edge', id: target.id() })
     })
     cy.on('tap', (event) => {
       if (event.target === cy) setOpen(null)
@@ -675,7 +856,36 @@ export default function RelationPage({
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [graphKey, view, displayed, focusId])
+  }, [graphKey, view, displayed, shown, focusId, showArrows])
+
+  useEffect(() => {
+    if (view !== 'graph') return
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
+    if (brainSlugs.length === 0) {
+      cy.edges(`.${BRAIN_EDGE_CLASS}`).remove()
+      return
+    }
+    let cancelled = false
+    const controllers = brainSlugs.map(() => new AbortController())
+    const graph = shown
+    const entities = state.entities ?? []
+    const slugs = brainSlugs
+    void (async () => {
+      const batches = await Promise.all(slugs.map((slug, index) => fetchRelationBacklinks(slug, controllers[index]?.signal)))
+      if (cancelled || cy.destroyed() || cyRef.current !== cy) return
+      const elements = brainBacklinkElements(graph, entities, batches.flat())
+      cy.batch(() => {
+        cy.edges(`.${BRAIN_EDGE_CLASS}`).remove()
+        for (const element of elements) cy.add(element)
+        applyFocusFade(cy, openRef.current)
+      })
+    })()
+    return () => {
+      cancelled = true
+      for (const controller of controllers) controller.abort()
+    }
+  }, [view, graphKey, brainSlugs, shown, state.entities])
 
   useLayoutEffect(() => {
     const cy = cyRef.current
@@ -826,6 +1036,37 @@ export default function RelationPage({
                   <span>{localDepth}</span>
                 </label>
               ) : null}
+              <label className="relation-depth">
+                <input
+                  type="checkbox"
+                  checked={showArrows}
+                  aria-label="方向箭头"
+                  onChange={(event) => setShowArrows(event.target.checked)}
+                />
+                方向箭头
+              </label>
+              <label className="relation-depth">
+                最低相连边数
+                <input
+                  type="range"
+                  min={0}
+                  max={DEGREE_HIDE_MAX}
+                  step={1}
+                  value={minDegree}
+                  aria-label="最低相连边数"
+                  onChange={(event) => setMinDegree(clampDegreeThreshold(Number(event.target.value)))}
+                />
+                <span>{minDegree}</span>
+              </label>
+              <label className="relation-depth">
+                <input
+                  type="checkbox"
+                  checked={hideIsolates}
+                  aria-label="隐藏孤点"
+                  onChange={(event) => setHideIsolates(event.target.checked)}
+                />
+                隐藏孤点
+              </label>
             </div>
             <div className="relation-legend" aria-label="图例">
               {ENTITY_TYPES.map((type) => (
@@ -841,12 +1082,19 @@ export default function RelationPage({
               {EDGE_LOOKS.map((look) => (
                 <span key={look.cls} className="relation-legend-item">
                   <i
-                    className={`relation-legend-line is-${look.line}${look.dash === '8,4' ? ' is-dash-8-4' : ''}${look.arrow ? ' is-arrow' : ''}${look.width <= 1.5 ? ' is-thin' : ''}`}
+                    className={`relation-legend-line is-${look.line}${look.dash === '8,4' ? ' is-dash-8-4' : ''}${look.arrow || showArrows ? ' is-arrow' : ''}${look.width <= 1.5 ? ' is-thin' : ''}`}
                     style={{ borderTopColor: look.color, ['--legend-line' as string]: look.color }}
                   />
                   {look.legend}
                 </span>
               ))}
+              <span className="relation-legend-item">
+                <i
+                  className={`relation-legend-line is-dashed is-thin${showArrows ? ' is-arrow' : ''}`}
+                  style={{ borderTopColor: BRAIN_EDGE_COLOR, ['--legend-line' as string]: BRAIN_EDGE_COLOR }}
+                />
+                脑反链
+              </span>
             </div>
           </div>
         )}

@@ -1010,6 +1010,170 @@ async function runGbrain(args, stdin) {
   throw last
 }
 
+const RELATION_BACKLINK_TIMEOUT_MS = 8000
+const RELATION_BACKLINK_MAX = 40
+const RELATION_SLUG_MAX = 200
+const RELATION_GBRAIN_STDOUT_MAX = 2_000_000
+
+function relationBacklinkSlug(value) {
+  if (typeof value !== 'string') return ''
+  if (!value || value.length > RELATION_SLUG_MAX) return ''
+  if (/\s/.test(value)) return ''
+  if (value.includes('..')) return ''
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 31 || code === 127) return ''
+  }
+  return value
+}
+
+// 单次只读，8 秒到点杀掉子进程。不走 runGbrain 的 storage_busy 重试。
+function runGbrainBounded(args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'bash',
+      [
+        '-lc',
+        'set -a; source "$HOME/.gbrain/env"; set +a; export PATH="$HOME/.bun/bin:$PATH"; exec "${SNOWFLAKE_GBRAIN_BIN:-$HOME/.bun/bin/gbrain}" "$@"',
+        'bash',
+        ...args,
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+    const stdout = []
+    let size = 0
+    let settled = false
+    let timer = null
+    const finish = (fn, value) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      fn(value)
+    }
+    timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish(reject, new Error('gbrain 超时'))
+    }, timeoutMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length
+      if (size > RELATION_GBRAIN_STDOUT_MAX) {
+        child.kill('SIGKILL')
+        return
+      }
+      stdout.push(chunk)
+    })
+    child.stderr.on('data', () => {})
+    child.on('error', (error) => finish(reject, error))
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(reject, new Error(`退出码 ${code}`))
+        return
+      }
+      finish(resolve, Buffer.concat(stdout).toString('utf8'))
+    })
+    child.stdin.end()
+  })
+}
+
+function parseCliJson(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    // 前面可能有升级提示，取第一段 JSON。
+  }
+  const arrayAt = text.indexOf('[')
+  const objectAt = text.indexOf('{')
+  let start = -1
+  if (arrayAt >= 0 && (objectAt < 0 || arrayAt < objectAt)) start = arrayAt
+  else if (objectAt >= 0) start = objectAt
+  if (start < 0) return null
+  const end = text.lastIndexOf(text[start] === '[' ? ']' : '}')
+  if (end < start) return null
+  try {
+    return JSON.parse(text.slice(start, end + 1))
+  } catch {
+    return null
+  }
+}
+
+function brainEdgeLabel(value) {
+  if (typeof value !== 'string') return '脑反链'
+  const text = value.trim()
+  if (!text || text.length > 80) return '脑反链'
+  return text
+}
+
+function pushBrainEdge(bucket, seen, slug, from, to, label) {
+  if (typeof from !== 'string' || typeof to !== 'string') return
+  const fromSlug = from.trim()
+  const toSlug = to.trim()
+  if (!fromSlug || !toSlug) return
+  if (fromSlug !== slug && toSlug !== slug) return
+  const key = `${fromSlug}\0${toSlug}\0${label}`
+  if (seen.has(key)) return
+  if (bucket.length >= RELATION_BACKLINK_MAX) return
+  seen.add(key)
+  bucket.push({ fromSlug, toSlug, label })
+}
+
+function takeBrainLink(bucket, seen, slug, item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return
+  if (typeof item.depth === 'number' && item.depth > 1) return
+  const from = item.from_slug ?? item.fromSlug
+  const to = item.to_slug ?? item.toSlug
+  if (typeof from === 'string' && typeof to === 'string') {
+    pushBrainEdge(bucket, seen, slug, from, to, brainEdgeLabel(item.link_type ?? item.type))
+    return
+  }
+  if (typeof item.slug !== 'string' || !Array.isArray(item.links)) return
+  for (const link of item.links) {
+    if (!link || typeof link !== 'object') continue
+    if (typeof link.depth === 'number' && link.depth > 1) continue
+    pushBrainEdge(bucket, seen, slug, item.slug, link.to_slug ?? link.toSlug, brainEdgeLabel(link.link_type ?? link.type))
+  }
+}
+
+function collectBrainEdges(slug, parsed, bucket, seen) {
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) takeBrainLink(bucket, seen, slug, item)
+      return
+    }
+    if (!value || typeof value !== 'object') return
+    for (const key of ['links', 'edges', 'nodes', 'paths', 'backlinks']) {
+      if (Array.isArray(value[key])) visit(value[key])
+    }
+  }
+  visit(parsed)
+}
+
+async function readRelationBacklinks(slug) {
+  if (await gbrainDisabled()) return { ok: false, edges: [] }
+  const commands = [
+    ['backlinks', slug, '--json'],
+    ['graph', slug, '--depth', '1', '--json'],
+  ]
+  const reads = await Promise.all(
+    commands.map(async (args) => {
+      try {
+        return { ok: true, value: await runGbrainBounded(args, RELATION_BACKLINK_TIMEOUT_MS) }
+      } catch {
+        return { ok: false, value: '' }
+      }
+    }),
+  )
+  if (reads.some((item) => !item.ok)) return { ok: false, edges: [] }
+  const parsed = reads.map((item) => parseCliJson(item.value))
+  if (parsed.some((item) => item === null)) return { ok: false, edges: [] }
+  const edges = []
+  const seen = new Set()
+  for (const item of parsed) collectBrainEdges(slug, item, edges, seen)
+  return { ok: true, edges }
+}
+
 function flagValue(args, flag) {
   const index = args.indexOf(flag)
   if (index < 0 || index + 1 >= args.length) return ''
@@ -1644,6 +1808,20 @@ function registerApi(app, prefix) {
   })
 
   app.get(`${prefix}/api/health`, async () => ({ ok: true }))
+
+  app.get(`${prefix}/api/relation/backlinks`, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const slug = relationBacklinkSlug(request.query?.slug)
+    if (!slug) {
+      reply.code(400)
+      return reply.send({ error: '页名不合法' })
+    }
+    try {
+      return reply.send(await readRelationBacklinks(slug))
+    } catch {
+      return reply.send({ ok: false, edges: [] })
+    }
+  })
 
   scoped('GET', '/discuss/session', async (request, reply) => {
     const book = await bookFor(request)
