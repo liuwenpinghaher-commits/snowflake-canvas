@@ -77,7 +77,10 @@ export interface RelationNode {
   id: string
   layer: 'idea' | 'entity'
   entityType?: EntityType
+  /** 图上可能被截断的短标签。 */
   label: string
+  /** 悬停和抽屉用的完整标题，不按字数切片。旧图数据可以没有。 */
+  title?: string
   shape: 'circle' | 'square'
   color: string
 }
@@ -100,6 +103,38 @@ function ideaLabel(body: string): string {
   const text = body.trim()
   if (!text) return '卡片'
   return [...text].slice(0, 40).join('')
+}
+
+/** 卡片标题用已有标题字段，否则用正文第一行。不使用图上的 40 字短标签。 */
+export function cardDetailTitle(body: string, fields?: Record<string, string>): string {
+  const titled = ['title', 'name', 'sentence', 'task']
+    .map((key) => fields?.[key]?.trim() ?? '')
+    .find((value) => value.length > 0)
+  if (titled) return titled
+  const text = body.trim()
+  if (!text) return '卡片'
+  const line = text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item.length > 0)
+  return line ?? '卡片'
+}
+
+export function relationNodeTitle(state: AppState, nodeId: string): string {
+  const entity = (state.entities ?? []).find((item) => item.id === nodeId)
+  if (entity) return entity.name.trim() || '未命名'
+  const card = state.snowflake.cards[nodeId]
+  if (card) return cardDetailTitle(card.body ?? '', card.fields)
+  const canvas = state.canvas.nodes.find((item) => item.id === nodeId)
+  const text = canvas?.text?.trim() ?? ''
+  if (text) {
+    const line = text
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .find((item) => item.length > 0)
+    if (line) return line
+  }
+  return nodeId
 }
 
 export function ideasVisible(filter: RelationFilter): boolean {
@@ -153,6 +188,7 @@ export function buildRelationGraph(state: AppState, filter: RelationFilter = def
       id,
       layer: 'idea',
       label: ideaLabel(card.body ?? ''),
+      title: cardDetailTitle(card.body ?? '', card.fields),
       shape: 'circle',
       color: IDEA_COLOR,
     }
@@ -162,11 +198,13 @@ export function buildRelationGraph(state: AppState, filter: RelationFilter = def
 
   for (const entity of state.entities ?? []) {
     if (!isEntityType(entity.entityType)) continue
+    const name = entity.name.trim() || '未命名'
     const node: RelationNode = {
       id: entity.id,
       layer: 'entity',
       entityType: entity.entityType,
-      label: entity.name.trim() || '未命名',
+      label: name,
+      title: name,
       shape: 'square',
       color: ENTITY_COLORS[entity.entityType],
     }

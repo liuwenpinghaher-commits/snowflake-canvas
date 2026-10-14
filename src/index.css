@@ -2565,14 +2565,24 @@ button.person-ghost {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: min(280px, calc(100% - 16px));
+  width: min(400px, calc(100% - 16px));
   max-height: calc(100% - 16px);
   overflow: auto;
   background: #fffdf8;
   border: 1px solid #d9d0c3;
   border-radius: 8px;
   padding: 12px;
-  z-index: 4;
+  z-index: 6;
+  animation: relation-drawer-in 180ms ease-out;
+}
+
+@keyframes relation-drawer-in {
+  from { transform: translateX(28px); }
+  to { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .relation-side { animation: none; }
 }
 
 .relation-side h3 {
@@ -2587,6 +2597,101 @@ button.person-ghost {
 .relation-side p {
   margin: 0 0 6px;
   white-space: pre-wrap;
+}
+
+.relation-detail-head {
+  position: relative;
+  padding-right: 72px;
+}
+
+.relation-detail-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.relation-detail-kind {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0 0 6px;
+  color: #8b4a36;
+}
+
+.relation-detail-title {
+  margin: 0 0 8px;
+  font-size: 20px;
+  line-height: 1.45;
+  font-weight: 650;
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+.relation-detail-body,
+.relation-detail-ends,
+.relation-neighbor-name,
+.relation-neighbor-kind {
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+.relation-detail-body {
+  margin: 0 0 8px;
+}
+
+.relation-neighbors {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.relation-neighbor {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.relation-neighbor-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.relation-detail-slug {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  word-break: break-all;
+}
+
+.relation-side > button:not(.relation-detail-close) {
+  margin: 0 8px 8px 0;
+}
+
+.relation-tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 320px;
+  padding: 6px 8px;
+  background: #fffdf8;
+  border: 1px solid #d9d0c3;
+  border-radius: 6px;
+  color: #241c16;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+  transform: translate(-50%, calc(-100% - 8px));
 }
 
 .encyclopedia-page {

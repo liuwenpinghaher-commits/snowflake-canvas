@@ -19,6 +19,7 @@ import {
   buildRelationGraph,
   defaultRelationFilter,
   edgeKindLabel,
+  relationNodeTitle,
   type RelationEdge,
   type RelationFilter,
   type RelationGraph,
@@ -66,6 +67,8 @@ type LineStyle = 'solid' | 'dashed' | 'dotted'
 /** 照台指定的两条边色。不是设定物色，不进 ENTITY_COLORS。 */
 const MENTION_COLOR = '#b5b0a6'
 const CITATION_COLOR = '#8b877f'
+/** 选中环。和悬停的深色细边分开，跟侧栏的褐色是同一套。 */
+const SELECTION_RING = '#8B4A36'
 
 interface EdgeLook {
   cls: string
@@ -238,6 +241,7 @@ function relationElements(graph: RelationGraph, focusId: string | null): Element
       data: {
         id: node.id,
         label: node.label,
+        title: node.title?.trim() || node.label,
         color: node.color,
         shape: node.shape,
         size: nodeSizeForDegree(degree.get(node.id) ?? 0),
@@ -395,11 +399,24 @@ export function relationStylesheet(showAllArrows = false): cytoscape.StylesheetJ
       style: { 'border-width': 3 },
     },
     {
-      selector: 'node.picked, node.hover',
+      selector: 'node.hover',
       style: {
         'min-zoomed-font-size': 0,
         'border-width': 3,
+        'border-color': '#241c16',
         'z-index': 10,
+      },
+    },
+    {
+      selector: 'node.picked',
+      style: {
+        'min-zoomed-font-size': 0,
+        'border-width': 6,
+        'border-color': SELECTION_RING,
+        'overlay-color': SELECTION_RING,
+        'overlay-opacity': 0.28,
+        'overlay-padding': 8,
+        'z-index': 12,
       },
     },
     {
@@ -469,6 +486,17 @@ export function relationStylesheet(showAllArrows = false): cytoscape.StylesheetJ
         'overlay-color': '#fff4d6',
         'overlay-opacity': 0.9,
         'overlay-padding': 3,
+      },
+    },
+    {
+      selector: 'edge.picked',
+      style: {
+        width: 5,
+        opacity: 1,
+        'z-index': 22,
+        'overlay-color': SELECTION_RING,
+        'overlay-opacity': 0.45,
+        'overlay-padding': 5,
       },
     },
   ]
@@ -575,15 +603,21 @@ function placeAppearanceBadges(cy: Core, badges: Map<string, HTMLElement>) {
   }
 }
 
-function applyFocusFade(cy: Core, open: RelationSelection | null) {
+export function applyFocusFade(cy: Core, open: RelationSelection | null) {
   cy.batch(() => {
-    cy.elements().removeClass('faded')
-    cy.nodes().removeClass('picked')
-    if (open?.kind !== 'node') return
-    const node = cy.getElementById(open.id)
-    if (node.empty()) return
-    node.addClass('picked')
-    cy.elements().not(node.closedNeighborhood()).addClass('faded')
+    cy.elements().removeClass('faded picked')
+    if (!open) return
+    if (open.kind === 'node') {
+      const node = cy.getElementById(open.id)
+      if (node.empty()) return
+      node.addClass('picked')
+      cy.elements().not(node.closedNeighborhood()).addClass('faded')
+      return
+    }
+    const edge = cy.getElementById(open.id)
+    if (edge.empty() || edge.hasClass(BRAIN_EDGE_CLASS)) return
+    edge.addClass('picked')
+    cy.elements().not(edge.union(edge.connectedNodes())).addClass('faded')
   })
 }
 
@@ -643,12 +677,16 @@ function keptNodeIds(graph: RelationGraph, nodeId: string): Set<string> {
   return keep
 }
 
+function fieldText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function draftLines(entity: Entity): string[] {
   const lines: string[] = []
-  const name = entity.name.trim()
+  const name = fieldText(entity.name)
   if (name) lines.push(`名字：${name}`)
-  for (const [key, field] of Object.entries(entity.fields)) {
-    const value = field.value.trim()
+  for (const [key, field] of Object.entries(entity.fields ?? {})) {
+    const value = fieldText(field?.value)
     if (!value) continue
     if (key === 'name' && value === name) continue
     lines.push(`${fieldLabel(key)}：${value}`)
@@ -669,8 +707,157 @@ function edgeDetail(state: AppState, edge: CanvasEdge): { heading: string; lines
 
 export type RelationSelection = { kind: 'node'; id: string } | { kind: 'edge'; id: string }
 
+/** Esc 关掉当前这一层详情。其它键保持原来的选中。 */
+export function relationDetailAfterKey(open: RelationSelection | null, key: string): RelationSelection | null {
+  if (key === 'Escape') return null
+  return open
+}
+
+export function adjacentRelationEdges(graph: RelationGraph, nodeId: string): RelationEdge[] {
+  return graph.edges.filter((edge) => edge.from === nodeId || edge.to === nodeId)
+}
+
+export function focusRelationNode(cy: Core, nodeId: string): boolean {
+  if (cy.destroyed()) return false
+  const node = cy.getElementById(nodeId)
+  if (node.empty()) return false
+  cy.center(node)
+  return true
+}
+
+export function bindRelationGraphEvents(
+  cy: Core,
+  handlers: {
+    onSelectNode: (id: string) => void
+    onSelectEdge: (id: string) => void
+    onClear: () => void
+    onHover: (tip: { text: string; x: number; y: number } | null) => void
+  },
+): void {
+  cy.on('mouseover', 'node', (event) => {
+    event.target.addClass('hover')
+    event.target.connectedEdges().addClass('hover-edge')
+    const pos = event.target.renderedPosition()
+    const text = String(event.target.data('title') || event.target.data('label') || '').trim()
+    if (!text) {
+      handlers.onHover(null)
+      return
+    }
+    handlers.onHover({ text, x: pos.x, y: pos.y - event.target.renderedHeight() / 2 })
+  })
+  cy.on('mouseout', 'node', (event) => {
+    event.target.removeClass('hover')
+    event.target.connectedEdges().removeClass('hover-edge')
+    handlers.onHover(null)
+  })
+  cy.on('tap', 'node', (event) => {
+    stopNative(event)
+    handlers.onSelectNode(event.target.id())
+  })
+  cy.on('tap', 'edge', (event) => {
+    stopNative(event)
+    const target = event.target
+    if (target !== cy && target.hasClass(BRAIN_EDGE_CLASS)) return
+    handlers.onSelectEdge(target.id())
+  })
+  cy.on('tap', (event) => {
+    if (event.target === cy) handlers.onClear()
+  })
+}
+
 type RelationView = 'graph' | 'table'
 type RelationScope = 'local' | 'book'
+
+function relationEdgeArrow(edge: RelationEdge, nodeId: string): string {
+  if (edge.from === nodeId && edge.to === nodeId) return '↔'
+  return edge.from === nodeId ? '→' : '←'
+}
+
+function relationEdgeCaption(edge: RelationEdge): string {
+  const label = fieldText(edge.label)
+  if (label) return label
+  return edgeKindLabel(edge.kind, edge.relation).trim()
+}
+
+function copyText(text: string) {
+  const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+  if (!clipboard?.writeText) return
+  void clipboard.writeText(text).catch(() => {})
+}
+
+function stopPanelClick(event: { stopPropagation: () => void }) {
+  event.stopPropagation()
+}
+
+function DetailClose({ onClose }: { onClose: () => void }) {
+  return (
+    <button type="button" className="relation-detail-close" aria-label="关闭" onClick={onClose}>
+      关闭
+    </button>
+  )
+}
+
+function DetailHead({
+  shape,
+  color,
+  kind,
+  title,
+  onClose,
+}: {
+  shape: 'circle' | 'square'
+  color: string
+  kind: string
+  title: string
+  onClose: () => void
+}) {
+  return (
+    <div className="relation-detail-head">
+      <DetailClose onClose={onClose} />
+      <p className="relation-detail-kind">
+        <i className={shape === 'circle' ? 'relation-swatch is-circle' : 'relation-swatch is-square'} style={{ background: color }} />
+        {kind}
+      </p>
+      <h2 className="relation-detail-title">{title}</h2>
+    </div>
+  )
+}
+
+function NeighborList({
+  state,
+  graph,
+  nodeId,
+  onOpenNode,
+}: {
+  state: AppState
+  graph: RelationGraph
+  nodeId: string
+  onOpenNode: (id: string) => void
+}) {
+  const edges = adjacentRelationEdges(graph, nodeId)
+  if (edges.length === 0) return null
+  return (
+    <>
+      <h3>相邻</h3>
+      <ul className="relation-neighbors">
+        {edges.map((edge) => {
+          const otherId = edge.from === nodeId ? edge.to : edge.from
+          const caption = relationEdgeCaption(edge)
+          return (
+            <li key={edge.id}>
+              <button type="button" className="relation-neighbor" onClick={() => onOpenNode(otherId)}>
+                <span className="relation-neighbor-arrow" aria-hidden="true">
+                  {relationEdgeArrow(edge, nodeId)}
+                </span>
+                <span className="relation-neighbor-name">{relationNodeTitle(state, otherId)}</span>
+                {caption ? <span className="relation-neighbor-kind">{caption}</span> : null}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
 
 function SelectionPanel({
   state,
@@ -678,51 +865,96 @@ function SelectionPanel({
   graph,
   onOpenPerson,
   onOpenEncyclopedia,
+  onOpenNode,
+  onClose,
 }: {
   state: AppState
   open: RelationSelection
   graph: RelationGraph
   onOpenPerson?: (entityId: string) => void
   onOpenEncyclopedia?: (entityId: string) => void
+  onOpenNode: (id: string) => void
+  onClose: () => void
 }) {
   if (open.kind === 'node') {
     const entity = (state.entities ?? []).find((item) => item.id === open.id)
-    if (!entity) return null
-    const lines = draftLines(entity)
-    const events = eventsForEntity(state, entity.id)
-    const appearances = danglingAppearances(state, graph, open.id)
-    return (
-      <aside className="relation-side" aria-label="实体" onClick={(event) => event.stopPropagation()}>
-        <h3>定稿摘要</h3>
-        {lines.length === 0 ? <p>还没有定稿</p> : lines.map((line) => <p key={line}>{line}</p>)}
-        <h3>沉淀账本</h3>
-        {events.length === 0 ? <p>还没有沉淀</p> : events.map((event) => <p key={event.id}>{event.quote}</p>)}
-        {appearances.length > 0 ? (
-          <>
-            <h3>出场</h3>
-            {appearances.map((line, index) => (
-              <p key={`${index}:${line}`}>{line}</p>
-            ))}
-          </>
-        ) : null}
-        {entity.entityType === 'person' ? (
-          <button type="button" onClick={() => onOpenPerson?.(entity.id)}>
-            打开人物页
+    const card = state.snowflake.cards[open.id]
+    if (entity) {
+      const lines = draftLines(entity)
+      const events = eventsForEntity(state, entity.id).filter((event) => fieldText(event.quote))
+      const appearances = danglingAppearances(state, graph, open.id).filter((line) => fieldText(line))
+      const slug = fieldText(entity.slug)
+      const kind = NODE_KIND_LABEL[entity.entityType] ?? ''
+      return (
+        <aside className="relation-side" aria-label="详情" onClick={stopPanelClick}>
+          <DetailHead
+            shape="square"
+            color={ENTITY_COLORS[entity.entityType]}
+            kind={kind}
+            title={relationNodeTitle(state, entity.id)}
+            onClose={onClose}
+          />
+          <h3>定稿摘要</h3>
+          {lines.length === 0 ? <p>还没有定稿</p> : lines.map((line) => <p key={line}>{line}</p>)}
+          <h3>沉淀账本</h3>
+          {events.length === 0 ? <p>还没有沉淀</p> : events.map((event) => <p key={event.id}>{event.quote}</p>)}
+          {appearances.length > 0 ? (
+            <>
+              <h3>出场</h3>
+              {appearances.map((line, index) => (
+                <p key={`${index}:${line}`}>{line}</p>
+              ))}
+            </>
+          ) : null}
+          <NeighborList state={state} graph={graph} nodeId={entity.id} onOpenNode={onOpenNode} />
+          {entity.entityType === 'person' ? (
+            <button type="button" onClick={() => onOpenPerson?.(entity.id)}>
+              打开人物页
+            </button>
+          ) : null}
+          <button type="button" onClick={() => onOpenEncyclopedia?.(entity.id)}>
+            打开百科页
           </button>
-        ) : null}
-        <button type="button" onClick={() => onOpenEncyclopedia?.(entity.id)}>
-          打开百科页
-        </button>
+          {slug ? (
+            onOpenEncyclopedia ? (
+              <button type="button" onClick={() => onOpenEncyclopedia(entity.id)}>
+                打开资料库原页
+              </button>
+            ) : (
+              <p className="relation-detail-slug">
+                <span>{slug}</span>
+                <button type="button" onClick={() => copyText(slug)}>
+                  复制
+                </button>
+              </p>
+            )
+          ) : null}
+        </aside>
+      )
+    }
+    const title = relationNodeTitle(state, open.id)
+    const body = card && fieldText(card.body) ? card.body : ''
+    return (
+      <aside className="relation-side" aria-label="详情" onClick={stopPanelClick}>
+        <DetailHead shape="circle" color={IDEA_COLOR} kind="卡片" title={title} onClose={onClose} />
+        {body ? <div className="relation-detail-body">{body}</div> : null}
+        <NeighborList state={state} graph={graph} nodeId={open.id} onOpenNode={onOpenNode} />
       </aside>
     )
   }
   const edge = state.canvas.edges.find((item) => item.id === open.id)
   if (!edge?.kind) return null
   const detail = edgeDetail(state, edge)
+  const fromName = relationNodeTitle(state, edge.fromNode)
+  const toName = relationNodeTitle(state, edge.toNode)
   return (
-    <aside className="relation-side" aria-label="这条边" onClick={(event) => event.stopPropagation()}>
+    <aside className="relation-side" aria-label="详情" onClick={stopPanelClick}>
+      <DetailClose onClose={onClose} />
       <h3>{detail.heading}</h3>
-      {detail.lines.map((line, index) => (
+      <p className="relation-detail-ends">
+        从 {fromName} 到 {toName}
+      </p>
+      {detail.lines.filter((line) => fieldText(line)).map((line, index) => (
         <p key={`${index}:${line}`}>{line}</p>
       ))}
     </aside>
@@ -818,6 +1050,7 @@ export default function RelationPage({
   const badgeEls = useRef(new Map<string, HTMLElement>())
   const openRef = useRef(open)
   openRef.current = open
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null)
 
   useLayoutEffect(() => {
     const host = hostRef.current
@@ -828,29 +1061,15 @@ export default function RelationPage({
     }
     const cy = mountRelationCy({ container: host, graph: shown, focusId, showAllArrows: showArrows })
     cyRef.current = cy
+    setTip(null)
     const place = () => placeAppearanceBadges(cy, badgeEls.current)
     place()
     cy.on('pan zoom resize', place)
-    cy.on('mouseover', 'node', (event) => {
-      event.target.addClass('hover')
-      event.target.connectedEdges().addClass('hover-edge')
-    })
-    cy.on('mouseout', 'node', (event) => {
-      event.target.removeClass('hover')
-      event.target.connectedEdges().removeClass('hover-edge')
-    })
-    cy.on('tap', 'node', (event) => {
-      stopNative(event)
-      setOpen({ kind: 'node', id: event.target.id() })
-    })
-    cy.on('tap', 'edge', (event) => {
-      stopNative(event)
-      const target = event.target
-      if (target !== cy && target.hasClass(BRAIN_EDGE_CLASS)) return
-      setOpen({ kind: 'edge', id: target.id() })
-    })
-    cy.on('tap', (event) => {
-      if (event.target === cy) setOpen(null)
+    bindRelationGraphEvents(cy, {
+      onSelectNode: (id) => setOpen({ kind: 'node', id }),
+      onSelectEdge: (id) => setOpen({ kind: 'edge', id }),
+      onClear: () => setOpen(null),
+      onHover: (next) => setTip(next),
     })
     return () => {
       cy.destroy()
@@ -893,6 +1112,15 @@ export default function RelationPage({
     applyFocusFade(cy, open)
   }, [open, graphKey, view])
 
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (relationDetailAfterKey(open, event.key) === null) setOpen(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
+
   function toggleGroup(group: RelationGroup) {
     setFilter((current) => ({
       ...current,
@@ -912,6 +1140,13 @@ export default function RelationPage({
   function chooseView(next: RelationView) {
     setView(next)
     writeChoice(browserViewStore(), storageId, 'relation', next)
+  }
+
+  function openNode(id: string) {
+    setOpen({ kind: 'node', id })
+    const cy = cyRef.current
+    if (!cy) return
+    focusRelationNode(cy, id)
   }
 
   return (
@@ -995,6 +1230,11 @@ export default function RelationPage({
         ) : (
           <div className="relation-graph">
             <div ref={hostRef} className="relation-cyto" role="img" aria-label="关系图" />
+            {tip ? (
+              <div className="relation-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>
+                {tip.text}
+              </div>
+            ) : null}
             {badges.map((badge) => (
               <button
                 key={badge.nodeId}
@@ -1102,9 +1342,11 @@ export default function RelationPage({
           <SelectionPanel
             state={state}
             open={open}
-            graph={displayed}
+            graph={shown}
             onOpenPerson={onOpenPerson}
             onOpenEncyclopedia={onOpenEncyclopedia}
+            onOpenNode={openNode}
+            onClose={() => setOpen(null)}
           />
         ) : null}
       </div>
