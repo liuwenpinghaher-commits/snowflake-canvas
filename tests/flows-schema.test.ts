@@ -313,7 +313,8 @@ describe('服务端放行 flows', () => {
     const onDisk = await canonicalDocument(server)
     expect(onDisk.flows?.[0]?.id).toBe('flow-1')
     expect(onDisk.flows?.[0]?.xml).toBe('<xml/>')
-    expect(onDisk.flows?.[0]?.beta).toBe('start')
+    // <xml/> 没有流程节点。保存时按 xml 重投影，beta 变成空字符串。
+    expect(onDisk.flows?.[0]?.beta).toBe('')
 
     const etag = (await getCanvas(server)).response.headers.get('etag') ?? ''
     const notArray = { ...minimalDoc(), flows: { id: 'flow-1' } }

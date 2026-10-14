@@ -34,6 +34,7 @@ import { loadDocumentModule } from './load-document.mjs'
 import { registerAssetRoutes } from './assets.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
+import { validateDocumentFlows } from './flow-validate.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
@@ -1774,6 +1775,7 @@ function registerApi(app, prefix) {
         if (!ifMatchSatisfied(ifMatch, current.version)) {
           return { status: 412, record: current }
         }
+        await validateDocumentFlows(document)
         const next = envelope(current.version + 1, document, current.snapshots)
         const saved = await commitEnvelope(book, next)
         return { status: 200, record: saved }
