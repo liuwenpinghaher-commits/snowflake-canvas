@@ -15,7 +15,7 @@ import {
   type EntityType,
 } from '../src/document.ts'
 import { gradeVisibility, PERSON_GRADE_COLUMNS, readPersonField, setPersonGrade } from '../src/person-form.ts'
-import RelationPage from '../src/RelationPage.tsx'
+import RelationPage, { nodeSizeForDegree } from '../src/RelationPage.tsx'
 import { endpointLabel, relationKindText, relationTableRows, relationWord } from '../src/relation-table.ts'
 import { buildRelationGraph, defaultRelationFilter, edgeKindLabel } from '../src/relations.ts'
 import { applySceneBoardDrop, chapterColumns, listScenes } from '../src/scene-board.ts'
@@ -193,6 +193,18 @@ describe('Notion 切刀5', () => {
     expect(html).toContain('>出场<')
     expect(read('src/RelationPage.tsx')).toContain('relationTableRows')
     expect(read('src/RelationPage.tsx')).not.toContain('addEdge')
+  })
+
+  it('度数映射下限 44，再大也不超过 96', () => {
+    expect(nodeSizeForDegree(0)).toBe(44)
+    expect(nodeSizeForDegree(1)).toBeGreaterThanOrEqual(44)
+    for (const degree of [0, 1, 3, 8, 40]) {
+      const size = nodeSizeForDegree(degree)
+      expect(size).toBeGreaterThanOrEqual(44)
+      expect(size).toBeLessThanOrEqual(96)
+    }
+    expect(nodeSizeForDegree(100)).toBeLessThanOrEqual(96)
+    expect(nodeSizeForDegree(100)).toBe(nodeSizeForDegree(1000))
   })
 
   it('场次按冲突结构拖过去会改 structureKind，按章拖过去会改 chapter', () => {

@@ -113,14 +113,49 @@ export function relationCenter(state: AppState, focusId: string | null): string 
   return null
 }
 
-export function localNeighborhood(graph: RelationGraph, centerId: string | null): RelationGraph {
+export const NODE_SIZE_MIN = 44
+export const NODE_SIZE_MAX = 96
+const NODE_SIZE_DEGREE_CAP = 8
+
+/** 相连边数为 0 时用下限。边数到封顶后停在上限，枢纽点不会再被撑大。 */
+export function nodeSizeForDegree(degree: number): number {
+  const safe = Number.isFinite(degree) ? Math.max(0, degree) : 0
+  const t = Math.min(safe, NODE_SIZE_DEGREE_CAP) / NODE_SIZE_DEGREE_CAP
+  return Math.round(NODE_SIZE_MIN + (NODE_SIZE_MAX - NODE_SIZE_MIN) * t)
+}
+
+export const LOCAL_DEPTH_DEFAULT = 1
+export const LOCAL_DEPTH_MAX = 3
+
+export function clampLocalDepth(depth: number): number {
+  if (!Number.isFinite(depth)) return LOCAL_DEPTH_DEFAULT
+  const hops = Math.floor(depth)
+  if (hops < 1) return LOCAL_DEPTH_DEFAULT
+  if (hops > LOCAL_DEPTH_MAX) return LOCAL_DEPTH_MAX
+  return hops
+}
+
+/** 从中心向外走若干跳。不传深度时是 1 跳，和原来的一圈相同；最多 3 跳。中心可以是场次卡，本身不必在节点里。 */
+export function localNeighborhood(graph: RelationGraph, centerId: string | null, depth = LOCAL_DEPTH_DEFAULT): RelationGraph {
   if (!centerId) return graph
   const nodeIds = new Set(graph.nodes.map((node) => node.id))
+  const hops = clampLocalDepth(depth)
   const keep = new Set<string>()
   if (nodeIds.has(centerId)) keep.add(centerId)
-  for (const edge of graph.edges) {
-    if (edge.from === centerId && nodeIds.has(edge.to)) keep.add(edge.to)
-    if (edge.to === centerId && nodeIds.has(edge.from)) keep.add(edge.from)
+  const seen = new Set<string>([centerId])
+  let frontier = [centerId]
+  for (let step = 0; step < hops; step += 1) {
+    const next: string[] = []
+    for (const id of frontier) {
+      for (const edge of graph.edges) {
+        const other = edge.from === id ? edge.to : edge.to === id ? edge.from : null
+        if (!other || !nodeIds.has(other) || seen.has(other)) continue
+        seen.add(other)
+        keep.add(other)
+        next.push(other)
+      }
+    }
+    frontier = next
   }
   if (keep.size === 0) return graph
   const nodes = graph.nodes.filter((node) => keep.has(node.id))
@@ -134,8 +169,22 @@ export function localNeighborhood(graph: RelationGraph, centerId: string | null)
   return { nodes, edges }
 }
 
+function degreeByNode(graph: RelationGraph): Map<string, number> {
+  const counts = new Map<string, number>()
+  const ids = new Set(graph.nodes.map((node) => node.id))
+  for (const edge of graph.edges) {
+    const ends = edge.from === edge.to ? [edge.from] : [edge.from, edge.to]
+    for (const id of ends) {
+      if (!ids.has(id)) continue
+      counts.set(id, (counts.get(id) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
 function relationElements(graph: RelationGraph, focusId: string | null): ElementDefinition[] {
   const nodeIds = new Set(graph.nodes.map((node) => node.id))
+  const degree = degreeByNode(graph)
   const radius = 80 + graph.nodes.length * 28
   const nodes: ElementDefinition[] = graph.nodes.map((node, index) => {
     const angle = graph.nodes.length <= 1 ? 0 : (index / graph.nodes.length) * Math.PI * 2
@@ -145,6 +194,7 @@ function relationElements(graph: RelationGraph, focusId: string | null): Element
         label: node.label,
         color: node.color,
         shape: node.shape,
+        size: nodeSizeForDegree(degree.get(node.id) ?? 0),
       },
       position: { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius },
       classes: focusId === node.id ? 'focus' : undefined,
@@ -183,8 +233,8 @@ function relationStylesheet(): cytoscape.StylesheetJson {
         'text-wrap': 'ellipsis',
         'text-max-width': '120px',
         'text-events': 'yes',
-        width: 44,
-        height: 44,
+        width: 'data(size)',
+        height: 'data(size)',
         shape: 'round-rectangle',
         'border-width': 0,
         'border-color': '#241c16',
@@ -248,6 +298,17 @@ function relationStylesheet(): cytoscape.StylesheetJson {
       selector: '.faded',
       style: { opacity: 0.15 },
     },
+    {
+      selector: 'edge.hover-edge',
+      style: {
+        width: 6,
+        opacity: 1,
+        'z-index': 20,
+        'overlay-color': '#fff4d6',
+        'overlay-opacity': 0.9,
+        'overlay-padding': 3,
+      },
+    },
   ]
 }
 
@@ -300,7 +361,7 @@ export function mountRelationCy(options: {
     style: relationStylesheet(),
     layout: {
       name: 'cose',
-      animate: false,
+      animate: Boolean(container),
       fit: false,
       randomize: false,
       padding: 40,
@@ -314,7 +375,6 @@ export function mountRelationCy(options: {
     userZoomingEnabled: true,
     userPanningEnabled: true,
     boxSelectionEnabled: false,
-    autoungrabify: true,
   })
   const settle = () => settleRelationView(cy, options.viewport)
   settle()
@@ -556,6 +616,7 @@ export default function RelationPage({
   )
   const centerId = relationCenter(state, focusId)
   const [scope, setScope] = useState<RelationScope>(() => (centerId ? 'local' : 'book'))
+  const [localDepth, setLocalDepth] = useState(LOCAL_DEPTH_DEFAULT)
   useLayoutEffect(() => {
     setScope(centerId ? 'local' : 'book')
   }, [centerId])
@@ -565,10 +626,10 @@ export default function RelationPage({
   }, [storageId, initialView])
   const graph = useMemo(() => buildRelationGraph(state, filter), [state, filter])
   const displayed = useMemo(
-    () => (scope === 'local' ? localNeighborhood(graph, centerId) : graph),
-    [graph, scope, centerId],
+    () => (scope === 'local' ? localNeighborhood(graph, centerId, localDepth) : graph),
+    [graph, scope, centerId, localDepth],
   )
-  const graphKey = `${scope}|${focusId ?? ''}|${displayed.nodes.map((node) => node.id).join(',')}|${displayed.edges
+  const graphKey = `${scope}|${scope === 'local' ? localDepth : ''}|${focusId ?? ''}|${displayed.nodes.map((node) => node.id).join(',')}|${displayed.edges
     .map((edge) => edge.id)
     .join(',')}`
   const badges = useMemo(() => appearanceBadges(displayed), [displayed])
@@ -593,9 +654,11 @@ export default function RelationPage({
     cy.on('pan zoom resize', place)
     cy.on('mouseover', 'node', (event) => {
       event.target.addClass('hover')
+      event.target.connectedEdges().addClass('hover-edge')
     })
     cy.on('mouseout', 'node', (event) => {
       event.target.removeClass('hover')
+      event.target.connectedEdges().removeClass('hover-edge')
     })
     cy.on('tap', 'node', (event) => {
       stopNative(event)
@@ -748,6 +811,21 @@ export default function RelationPage({
               <button type="button" className={scope === 'local' ? 'on' : undefined} aria-pressed={scope === 'local'} onClick={() => setScope('local')}>
                 回到局部
               </button>
+              {scope === 'local' ? (
+                <label className="relation-depth">
+                  深度
+                  <input
+                    type="range"
+                    min={LOCAL_DEPTH_DEFAULT}
+                    max={LOCAL_DEPTH_MAX}
+                    step={1}
+                    value={localDepth}
+                    aria-label="局部深度"
+                    onChange={(event) => setLocalDepth(clampLocalDepth(Number(event.target.value)))}
+                  />
+                  <span>{localDepth}</span>
+                </label>
+              ) : null}
             </div>
             <div className="relation-legend" aria-label="图例">
               {ENTITY_TYPES.map((type) => (

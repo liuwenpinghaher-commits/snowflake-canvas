@@ -24,12 +24,21 @@ import {
   type EntityType,
   type RelationKind,
 } from '../src/document.ts'
-import RelationPage from '../src/RelationPage.tsx'
+import RelationPage, {
+  LOCAL_DEPTH_DEFAULT,
+  LOCAL_DEPTH_MAX,
+  NODE_SIZE_MAX,
+  NODE_SIZE_MIN,
+  localNeighborhood,
+  mountRelationCy,
+  nodeSizeForDegree,
+} from '../src/RelationPage.tsx'
 import {
   ENTITY_COLORS,
   buildRelationGraph,
   defaultRelationFilter,
   type RelationFilter,
+  type RelationGraph,
   type RelationGroup,
 } from '../src/relations.ts'
 
@@ -306,6 +315,122 @@ describe('切片 D 关系图与章节', () => {
     expect(cy.nodes().length).toBeGreaterThanOrEqual(9)
     expect(Number(cy.nodes()[0]?.numericStyle('min-zoomed-font-size'))).toBeGreaterThan(0)
     expect(drawn).toBeLessThan(names.length)
+    cy.destroy()
+  })
+
+  it('局部深度默认 1 跳且最多 3 跳，节点大小下限 44、上限不超过 96', () => {
+    const chain: RelationGraph = {
+      nodes: ['a', 'b', 'c', 'd'].map((id) => ({
+        id,
+        layer: 'entity',
+        label: id,
+        shape: 'square',
+        color: '#000',
+      })),
+      edges: [
+        { id: 'ab', from: 'a', to: 'b', kind: 'relates-entity' },
+        { id: 'bc', from: 'b', to: 'c', kind: 'relates-entity' },
+        { id: 'cd', from: 'c', to: 'd', kind: 'relates-entity' },
+      ],
+    }
+    const ids = (depth?: number) =>
+      localNeighborhood(chain, 'a', depth)
+        .nodes.map((node) => node.id)
+        .sort()
+    expect(LOCAL_DEPTH_DEFAULT).toBe(1)
+    expect(LOCAL_DEPTH_MAX).toBe(3)
+    expect(ids()).toEqual(['a', 'b'])
+    expect(ids(1)).toEqual(['a', 'b'])
+    expect(ids(2)).toEqual(['a', 'b', 'c'])
+    expect(ids(3)).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(4)).toEqual(ids(3))
+    expect(localNeighborhood(chain, null, 3)).toBe(chain)
+
+    const dangling: RelationGraph = {
+      nodes: [
+        { id: 'a', layer: 'entity', label: 'a', shape: 'square', color: '#000' },
+        { id: 'b', layer: 'entity', label: 'b', shape: 'square', color: '#000' },
+      ],
+      edges: [
+        { id: 'app', from: 'a', to: 'scene', kind: 'appears-in' },
+        { id: 'ab', from: 'a', to: 'b', kind: 'relates-entity' },
+      ],
+    }
+    const near = localNeighborhood(dangling, 'a')
+    expect(near.nodes.map((node) => node.id).sort()).toEqual(['a', 'b'])
+    expect(near.edges.map((edge) => edge.id).sort()).toEqual(['ab', 'app'])
+
+    const sceneCenter: RelationGraph = {
+      nodes: [
+        { id: 'ned', layer: 'entity', label: 'ned', shape: 'square', color: '#000' },
+        { id: 'other', layer: 'entity', label: 'other', shape: 'square', color: '#000' },
+      ],
+      edges: [
+        { id: 'app', from: 'scene', to: 'ned', kind: 'appears-in' },
+        { id: 'rel', from: 'ned', to: 'other', kind: 'relates-entity' },
+      ],
+    }
+    expect(localNeighborhood(sceneCenter, 'scene').nodes.map((node) => node.id)).toEqual(['ned'])
+    expect(localNeighborhood(sceneCenter, 'scene', 2).nodes.map((node) => node.id).sort()).toEqual(['ned', 'other'])
+
+    expect(NODE_SIZE_MIN).toBe(44)
+    expect(NODE_SIZE_MAX).toBeLessThanOrEqual(96)
+    expect(nodeSizeForDegree(0)).toBe(44)
+    let previous = nodeSizeForDegree(0)
+    for (const degree of [1, 2, 4, 8, 20, 100]) {
+      const size = nodeSizeForDegree(degree)
+      expect(size).toBeGreaterThanOrEqual(44)
+      expect(size).toBeLessThanOrEqual(96)
+      expect(size).toBeGreaterThanOrEqual(previous)
+      previous = size
+    }
+    expect(nodeSizeForDegree(100)).toBe(NODE_SIZE_MAX)
+    expect(nodeSizeForDegree(100)).toBe(nodeSizeForDegree(1000))
+
+    const state = {
+      ...createDocument('depth-slider'),
+      entities: [entity('ned', 'person', '奈德')],
+    }
+    const localHtml = renderToStaticMarkup(createElement(RelationPage, { state, focusId: 'ned' }))
+    expect(localHtml).toContain('aria-label="局部深度"')
+    expect(localHtml).toContain('min="1"')
+    expect(localHtml).toContain('max="3"')
+    expect(localHtml).toContain('value="1"')
+    const bookHtml = renderToStaticMarkup(createElement(RelationPage, { state }))
+    expect(bookHtml).not.toContain('局部深度')
+
+    const source = read('src/RelationPage.tsx')
+    expect(source).toContain('animate: Boolean(container)')
+    expect(source).not.toContain('autoungrabify')
+    expect(source).toContain("connectedEdges().addClass('hover-edge')")
+    expect(source).toContain("connectedEdges().removeClass('hover-edge')")
+    expect(source).toContain('edge.hover-edge')
+    expect(source).not.toContain('localStorage')
+  })
+
+  it('图上的节点宽度落在 44 到 96 之间，枢纽点比叶子大', () => {
+    const leaves = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const graph: RelationGraph = {
+      nodes: ['hub', ...leaves].map((id) => ({
+        id,
+        layer: 'entity',
+        label: id,
+        shape: 'square',
+        color: '#000',
+      })),
+      edges: leaves.map((id) => ({ id: `e-${id}`, from: 'hub', to: id, kind: 'relates-entity' as const })),
+    }
+    const cy = mountRelationCy({ graph, focusId: null, viewport: { width: 960, height: 640 } })
+    const hub = cy.getElementById('hub').numericStyle('width')
+    const leaf = cy.getElementById('a').numericStyle('width')
+    expect(hub).toBeGreaterThan(leaf)
+    expect(leaf).toBeGreaterThanOrEqual(44)
+    expect(hub).toBeLessThanOrEqual(96)
+    cy.nodes().forEach((node) => {
+      const width = node.numericStyle('width')
+      expect(width).toBeGreaterThanOrEqual(44)
+      expect(width).toBeLessThanOrEqual(96)
+    })
     cy.destroy()
   })
 })

@@ -468,4 +468,15 @@ describe('P1d 关系图点击面板', () => {
     expect(read('src/App.tsx')).not.toContain('百科页还没做')
     expect(read('src/App.tsx')).toContain('onOpenEncyclopedia={(entityId)')
   })
+
+  it('局部范围才出现深度滑杆，默认 1，最大 3', () => {
+    const state = { ...createDocument('depth'), entities: [person('ned', '奈德')] }
+    const local = renderToStaticMarkup(createElement(RelationPage, { state, focusId: 'ned' }))
+    expect(local).toContain('aria-label="局部深度"')
+    expect(local).toContain('min="1"')
+    expect(local).toContain('max="3"')
+    expect(local).toContain('value="1"')
+    const book = renderToStaticMarkup(createElement(RelationPage, { state }))
+    expect(book).not.toContain('局部深度')
+  })
 })

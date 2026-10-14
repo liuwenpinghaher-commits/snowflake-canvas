@@ -2173,6 +2173,24 @@ button.person-ghost {
   left: 12px;
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.relation-depth {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--ink-primary);
+  font-size: 14px;
+  background: #fffdf8;
+  border: 1px solid #e4d9cc;
+  border-radius: 8px;
+}
+
+.relation-depth input[type='range'] {
+  width: 72px;
+  margin: 0;
 }
 
 .relation-legend {
