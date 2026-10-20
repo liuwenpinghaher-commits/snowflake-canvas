@@ -324,6 +324,22 @@ export interface SedimentEvent {
   superseded?: boolean
 }
 
+export interface SceneRevision {
+  body: string
+  at: string
+  kind?: string
+}
+
+export interface FoldSuggestionRecord {
+  id: string
+  cardId: string
+  action: 'existing-scene' | 'new-draft-scene'
+  beatId: string | null
+  text: string
+  where: string
+  createdAt: string
+}
+
 export interface BookScene {
   id: string
   title: string
@@ -332,6 +348,9 @@ export interface BookScene {
   beatIds: string[]
   placeEntityId?: string
   proseFork?: boolean
+  step?: string
+  failure?: boolean
+  revisions?: SceneRevision[]
 }
 
 export interface BookChapter {
@@ -426,6 +445,7 @@ export interface Card {
   fields: Record<string, string>
   mergeNote?: string
   premise?: boolean
+  needsReview?: boolean
   /** 正文草稿指向某场的 id。边上的 derivedFrom 是讨论来源，不是这个字段。 */
   derivedFrom?: string
   arc?: ArcCells
@@ -440,6 +460,7 @@ export interface LooseCard {
   fields: Record<string, string>
   mergeNote?: string
   premise?: boolean
+  needsReview?: boolean
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
@@ -500,6 +521,7 @@ export interface AppState {
   chapters?: BookChapter[]
   pendingProseScenes?: PendingProseScene[]
   pendingEntities?: PendingEntity[]
+  suggestions?: FoldSuggestionRecord[]
   activeId: string | null
 }
 
@@ -622,6 +644,55 @@ export function fieldGroups(layer: Layer): { title: string; keys: readonly strin
 export function laterLayers(layer: Layer): Layer[] {
   const index = LAYERS.indexOf(layer)
   return LAYERS.slice(index + 1)
+}
+
+export function earlierLayers(layer: Layer): Layer[] {
+  const index = LAYERS.indexOf(layer)
+  return index > 0 ? LAYERS.slice(0, index) : []
+}
+
+export function cardNeedsReview(card: Card | null | undefined): boolean {
+  return Boolean(card && card.needsReview === true)
+}
+
+export function acknowledgeCardReview(state: AppState, cardId: string): AppState {
+  const current = state.snowflake.cards[cardId]
+  if (!current || !current.needsReview) return state
+  const nextCard: Card = { ...current }
+  delete nextCard.needsReview
+  return {
+    ...state,
+    snowflake: {
+      ...state.snowflake,
+      cards: {
+        ...state.snowflake.cards,
+        [cardId]: nextCard,
+      },
+    },
+  }
+}
+
+export function markDownstreamNeedsReview(state: AppState, fromCardId: string): AppState {
+  const targets = state.canvas.edges
+    .filter((edge) => (edge.kind === undefined || edge.kind === 'grows-from') && edge.fromNode === fromCardId && state.snowflake.cards[edge.toNode])
+    .map((edge) => edge.toNode)
+  if (targets.length === 0) return state
+  const cards = { ...state.snowflake.cards }
+  for (const targetId of targets) {
+    const target = cards[targetId]
+    if (!target) continue
+    cards[targetId] = {
+      ...target,
+      needsReview: true,
+    }
+  }
+  return {
+    ...state,
+    snowflake: {
+      ...state.snowflake,
+      cards,
+    },
+  }
 }
 
 export function nextLayer(layer: Layer): Layer | null {
@@ -1453,6 +1524,7 @@ export function duplicateCard(state: AppState, id: string, newId?: string): AppS
   }
   if (source.mergeNote) card.mergeNote = source.mergeNote
   if (source.premise) card.premise = true
+  if (source.needsReview) card.needsReview = true
   if (source.derivedFrom) card.derivedFrom = source.derivedFrom
   if (source.arc) card.arc = { ...source.arc }
   if (source.originAnchor?.chapterId) {
@@ -1632,6 +1704,24 @@ export function describeLayerChange(current: Card, layer: Layer): string {
   return `${head}\n下面这些内容会挪过去：\n${lines.join('\n')}\n空着的栏目不保留。`
 }
 
+export function changeToAnyLayer(state: AppState, cardId: string, layer: Layer): AppState {
+  const current = state.snowflake.cards[cardId]
+  if (!current || current.layer === layer) return state
+  const card = keepCardMeta(current, planLayerChange(current, layer).card)
+  const nodes = state.canvas.nodes.map((node) => {
+    if (node.id !== cardId) return node
+    return { ...node, text: frontText(card), color: LAYER_COLOR[layer] }
+  })
+  return {
+    ...state,
+    canvas: { ...state.canvas, nodes },
+    snowflake: {
+      ...state.snowflake,
+      cards: { ...state.snowflake.cards, [cardId]: card },
+    },
+  }
+}
+
 export function changeToLaterLayer(state: AppState, cardId: string, layer: Layer): AppState {
   const current = state.snowflake.cards[cardId]
   if (!current) return state
@@ -1769,7 +1859,10 @@ export function commitCardText(
     const head = card.blocks.body[0]
     card = { ...card, blocks: { ...card.blocks, body: [{ ...head, text: card.body }] } }
   }
-  const painted = paintCard(state, cardId, card)
+  let painted = paintCard(state, cardId, card)
+  if (card.body !== current.body || JSON.stringify(card.fields) !== JSON.stringify(current.fields)) {
+    painted = markDownstreamNeedsReview(painted, cardId)
+  }
   if (current.layer === 'renwubiao' && fieldKey === 'motivation') return mirrorPhilosophy(painted)
   return painted
 }
@@ -1912,6 +2005,7 @@ export function serializeDocument(state: AppState): {
   chapters?: BookChapter[]
   pendingProseScenes?: PendingProseScene[]
   pendingEntities?: PendingEntity[]
+  suggestions?: FoldSuggestionRecord[]
 } {
   const cards: Record<string, Card> = {}
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
@@ -1931,6 +2025,7 @@ export function serializeDocument(state: AppState): {
     if (aligned.blocks) stored.blocks = aligned.blocks
     if (card.mergeNote) stored.mergeNote = card.mergeNote
     if (card.premise) stored.premise = true
+    if (card.needsReview) stored.needsReview = true
     if (card.derivedFrom) stored.derivedFrom = card.derivedFrom
     if (card.arc) stored.arc = normalizeArc(card.arc)
     if (card.originAnchor?.chapterId) {
@@ -1962,6 +2057,7 @@ export function serializeDocument(state: AppState): {
     ...(chapters.length > 0 ? { chapters } : {}),
     ...(pending.length > 0 ? { pendingProseScenes: pending } : {}),
     ...(pendingEntities.length > 0 ? { pendingEntities } : {}),
+    ...((state.suggestions ?? []).length > 0 ? { suggestions: state.suggestions } : {}),
     ...(flows.length > 0 ? { flows } : {}),
   }
 }
@@ -1973,6 +2069,7 @@ interface DraftCard {
   rebuild: boolean
   mergeNote?: string
   premise?: boolean
+  needsReview?: boolean
   derivedFrom?: string
   arc?: ArcCells
   originAnchor?: OriginAnchor
@@ -2034,6 +2131,7 @@ export function loadCards(
       rebuild: false,
       mergeNote: card.mergeNote,
       premise: card.premise,
+      needsReview: card.needsReview,
       derivedFrom: card.derivedFrom,
       arc: card.arc,
       originAnchor: card.originAnchor,
@@ -2123,6 +2221,7 @@ function normalizeArc(value: Partial<ArcCells> | undefined): ArcCells {
 function attachDraftMeta(card: Card, draft: DraftCard): Card {
   if (draft.mergeNote) card.mergeNote = draft.mergeNote
   if (draft.premise) card.premise = true
+  if (draft.needsReview) card.needsReview = true
   if (draft.derivedFrom) card.derivedFrom = draft.derivedFrom
   if (draft.arc) card.arc = normalizeArc(draft.arc)
   if (draft.originAnchor?.chapterId) {
@@ -2141,6 +2240,7 @@ function keepCardMeta(previous: Card, next: Card): Card {
   const card: Card = { ...next }
   if (previous.mergeNote) card.mergeNote = previous.mergeNote
   if (previous.premise) card.premise = true
+  if (previous.needsReview) card.needsReview = true
   if (previous.derivedFrom) card.derivedFrom = previous.derivedFrom
   if (previous.arc) card.arc = normalizeArc(previous.arc)
   if (previous.originAnchor?.chapterId) {
@@ -2908,7 +3008,15 @@ export function resolveProseFork(state: AppState, sceneId: string, keep: 'scene'
       ...chapter,
       scenes: chapter.scenes.map((item, index2) => {
         if (index2 !== sceneIndex) return item
-        const cleared: BookScene = { ...item, prose }
+        const priorRevs = [...(item.revisions ?? [])]
+        if ((item.prose ?? '').trim()) {
+          priorRevs.push({ body: item.prose, at: '分叉前场内稿', kind: '手写' })
+        }
+        const cleared: BookScene = {
+          ...item,
+          prose,
+          revisions: [...priorRevs, { body: prose, at: '分叉合并稿', kind: '手写' }].slice(-20),
+        }
         delete cleared.proseFork
         return cleared
       }),

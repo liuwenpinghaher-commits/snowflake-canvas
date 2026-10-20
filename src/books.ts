@@ -33,6 +33,10 @@ export function setCurrentBookId(id: string | null): void {
   currentBookId = id
 }
 
+export function getCurrentBookId(): string | null {
+  return currentBookId
+}
+
 function readBook(value: unknown): BookItem | null {
   if (!value || typeof value !== 'object') return null
   const { id, name, active } = value as { id?: unknown; name?: unknown; active?: unknown }
@@ -66,6 +70,37 @@ export async function createBookRemote(name: string): Promise<BookItem | null> {
     return readBook(await response.json())
   } catch {
     return null
+  }
+}
+
+export async function fetchBookConstraints(
+  id: string,
+): Promise<{ targetWords?: number; endingType?: string; forbidden?: string; styleSample?: string } | null> {
+  try {
+    const response = await fetch(api(`/api/books/${encodeURIComponent(id)}/constraints`), { cache: 'no-store' })
+    if (!response.ok) return null
+    const payload = (await response.json()) as { constraints?: unknown }
+    if (!payload.constraints || typeof payload.constraints !== 'object') return null
+    return payload.constraints as { targetWords?: number; endingType?: string; forbidden?: string; styleSample?: string }
+  } catch {
+    return null
+  }
+}
+
+export async function saveBookConstraints(
+  id: string,
+  input: { targetWords?: number; endingType?: string; forbidden?: string; styleSample?: string },
+): Promise<boolean> {
+  try {
+    const response = await fetch(api(`/api/books/${encodeURIComponent(id)}/constraints`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      cache: 'no-store',
+    })
+    return response.ok
+  } catch {
+    return false
   }
 }
 
@@ -125,6 +160,9 @@ export interface BookMeta {
   cover: string
   status: BookStatus
   targetWords: number
+  endingType: string
+  forbidden: string
+  styleSample: string
   pov: string
   createdAt: string
   updatedAt: string
@@ -142,6 +180,9 @@ export function defaultBookMeta(now: string = new Date().toISOString()): BookMet
     cover: COVER_COLORS[0],
     status: '构思中',
     targetWords: 0,
+    endingType: '',
+    forbidden: '',
+    styleSample: '',
     pov: '未定',
     createdAt: now,
     updatedAt: now,

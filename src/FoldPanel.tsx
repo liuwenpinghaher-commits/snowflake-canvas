@@ -16,10 +16,12 @@ export default function FoldPanel({
   cardId,
   card,
   documentState,
+  onApply,
 }: {
   cardId: string
   card: Card
   documentState: AppState
+  onApply?: (recipe: (state: AppState) => AppState) => void
 }) {
   const [action, setAction] = useState<SuggestAction>('existing-scene')
   const [beatId, setBeatId] = useState('')
@@ -135,6 +137,54 @@ export default function FoldPanel({
         <button type="button" onClick={fold} disabled={busy}>
           {busy ? '正在保存' : '折进此场'}
         </button>
+        {onApply ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              const result = foldIntoScene(documentState, {
+                cardId,
+                action,
+                beatId,
+                intentSupplement: supplement,
+              })
+              if (!result.ok) {
+                setReason(result.reason)
+                return
+              }
+              setReason('')
+              const parsed = JSON.parse(result.json) as {
+                items?: Array<{
+                  cardId: string
+                  action: 'existing-scene' | 'new-draft-scene'
+                  beatId: string | null
+                  text: string
+                  where: string
+                }>
+              }
+              const items = Array.isArray(parsed.items) ? parsed.items : []
+              const nowIso = new Date().toISOString()
+              onApply((current) => {
+                const existing = [...(current.suggestions ?? [])]
+                items.forEach((item, index) => {
+                  existing.push({
+                    id: `sug-${cardId}-${Date.now()}-${index}`,
+                    cardId: item.cardId,
+                    action: item.action,
+                    beatId: item.beatId,
+                    text: item.text,
+                    where: item.where,
+                    createdAt: nowIso,
+                  })
+                })
+                return { ...current, suggestions: existing }
+              })
+              setSavedNote(`已收入本书建议箱（共 ${items.length} 条），可在章节页一键采纳到指定场。`)
+            }}
+          >
+            收入本书建议箱
+          </button>
+        ) : null}
       </div>
       {reason ? (
         <p className="hint" role="status">

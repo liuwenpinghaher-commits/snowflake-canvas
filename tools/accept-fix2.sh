@@ -43,7 +43,7 @@ function fail(detail) {
 const memory = { doc: structuredClone(seed), etag: 'W/"1"', puts: 0 }
 const browser = await chromium.launch({
   headless: true,
-  executablePath: '/home/chris/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome',
+  executablePath: `${process.env.HOME || ''}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`,
   args: ['--no-sandbox'],
 })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })

@@ -6,8 +6,10 @@ import {
   COVER_COLOR_NAMES,
   DEFAULT_BOOK_NAME,
   POV_CHOICES,
+  fetchBookConstraints,
   fetchBookStats,
   readBookMeta,
+  saveBookConstraints,
   readImportFile,
   writeBookMeta,
   type BookItem,
@@ -15,6 +17,7 @@ import {
   type BookStats,
   type ImportPreview,
 } from './books.ts'
+import { previewImport } from '../server/db/import-text.mjs'
 import { LAYERS, layerLabel, type Layer } from './document.ts'
 
 export interface NewBookInput {
@@ -65,6 +68,9 @@ function NewBookWizard({
   const [seedText, setSeedText] = useState('')
   const [status, setStatus] = useState<BookMeta['status']>('构思中')
   const [targetWords, setTargetWords] = useState('')
+  const [endingType, setEndingType] = useState('')
+  const [forbidden, setForbidden] = useState('')
+  const [styleSample, setStyleSample] = useState('')
   const [pov, setPov] = useState<string>('未定')
   const [language, setLanguage] = useState('中文')
   const [name, setName] = useState('')
@@ -83,7 +89,7 @@ function NewBookWizard({
     setFailed(null)
     const ok = await onCreate({
       name: finalName,
-      meta: { status, targetWords: target, pov, language, genre, penName: penName.trim(), series: series.trim(), intro: intro.trim(), cover },
+      meta: { status, targetWords: target, endingType: endingType.trim(), forbidden: forbidden.trim(), styleSample: styleSample.trim(), pov, language, genre, penName: penName.trim(), series: series.trim(), intro: intro.trim(), cover },
       importDoc: importMode === 'json' ? (preview?.document ?? null) : null,
       seedText: importMode === 'text' ? seedText.trim() : '',
     })
@@ -169,6 +175,18 @@ function NewBookWizard({
             <label>
               目标字数
               <input inputMode="numeric" placeholder="例如 300000，可空" value={targetWords} onChange={(event) => setTargetWords(event.currentTarget.value.replace(/[^\d]/g, ''))} />
+            </label>
+            <label>
+              结局类型
+              <input value={endingType} placeholder="例如 悲剧" onChange={(event) => setEndingType(event.currentTarget.value)} />
+            </label>
+            <label className="span-2">
+              禁写清单
+              <input value={forbidden} onChange={(event) => setForbidden(event.currentTarget.value)} />
+            </label>
+            <label className="span-2">
+              文风样例
+              <input value={styleSample} onChange={(event) => setStyleSample(event.currentTarget.value)} />
             </label>
             <label>
               视角
@@ -317,12 +335,42 @@ function BookProfile({
     setName(book.name)
     setConfirming(false)
     setError(null)
+    let cancelled = false
+    void fetchBookConstraints(book.id).then((remote) => {
+      if (cancelled || !remote) return
+      const patchObj: Partial<BookMeta> = {}
+      if (typeof remote.targetWords === 'number' && remote.targetWords > 0) patchObj.targetWords = remote.targetWords
+      if (typeof remote.endingType === 'string' && remote.endingType) patchObj.endingType = remote.endingType
+      if (typeof remote.forbidden === 'string' && remote.forbidden) patchObj.forbidden = remote.forbidden
+      if (typeof remote.styleSample === 'string' && remote.styleSample) patchObj.styleSample = remote.styleSample
+      if (Object.keys(patchObj).length > 0) {
+        const merged = writeBookMeta(book.id, patchObj)
+        setMeta(merged)
+        onMeta(merged)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
   }, [book.id, book.name])
 
   const patch = (next: Partial<BookMeta>) => {
     const saved = writeBookMeta(book.id, { ...next, updatedAt: new Date().toISOString() })
     setMeta(saved)
     onMeta(saved)
+    if (
+      'targetWords' in next ||
+      'endingType' in next ||
+      'forbidden' in next ||
+      'styleSample' in next
+    ) {
+      void saveBookConstraints(book.id, {
+        targetWords: saved.targetWords,
+        endingType: saved.endingType,
+        forbidden: saved.forbidden,
+        styleSample: saved.styleSample,
+      })
+    }
   }
 
   const words = stats?.words ?? 0
@@ -437,6 +485,33 @@ function BookProfile({
           一句话简介
           <input value={meta.intro} onChange={(event) => patch({ intro: event.currentTarget.value })} />
         </label>
+        <label>
+          结局走向
+          <input
+            aria-label="全书结局走向"
+            value={meta.endingType}
+            placeholder="例如：开放式 / 悲剧 / 圆满"
+            onChange={(event) => patch({ endingType: event.currentTarget.value })}
+          />
+        </label>
+        <label>
+          禁写清单
+          <input
+            aria-label="全书禁写清单"
+            value={meta.forbidden}
+            placeholder="扩写与起草时避开的词汇或桥段"
+            onChange={(event) => patch({ forbidden: event.currentTarget.value })}
+          />
+        </label>
+        <label className="span-2">
+          风格样段
+          <input
+            aria-label="全书风格样段"
+            value={meta.styleSample}
+            placeholder="扩写时参考的文风样句"
+            onChange={(event) => patch({ styleSample: event.currentTarget.value })}
+          />
+        </label>
       </div>
       <dl className="profile-facts">
         <dt>创建</dt>
@@ -513,6 +588,143 @@ function BookProfile({
   )
 }
 
+
+function bookApi(path: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  return `${prefix}${path}`
+}
+
+function WholeBookImport({
+  bookId,
+  onImported,
+}: {
+  bookId: string | null
+  onImported?: () => void
+}) {
+  const [text, setText] = useState('')
+  const [notice, setNotice] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const [trashOpen, setTrashOpen] = useState(false)
+  const [trashBooks, setTrashBooks] = useState<Array<{ id: string; name: string; deletedAt: string }>>([])
+  const preview = text.trim() ? previewImport(text) : null
+
+  async function loadTrash() {
+    try {
+      const res = await fetch(bookApi('/api/books-trash'), { cache: 'no-store' })
+      if (!res.ok) return
+      const data = (await res.json()) as { books?: Array<{ id: string; name: string; deletedAt: string }> }
+      setTrashBooks(Array.isArray(data.books) ? data.books : [])
+    } catch {
+      setTrashBooks([])
+    }
+  }
+
+  async function restoreFromTrash(id: string) {
+    try {
+      const res = await fetch(bookApi(`/api/books-trash/${encodeURIComponent(id)}/restore`), { method: 'POST' })
+      if (res.ok) {
+        await loadTrash()
+        onImported?.()
+        window.location.reload()
+      }
+    } catch {
+      // 忽略恢复失败
+    }
+  }
+
+  async function confirm() {
+    if (!bookId) {
+      setNotice('先选中一本书')
+      return
+    }
+    const head = await fetch(bookApi(`/api/books/${encodeURIComponent(bookId)}/canvas`), { cache: 'no-store' })
+    if (!head.ok) {
+      setNotice('没有读到这本书')
+      return
+    }
+    const etag = head.headers.get('ETag') || ''
+    const response = await fetch(bookApi(`/api/books/${encodeURIComponent(bookId)}/import-text`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(etag ? { 'If-Match': etag } : {}) },
+      body: JSON.stringify({ text }),
+    })
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    if (!response.ok) {
+      setNotice(payload.error || '导入没有写上')
+      return
+    }
+    setNotice('已经按预览写入这本书')
+    onImported?.()
+  }
+  return (
+    <section className={expanded ? 'whole-book-import is-open' : 'whole-book-import'} aria-label="导入整本书">
+      <div className="whole-book-import-bar">
+        <h2>导入整本书</h2>
+        <div className="whole-book-import-tools">
+          <button type="button" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? '收起导入面板' : '展开整书导入'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !trashOpen
+              setTrashOpen(next)
+              if (next) void loadTrash()
+            }}
+          >
+            {trashOpen ? '收起回收站' : '已删书籍回收站'}
+          </button>
+        </div>
+      </div>
+      <div className="whole-book-import-body">
+        <textarea
+          aria-label="整本书正文"
+          placeholder="粘贴带有「第X章」标题与空行分场的整书正文，自动预览分章分场…"
+          value={text}
+          onChange={(event) => setText(event.currentTarget.value)}
+        />
+        {preview && !preview.ok ? <p role="alert">{preview.error}</p> : null}
+        {preview && preview.ok ? (
+          <ol className="import-preview-list">
+            {preview.chapters.map((chapter, index) => (
+              <li key={`${chapter.title}-${index}`}>
+                {chapter.title} · {chapter.scenes.length} 场
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        <div className="whole-book-import-actions">
+          <button type="button" className="primary" disabled={!bookId || !preview?.ok} onClick={() => void confirm()}>
+            确认导入
+          </button>
+          {notice ? <p role="status">{notice}</p> : null}
+        </div>
+      </div>
+      {trashOpen ? (
+        <div className="trash-panel" aria-label="已删书籍回收站">
+          {trashBooks.length === 0 ? (
+            <p className="profile-muted">回收站里没有已删除的书。</p>
+          ) : (
+            <ul className="trash-list">
+              {trashBooks.map((item) => (
+                <li key={item.id} className="trash-item">
+                  <span>
+                    <strong>{item.name}</strong>（{item.id}）{item.deletedAt ? ` · 删除于 ${formatTime(item.deletedAt)}` : ''}
+                  </span>
+                  <button type="button" onClick={() => void restoreFromTrash(item.id)}>
+                    恢复这本书
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 export default function BooksPage({
   books,
   currentBookId,
@@ -524,6 +736,7 @@ export default function BooksPage({
   onCreate,
   onRename,
   onDelete,
+  onReloadCanvas,
 }: {
   books: BookItem[]
   currentBookId: string | null
@@ -535,6 +748,7 @@ export default function BooksPage({
   onCreate: (input: NewBookInput) => Promise<boolean>
   onRename: (id: string, name: string) => Promise<boolean>
   onDelete: (id: string) => Promise<string | null>
+  onReloadCanvas?: () => void
 }) {
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<Sort>('recent')
@@ -607,6 +821,18 @@ export default function BooksPage({
           新建书
         </button>
       </header>
+      <WholeBookImport
+        bookId={selected}
+        onImported={() => {
+          if (selected) {
+            void fetchBookStats(selected).then((result) => {
+              setStats((current) => ({ ...current, [selected]: result }))
+            })
+            if (selected === currentBookId) onReloadCanvas?.()
+          }
+          setMetaTick((tick) => tick + 1)
+        }}
+      />
       <div className="books-body">
         <div className="books-shelf">
           {wizard ? (

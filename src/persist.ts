@@ -1,3 +1,4 @@
+import { createStash, stashText } from './local-stash.ts'
 import {
   applyComposition,
   cloneEntity,
@@ -28,7 +29,9 @@ import {
   type Entity,
   type EntityField,
   type LooseCard,
+  type FoldSuggestionRecord,
   type PendingProseScene,
+  type SceneRevision,
   type PendingEntity,
   type Flow,
   type FlowIssue,
@@ -241,7 +244,7 @@ export interface PersistController {
     event: CompositionEvent,
     fieldKey: string | null,
   ): Promise<ComposeSession>
-  requestCandidates(cardId: string, fieldKey: string | null): Promise<void>
+  requestCandidates(cardId: string, fieldKey: string | null, extraContext?: string): Promise<void>
   dismissCandidates(): void
   confirmCandidate(candidateId: string): Promise<void>
   keepVersion(): Promise<void>
@@ -324,6 +327,7 @@ function cardJson(card: AppState['snowflake']['cards'][string]): string {
     fields: Record<string, string>
     mergeNote: string
     premise: boolean
+    needsReview?: boolean
     derivedFrom: string
     blocks?: Record<string, ProseBlock[]>
   } = {
@@ -334,6 +338,7 @@ function cardJson(card: AppState['snowflake']['cards'][string]): string {
     premise: projected.premise === true,
     derivedFrom: projected.derivedFrom ?? '',
   }
+  if (projected.needsReview === true) payload.needsReview = true
   if (projected.blocks) payload.blocks = projected.blocks
   return JSON.stringify(payload)
 }
@@ -884,6 +889,11 @@ function cloneScene(scene: BookScene): BookScene {
   }
   if (scene.placeEntityId) next.placeEntityId = scene.placeEntityId
   if (scene.proseFork) next.proseFork = true
+  if (scene.step) next.step = scene.step
+  if (scene.failure) next.failure = true
+  if (scene.revisions && scene.revisions.length > 0) {
+    next.revisions = scene.revisions.map((rev) => ({ ...rev }))
+  }
   return next
 }
 
@@ -967,9 +977,15 @@ function mergeSceneRecord(
   if (localFork === remoteFork) proseFork = localFork
   else if (localFork === baseFork) proseFork = remoteFork
   else if (remoteFork === baseFork) proseFork = localFork
+  const step = pickText(base?.step ?? '', remote.step ?? '', local.step ?? '')
+  const failure = local.failure === remote.failure ? Boolean(local.failure) : local.failure === base?.failure ? Boolean(remote.failure) : Boolean(local.failure)
+  const revisions = (local.revisions && local.revisions.length > 0 ? local.revisions : remote.revisions) ?? undefined
   const scene: BookScene = { id: local.id, title, ideaIds, prose, beatIds }
   if (place) scene.placeEntityId = place
   if (proseFork) scene.proseFork = true
+  if (step) scene.step = step
+  if (failure) scene.failure = true
+  if (revisions && revisions.length > 0) scene.revisions = revisions.map((rev) => ({ ...rev }))
   return scene
 }
 
@@ -1161,6 +1177,7 @@ export function mergeDocuments(
       sediment,
       chapters,
       pendingProseScenes,
+      suggestions: local.state.suggestions ?? remote.state.suggestions,
       flows: local.state.flows,
       activeId: local.state.activeId,
     }),
@@ -1436,6 +1453,7 @@ function toAppState(value: unknown): AppState | null {
     chapters,
     pendingProseScenes: parsePendingList(value.pendingProseScenes),
     pendingEntities: parsePendingEntities(value.pendingEntities),
+    suggestions: parseSuggestionList(value.suggestions),
     activeId: null,
   }
   state = mirrorPhilosophy(state)
@@ -1565,6 +1583,21 @@ function parseChapterList(value: unknown): BookChapter[] {
         }
         if (typeof scene.placeEntityId === 'string' && scene.placeEntityId.length > 0) next.placeEntityId = scene.placeEntityId
         if (scene.proseFork === true) next.proseFork = true
+        if (typeof scene.step === 'string' && scene.step.length > 0) next.step = scene.step
+        if (scene.failure === true) next.failure = true
+        if (Array.isArray(scene.revisions)) {
+          const revs: SceneRevision[] = []
+          for (const rev of scene.revisions) {
+            if (isRecord(rev) && typeof rev.body === 'string' && typeof rev.at === 'string') {
+              revs.push({
+                body: rev.body,
+                at: rev.at,
+                ...(typeof rev.kind === 'string' ? { kind: rev.kind } : {}),
+              })
+            }
+          }
+          if (revs.length > 0) next.revisions = revs.slice(-20)
+        }
         scenes.push(next)
       }
     }
@@ -1614,6 +1647,26 @@ function parsePendingEntities(value: unknown): PendingEntity[] {
     pending.push({ name: item.name, cardIds: [...item.cardIds] })
   }
   return pending
+}
+
+function parseSuggestionList(value: unknown): FoldSuggestionRecord[] {
+  if (!Array.isArray(value)) return []
+  const list: FoldSuggestionRecord[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.cardId !== 'string') continue
+    if (item.action !== 'existing-scene' && item.action !== 'new-draft-scene') continue
+    if (typeof item.text !== 'string' || typeof item.where !== 'string') continue
+    list.push({
+      id: item.id,
+      cardId: item.cardId,
+      action: item.action,
+      beatId: typeof item.beatId === 'string' ? item.beatId : null,
+      text: item.text,
+      where: item.where,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : '',
+    })
+  }
+  return list
 }
 
 function parsePendingList(value: unknown): PendingProseScene[] {
@@ -1760,6 +1813,7 @@ function parseCard(value: unknown): LooseCard | null {
   if (blocks) card.blocks = blocks
   if (typeof value.mergeNote === 'string' && value.mergeNote.length > 0) card.mergeNote = value.mergeNote
   if (value.premise === true) card.premise = true
+  if (value.needsReview === true) card.needsReview = true
   if (typeof value.derivedFrom === 'string' && value.derivedFrom.length > 0) card.derivedFrom = value.derivedFrom
   const arc = parseArc(value.arc)
   if (arc) card.arc = arc
@@ -2934,8 +2988,8 @@ class Controller implements PersistController {
   }
 
 
-  async requestCandidates(cardId: string, fieldKey: string | null): Promise<void> {
-    const request = buildExpandRequest(this.state, cardId, fieldKey)
+  async requestCandidates(cardId: string, fieldKey: string | null, extraContext?: string): Promise<void> {
+    const request = buildExpandRequest(this.state, cardId, fieldKey, extraContext)
     if (!request) {
       this.expandNotice = MSG_EXPAND_NO_CARD
       this.candidates = []
@@ -3244,6 +3298,10 @@ class Controller implements PersistController {
     const messages: string[] = []
     if (this.fileProtocol) messages.push(MSG_FILE_PROTOCOL)
     if (this.failed) messages.push(this.remoteMode ? MSG_WRITE_FAILED_SERVER : MSG_WRITE_FAILED)
+    if (this.failed && this.remoteMode && !this.logUnavailable) {
+      const stash = createStash()
+      messages.push(stashText(stash, '暂存'))
+    }
     if (this.writing) messages.push(MSG_WRITING)
     if (this.logUnavailable) messages.push(MSG_LOG_DOWN)
     if (this.readonlyOther && this.showWritingMessage) {

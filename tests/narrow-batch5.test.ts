@@ -239,7 +239,7 @@ describe('README 不再是 Vite 模板', () => {
     expect(first).toContain('雪花画布')
     expect(readme).toContain('npm run dev')
     expect(readme).toContain('8093')
-    expect(readme).toContain('/home/chris/.local/share/snowflake-canvas/')
+    expect(readme).toContain('~/.local/share/snowflake-canvas/')
     expect(readme).toContain('snowflake.json')
     expect(readme).toContain('session.json')
     expect(readme).not.toContain('React Compiler')

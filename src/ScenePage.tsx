@@ -8,6 +8,7 @@ import {
   chapterColumns,
   listScenes,
   STRUCTURE_COLUMNS,
+  syncCardToNamedChapter,
   structureColumnId,
   type SceneGroup,
   type SceneRow,
@@ -192,12 +193,14 @@ export default function ScenePage({
       ) : group === 'chapter' ? (
         <SceneBoard
           label="按章"
-          columns={chapterColumns(rows).map((label) => ({ id: label, label, droppable: chapterColumnDroppable(label) }))}
+          columns={chapterColumns(rows, state.chapters).map((label) => ({ id: label, label, droppable: chapterColumnDroppable(label) }))}
           rows={rows}
           columnOf={(row) => chapterColumnLabel(row.chapter)}
           canEdit={canEdit}
           onOpenCard={onOpenCard}
-          onDrop={(cardId, columnId) => onApply((current) => applySceneBoardDrop(current, cardId, 'chapter', columnId))}
+          onDrop={(cardId, columnId) =>
+            onApply((current) => syncCardToNamedChapter(applySceneBoardDrop(current, cardId, 'chapter', columnId), cardId, columnId))
+          }
         />
       ) : (
         <SceneBoard

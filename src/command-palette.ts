@@ -1,3 +1,4 @@
+import { searchBook, type SearchRow } from './book-search.ts'
 import { cardFace, type AppState, type EntityType } from './document.ts'
 import { shownProse } from './mentions.ts'
 
@@ -101,6 +102,31 @@ export function paletteHits(input: { bookName: string; state: AppState; query: s
       label: title,
       hint: '章节',
     })
+  }
+
+  if (query) {
+    const rows: SearchRow[] = []
+    ;(input.state.chapters ?? []).forEach((chapter, chapterIndex) => {
+      chapter.scenes.forEach((scene, sceneIndex) => {
+        rows.push({
+          kind: 'scene',
+          id: scene.id,
+          label: `第${chapterIndex + 1}章第${sceneIndex + 1}场`,
+          text: scene.prose,
+          chapterIndex,
+          sceneIndex,
+        })
+      })
+    })
+    const found = searchBook(rows, input.query.trim())
+    const sceneHits: PaletteHit[] = found.map((row) => ({
+      key: `scene:${row.id}`,
+      kind: 'chapter',
+      targetId: row.id,
+      label: row.label,
+      hint: '场正文',
+    }))
+    hits.unshift(...sceneHits)
   }
 
   return hits.slice(0, limit)

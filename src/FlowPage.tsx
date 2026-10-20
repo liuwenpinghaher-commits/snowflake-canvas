@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { bookScopedPath } from './books.ts'
 import type { AppState, Flow, FlowIssue, FlowValidation } from './document.ts'
+
+function flowApi(path: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  return `${prefix}${bookScopedPath(path)}`
+}
 
 const EMPTY_VALIDATION: FlowValidation = { ranAt: '', valid: true, errors: [], warnings: [] }
 
@@ -124,6 +131,33 @@ export function FlowPage({
     setActiveId(id)
   }
 
+  async function draftFromBook() {
+    if (!canEdit) return
+    let response: Response
+    try {
+      response = await fetch(flowApi('/api/flows/draft'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: { kind: 'book' } }),
+      })
+    } catch {
+      return
+    }
+    if (!response.ok) return
+    let payload: { title?: unknown; xml?: unknown; validation?: FlowValidation }
+    try {
+      payload = (await response.json()) as { title?: unknown; xml?: unknown; validation?: FlowValidation }
+    } catch {
+      return
+    }
+    if (typeof payload.xml !== 'string' || payload.xml.length === 0) return
+    setDraft({
+      title: typeof payload.title === 'string' && payload.title ? payload.title : '从本书起草',
+      xml: payload.xml,
+      validation: payload.validation ?? EMPTY_VALIDATION,
+    })
+  }
+
   function keepDraft() {
     if (!draft || !canEdit) return
     const id = nextFlowId(flows)
@@ -157,7 +191,7 @@ export function FlowPage({
           <button type="button" disabled={!canEdit} onClick={createBlank}>
             新建空白流程
           </button>
-          <button type="button" disabled title="起草还没接上">
+          <button type="button" disabled={!canEdit} onClick={() => void draftFromBook()}>
             从本书起草
           </button>
           <button

@@ -15,11 +15,11 @@ from urllib.parse import quote
 ROOT = os.environ["ROOT"]
 HOST = "127.0.0.1"
 PORT = 8093
-DATA = Path("/home/chris/.local/share/snowflake-canvas")
+DATA = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or (Path.home() / ".local/share/snowflake-canvas"))
 CANON = DATA / "snowflake.json"
 SESSION_FILE = DATA / "session.json"
 FLAG = DATA / "gbrain-force-fail"
-ENV_FILE = Path("/home/chris/.config/snowflake-canvas/http.env")
+ENV_FILE = Path(os.environ.get("SNOWFLAKE_HTTP_ENV") or (Path.home() / ".config/snowflake-canvas/http.env"))
 RUNLOG = Path(ROOT) / "run.log"
 PAGE = "projects/snowflake-canvas"
 TZ = timezone(timedelta(hours=8))
@@ -707,7 +707,9 @@ fi
 echo "H 开始回归"
 set -a
 # 旧测试里的真实扩写要从进程环境读 CPA_API_KEY。文件不进仓库，这里也不打印。
-source /home/chris/.config/snowflake-canvas/http.env
+if [ -f "${HOME}/.config/snowflake-canvas/http.env" ]; then
+  source "${HOME}/.config/snowflake-canvas/http.env"
+fi
 set +a
 page_code="$(curl -s -o /tmp/accept-mem-page.html -w '%{http_code}' http://127.0.0.1:8093/xuehua/)"
 if [ "$page_code" != "200" ] || ! grep -q "/xuehua/" /tmp/accept-mem-page.html; then
@@ -718,27 +720,27 @@ fi
 # 右侧固定「画布讨论」不再作为通过条件。429 提示语和「历史讨论」仍要在构建产物里。
 # 新形态：要有「采纳进本念头」和 data-discuss-dock，不能有旧文案「采纳进本念头正文」。
 # 不再把 data-discuss-popover 当通过条件。
-if ! grep -q "讨论忙，网关同时最多 10 路" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if ! grep -q "讨论忙，网关同时最多 10 路" "${ROOT}/dist/xuehua/assets/"*.js; then
   echo "FAIL H"
   echo "构建产物里没有 429 退避提示"
   exit 1
 fi
-if ! grep -q "历史讨论" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if ! grep -q "历史讨论" "${ROOT}/dist/xuehua/assets/"*.js; then
   echo "FAIL H"
   echo "构建产物里没有历史讨论"
   exit 1
 fi
-if grep -q "采纳进本念头正文" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if grep -q "采纳进本念头正文" "${ROOT}/dist/xuehua/assets/"*.js; then
   echo "FAIL H"
   echo "构建产物里还有旧文案「采纳进本念头正文」"
   exit 1
 fi
-if ! grep -q "采纳进本念头" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if ! grep -q "采纳进本念头" "${ROOT}/dist/xuehua/assets/"*.js; then
   echo "FAIL H"
   echo "构建产物里没有「采纳进本念头」"
   exit 1
 fi
-if ! grep -q "data-discuss-dock" /home/chris/projects/snowflake-canvas/dist/xuehua/assets/*.js; then
+if ! grep -q "data-discuss-dock" "${ROOT}/dist/xuehua/assets/"*.js; then
   echo "FAIL H"
   echo "构建产物里没有卡片下方的讨论挂载"
   exit 1

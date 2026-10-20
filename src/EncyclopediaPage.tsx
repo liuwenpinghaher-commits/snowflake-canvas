@@ -250,6 +250,16 @@ function EntityDetail({
   return (
     <div className="encyclopedia-detail">
       <CoverField entity={entity} canEdit={canEdit} onApply={onApply} />
+      <section aria-label="书稿设定">
+        <h3>书稿设定</h3>
+        {Object.entries(entity.fields).some(([, field]) => field.value.trim()) ? (
+          Object.entries(entity.fields).map(([key, field]) =>
+            field.value.trim() ? <p key={key}>{field.value}</p> : null,
+          )
+        ) : (
+          <p>这本书稿里还没有这条设定的正文。</p>
+        )}
+      </section>
       <h3>定稿</h3>
       <FinalizedBody text={finalized} />
       {promoteError ? (

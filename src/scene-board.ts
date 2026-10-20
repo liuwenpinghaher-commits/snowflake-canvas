@@ -32,15 +32,25 @@ export function sceneTitle(state: AppState, id: string, card: Card): string {
   return '未命名场次'
 }
 
+function chapterTitleFromOutline(state: AppState, cardId: string): string {
+  for (const chapter of state.chapters ?? []) {
+    if (chapter.scenes.some((scene) => scene.beatIds.includes(cardId))) {
+      return chapter.title.trim()
+    }
+  }
+  return ''
+}
+
 export function listScenes(state: AppState): SceneRow[] {
   const rows: SceneRow[] = []
   for (const [id, card] of Object.entries(state.snowflake.cards)) {
     if (card.layer !== 'changci') continue
     const structureKind = (card.fields.structureKind ?? '').trim()
+    const chapter = (card.fields.chapter ?? '').trim() || chapterTitleFromOutline(state, id)
     rows.push({
       id,
       title: sceneTitle(state, id, card),
-      chapter: (card.fields.chapter ?? '').trim(),
+      chapter,
       structureKind,
       structureLabel: shownFieldValue('structureKind', structureKind),
       task: (card.fields.task ?? '').trim(),
@@ -54,14 +64,54 @@ export function chapterColumnLabel(chapter: string): string {
   return text || '未分章'
 }
 
-export function chapterColumns(rows: readonly SceneRow[]): string[] {
+export function chapterColumns(rows: readonly SceneRow[], chapters?: readonly { title: string }[]): string[] {
   const labels: string[] = []
+  if (chapters) {
+    for (const item of chapters) {
+      const title = item.title.trim()
+      if (title && title !== '未分章' && !labels.includes(title)) labels.push(title)
+    }
+  }
   for (const row of rows) {
     const label = chapterColumnLabel(row.chapter)
     if (!labels.includes(label)) labels.push(label)
   }
   if (!labels.includes('未分章')) labels.push('未分章')
   return labels
+}
+
+export function syncCardToNamedChapter(state: AppState, cardId: string, columnId: string): AppState {
+  const title = columnId.trim()
+  if (!chapterColumnDroppable(title) || !state.chapters || state.chapters.length === 0) return state
+  const targetChapter = state.chapters.find((chapter) => chapter.title.trim() === title)
+  if (!targetChapter) return state
+  const chapters = state.chapters.map((chapter) => {
+    const cleanedScenes = chapter.scenes.map((scene) => ({
+      ...scene,
+      beatIds: scene.beatIds.filter((id) => id !== cardId),
+    }))
+    if (chapter.id !== targetChapter.id) return { ...chapter, scenes: cleanedScenes }
+    if (cleanedScenes.length === 0) {
+      return {
+        ...chapter,
+        scenes: [
+          {
+            id: `scene-${cardId}`,
+            title: sceneTitle(state, cardId, state.snowflake.cards[cardId]!),
+            ideaIds: [],
+            prose: '',
+            beatIds: [cardId],
+          },
+        ],
+      }
+    }
+    const first = cleanedScenes[0]!
+    return {
+      ...chapter,
+      scenes: [{ ...first, beatIds: [...first.beatIds, cardId] }, ...cleanedScenes.slice(1)],
+    }
+  })
+  return { ...state, chapters }
 }
 
 export function structureColumnId(kind: string): StructureColumnId {

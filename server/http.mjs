@@ -30,12 +30,17 @@ import { getImportProgress, importPlainText, setImportProgress } from './import-
 import { locateAdoption } from './recall.mjs'
 import { writeSediment } from './sediment.mjs'
 import { composeEntityPage, finalizedText, pageMissingMessage, parsePageSnapshot, promoteEntityPage, timelineBelow } from './encyclopedia.mjs'
+import { registerBitemporalRoutes } from './bitemporal.mjs'
 import { loadDocumentModule } from './load-document.mjs'
 import { registerAssetRoutes } from './assets.mjs'
 import { stripMarkdown } from '../src/strip-markdown.mjs'
 import { collectDiscussContext, discussSessionResponse, postGatewaySession, stripTimeline } from './discuss-context.mjs'
 import { validateDocumentFlows } from './flow-validate.mjs'
 import { draftFlow, readDraftScope, resolveDraftComplete } from './flow-draft.mjs'
+import { applyObjectOps } from './db/object-ops.mjs'
+import { applyPlan, previewImport } from './db/import-text.mjs'
+import { docxOf, epubOf, markdownOf, plainOf } from './db/formats.mjs'
+import { mirrorDocumentAsync } from './db/pg-mirror.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
@@ -45,6 +50,7 @@ const configPath = join(dataDir, 'config.json')
 const gbrainFailFlag = join(dataDir, 'gbrain-force-fail')
 // 每本书一个目录：books/<bookId>/ 里放正本、会话、快照和 meta.json；数据根只留 active.json 和全局配置。
 const booksRoot = join(dataDir, 'books')
+const trashRoot = join(dataDir, '.trash')
 const activePath = join(dataDir, 'active.json')
 const legacyCanonicalPath = join(dataDir, 'snowflake.json')
 const legacySessionPath = join(dataDir, 'session.json')
@@ -508,6 +514,9 @@ async function commitEnvelope(book, next) {
   }
   await backupCanonical(book)
   await rename(tempPath, book.canonicalPath)
+  if (readEnv('SNOWFLAKE_PG_MIRROR') === '1') {
+    void mirrorDocumentAsync(book.id, back.document)
+  }
   return back
 }
 
@@ -898,7 +907,7 @@ async function loadBook(id) {
   }
   book.name = derived
   book.createdAt = createdAt || (await stat(book.dir)).mtime.toISOString()
-  await writeJsonAtomic(book.metaPath, { id, name: book.name, createdAt: book.createdAt })
+  await writeJsonAtomic(book.metaPath, { ...(meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {}), id, name: book.name, createdAt: book.createdAt })
   return book
 }
 
@@ -969,6 +978,15 @@ function sendNoBook(reply) {
   return reply.send({ error: MSG_NO_BOOK })
 }
 
+async function readMetaFile(book) {
+  try {
+    const meta = await readJson(book.metaPath)
+    return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {}
+  } catch {
+    return {}
+  }
+}
+
 function publicBook(book) {
   return { id: book.id, name: book.name, active: book.id === activeBookId }
 }
@@ -980,7 +998,8 @@ function bookNameFrom(body) {
 async function renameBook(book, name) {
   return exclusiveBooks(async () => {
     if (book.removed) throw httpError(404, MSG_NO_BOOK)
-    await writeJsonAtomic(book.metaPath, { id: book.id, name, createdAt: book.createdAt })
+    const current = await readMetaFile(book)
+    await writeJsonAtomic(book.metaPath, { ...current, id: book.id, name, createdAt: book.createdAt })
     book.name = name
     return book
   })
@@ -1003,11 +1022,115 @@ async function deleteBook(book) {
       exclusive(book, async () => {
         book.removed = true
         books.delete(book.id)
-        await rm(book.dir, { recursive: true, force: true })
+        const current = await readMetaFile(book)
+        const deletedAt = new Date().toISOString()
+        await writeJsonAtomic(book.metaPath, {
+          ...current,
+          id: book.id,
+          name: book.name,
+          createdAt: book.createdAt,
+          deletedAt,
+        })
+        await mkdir(trashRoot, { recursive: true, mode: 0o700 })
+        const targetDir = join(trashRoot, book.id)
+        await rm(targetDir, { recursive: true, force: true })
+        await rename(book.dir, targetDir)
       }),
     )
     if (activeBookId === book.id) await setActive(sortedBooks()[0].id)
   })
+}
+
+async function listTrashBooks() {
+  await ensureBooks()
+  let entries = []
+  try {
+    entries = await readdir(trashRoot, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const list = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isBookId(entry.name)) continue
+    const dir = join(trashRoot, entry.name)
+    try {
+      const meta = await readJson(join(dir, 'meta.json'))
+      list.push({
+        id: entry.name,
+        name: typeof meta?.name === 'string' && meta.name.trim() ? meta.name.trim() : DEFAULT_BOOK_NAME,
+        deletedAt: typeof meta?.deletedAt === 'string' ? meta.deletedAt : '',
+      })
+    } catch {
+      list.push({ id: entry.name, name: DEFAULT_BOOK_NAME, deletedAt: '' })
+    }
+  }
+  return list.sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1))
+}
+
+async function restoreTrashBook(id) {
+  if (!isBookId(id)) throw httpError(404, MSG_NO_BOOK)
+  return exclusiveBooks(async () => {
+    const sourceDir = join(trashRoot, id)
+    if (!(await exists(sourceDir))) throw httpError(404, MSG_NO_BOOK)
+    const targetDir = join(booksRoot, id)
+    if (await exists(targetDir)) throw httpError(409, '同名书目录已存在')
+    await mkdir(booksRoot, { recursive: true, mode: 0o700 })
+    await rename(sourceDir, targetDir)
+    const loaded = await loadBook(id)
+    const current = await readMetaFile(loaded)
+    delete current.deletedAt
+    await writeJsonAtomic(loaded.metaPath, { ...current, id: loaded.id, name: loaded.name, createdAt: loaded.createdAt })
+    books.set(id, loaded)
+    return loaded
+  })
+}
+
+function exportBookShape(book, document) {
+  const chapters = Array.isArray(document?.chapters) ? document.chapters : []
+  return {
+    id: book.id,
+    title: book.name || DEFAULT_BOOK_NAME,
+    chapters: chapters.map((chapter, chapterIndex) => ({
+      id: typeof chapter?.id === 'string' ? chapter.id : `ch-${chapterIndex + 1}`,
+      title: typeof chapter?.title === 'string' ? chapter.title : `第${chapterIndex + 1}章`,
+      ord: chapterIndex,
+      deletedAt: null,
+      scenes: Array.isArray(chapter?.scenes)
+        ? chapter.scenes.map((scene, sceneIndex) => ({
+            id: typeof scene?.id === 'string' ? scene.id : `sc-${sceneIndex + 1}`,
+            title: typeof scene?.title === 'string' ? scene.title : `第${sceneIndex + 1}场`,
+            ord: sceneIndex,
+            deletedAt: null,
+            body: typeof scene?.prose === 'string' ? scene.prose : '',
+          }))
+        : [],
+    })),
+  }
+}
+
+function exportIssuesOf(document) {
+  const issues = []
+  const chapters = Array.isArray(document?.chapters) ? document.chapters : []
+  chapters.forEach((chapter, chapterIndex) => {
+    const scenes = Array.isArray(chapter?.scenes) ? chapter.scenes : []
+    if (chapter?.title === '未归场') {
+      scenes.forEach((scene) => {
+        if (typeof scene?.prose === 'string' && scene.prose.trim()) {
+          issues.push({ sceneId: scene.id, message: '未归场还有草稿' })
+        }
+      })
+    }
+    scenes.forEach((scene, sceneIndex) => {
+      const prose = typeof scene?.prose === 'string' ? scene.prose.trim() : ''
+      if (!prose) {
+        issues.push({
+          sceneId: scene.id,
+          message: `第 ${chapterIndex + 1} 章第 ${sceneIndex + 1} 场是空的`,
+        })
+      }
+    })
+  })
+  return issues
 }
 
 function discussFailure(reply, error, fallback) {
@@ -1593,6 +1716,7 @@ async function confirmSedimentTimeline(page, requestId) {
 }
 
 function registerApi(app, prefix) {
+  registerBitemporalRoutes(app, prefix)
   registerAssetRoutes(app, { prefix, bookFor, sendNoBook })
   // 画布和讨论接口各挂两份：旧路径落到活动书，/api/books/:bookId/... 落到指定的书。
   const scoped = (method, path, handler) => {
@@ -1734,6 +1858,91 @@ function registerApi(app, prefix) {
     return reply.send(getImportProgress(book.id))
   })
 
+  app.get(`${prefix}/api/books-trash`, async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ books: await listTrashBooks() })
+  })
+
+  app.post(`${prefix}/api/books-trash/:bookId/restore`, async (request, reply) => {
+    const id = request.params ? request.params.bookId : ''
+    try {
+      const restored = await restoreTrashBook(id)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send(publicBook(restored))
+    } catch (error) {
+      if (error && error.statusCode === 404) return sendNoBook(reply)
+      if (error && error.statusCode === 409) {
+        reply.code(409)
+        return reply.send({ error: error.message })
+      }
+      throw error
+    }
+  })
+
+  scoped('GET', '/meta', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const meta = await readMetaFile(book)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({
+      id: book.id,
+      name: book.name,
+      constraints: meta && typeof meta.constraints === 'object' && meta.constraints ? meta.constraints : null,
+    })
+  })
+
+  scoped('PUT', '/meta', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const constraints = body.constraints && typeof body.constraints === 'object' ? body.constraints : null
+    const updated = await exclusiveBooks(async () => {
+      if (book.removed) throw httpError(404, MSG_NO_BOOK)
+      const current = await readMetaFile(book)
+      const nextMeta = { ...current, id: book.id, name: book.name, createdAt: book.createdAt, constraints }
+      await writeJsonAtomic(book.metaPath, nextMeta)
+      return nextMeta
+    })
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ id: book.id, name: book.name, constraints: updated.constraints ?? null })
+  })
+
+  scoped('GET', '/export/precheck', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const record = await exclusive(book, () => readCanonical(book))
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ issues: exportIssuesOf(record.document) })
+  })
+
+  scoped('GET', '/export', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const format = typeof request.query?.format === 'string' ? request.query.format.trim().toLowerCase() : 'md'
+    const record = await exclusive(book, () => readCanonical(book))
+    const shape = exportBookShape(book, record.document)
+    const safeTitle = encodeURIComponent(shape.title || 'book')
+    reply.header('Cache-Control', 'no-store')
+    if (format === 'txt' || format === 'plain') {
+      reply.header('Content-Type', 'text/plain; charset=utf-8')
+      reply.header('Content-Disposition', `attachment; filename*=UTF-8''${safeTitle}.txt`)
+      return reply.send(plainOf(shape))
+    }
+    if (format === 'docx') {
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+      reply.header('Content-Disposition', `attachment; filename*=UTF-8''${safeTitle}.docx`)
+      return reply.send(docxOf(shape))
+    }
+    if (format === 'epub') {
+      reply.header('Content-Type', 'application/epub+zip')
+      reply.header('Content-Disposition', `attachment; filename*=UTF-8''${safeTitle}.epub`)
+      return reply.send(epubOf(shape))
+    }
+    reply.header('Content-Type', 'text/markdown; charset=utf-8')
+    reply.header('Content-Disposition', `attachment; filename*=UTF-8''${safeTitle}.md`)
+    return reply.send(markdownOf(shape))
+  })
+
   scoped('GET', '/canvas', async (request, reply) => {
     const book = await bookFor(request)
     if (!book) return sendNoBook(reply)
@@ -1787,6 +1996,243 @@ function registerApi(app, prefix) {
     }
     reply.code(outcome.status)
     return sendCanvas(reply, outcome.record)
+  })
+
+  scoped('PATCH', '/canvas', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const ops = request.body && Array.isArray(request.body.ops) ? request.body.ops : null
+    if (!ops) {
+      reply.code(400)
+      return reply.send({ error: '缺少按对象的改动' })
+    }
+    const header = request.headers['if-match']
+    const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        const applied = applyObjectOps(current.document, ops)
+        if (!isDocument(applied)) {
+          const error = new Error('改动之后不是一份完整画布')
+          error.statusCode = 400
+          throw error
+        }
+        await validateDocumentFlows(applied)
+        const document = await presentDocument(applied)
+        const saved = await commitEnvelope(book, envelope(current.version + 1, document, current.snapshots))
+        return { status: 200, record: saved }
+      })
+    } catch (error) {
+      if (error && error.statusCode === 400) {
+        reply.code(400)
+        return reply.send({ error: error.message || '改动之后不是一份完整画布' })
+      }
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.code(outcome.status)
+    return sendCanvas(reply, outcome.record)
+  })
+
+  scoped('PATCH', '/scenes/:sceneId', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const sceneId = request.params?.sceneId
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const text = typeof body.text === 'string' ? body.text : null
+    const baseRev = body.baseRev
+    if (typeof sceneId !== 'string' || !sceneId || text === null || !Number.isInteger(baseRev)) {
+      reply.code(400)
+      return reply.send({ error: '缺少这场的正文或版本' })
+    }
+    const header = request.headers['if-match']
+    const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        const chapters = Array.isArray(current.document.chapters) ? current.document.chapters : []
+        let found = ''
+        const nextChapters = chapters.map((chapter) => {
+          if (!chapter || !Array.isArray(chapter.scenes)) return chapter
+          return {
+            ...chapter,
+            scenes: chapter.scenes.map((scene) => {
+              if (!scene || scene.id !== sceneId) return scene
+              const rev = Number.isInteger(scene.rev) ? scene.rev : 1
+              if (rev !== baseRev) {
+                found = 'conflict'
+                return scene
+              }
+              found = 'ok'
+              return { ...scene, prose: text, rev: rev + 1 }
+            }),
+          }
+        })
+        if (found === 'conflict') return { status: 412, record: current }
+        if (found !== 'ok') {
+          const error = new Error('没有这场')
+          error.statusCode = 404
+          throw error
+        }
+        const document = await presentDocument({ ...current.document, chapters: nextChapters })
+        const saved = await commitEnvelope(book, envelope(current.version + 1, document, current.snapshots))
+        return { status: 200, record: saved }
+      })
+    } catch (error) {
+      if (error && error.statusCode === 404) {
+        reply.code(404)
+        return reply.send({ error: '没有这场' })
+      }
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.code(outcome.status)
+    return sendCanvas(reply, outcome.record)
+  })
+
+  scoped('POST', '/chapters', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '未命名章'
+    const header = request.headers['if-match']
+    const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        const chapters = Array.isArray(current.document.chapters) ? [...current.document.chapters] : []
+        const chapterId = randomUUID()
+        chapters.push({
+          id: chapterId,
+          title,
+          scenes: [{ id: randomUUID(), title: '第1场', ideaIds: [], prose: '', beatIds: [] }],
+        })
+        const document = await presentDocument({ ...current.document, chapters })
+        const saved = await commitEnvelope(book, envelope(current.version + 1, document, current.snapshots))
+        return { status: 200, record: saved }
+      })
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.code(outcome.status)
+    return sendCanvas(reply, outcome.record)
+  })
+
+  scoped('POST', '/import-text', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const text = typeof body.text === 'string' ? body.text : ''
+    const preview = previewImport(text)
+    if (!preview.ok) {
+      reply.code(400)
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ error: preview.error || '导入文本是空的，没有建章' })
+    }
+    const planned = applyPlan(preview, { merges: Array.isArray(body.merges) ? body.merges : [] })
+    const header = request.headers['if-match']
+    const ifMatch = Array.isArray(header) ? header.join(',') : header
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        if (!ifMatchSatisfied(ifMatch, current.version)) return { status: 412, record: current }
+        const chapters = planned.chapters.map((chapter) => ({
+          id: randomUUID(),
+          title: chapter.title,
+          scenes: chapter.scenes.map((scene, index) => ({
+            id: randomUUID(),
+            title: scene.title || `第${index + 1}场`,
+            ideaIds: [],
+            prose: scene.text || '',
+            beatIds: [],
+          })),
+        }))
+        const document = await presentDocument({ ...current.document, chapters })
+        const saved = await commitEnvelope(book, envelope(current.version + 1, document, current.snapshots))
+        return { status: 200, record: saved, chapters: chapters.length }
+      })
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.code(outcome.status)
+    reply.header('Cache-Control', 'no-store')
+    if (outcome.status !== 200) return sendCanvas(reply, outcome.record)
+    return reply.send({ ok: true, chapters: outcome.chapters, version: outcome.record.version })
+  })
+
+  scoped('POST', '/book-sediment', async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const name = typeof body.name === 'string' ? body.name.trim() : ''
+    const text = typeof body.text === 'string' ? body.text : ''
+    if (!name || !text) {
+      reply.code(400)
+      return reply.send({ error: '缺少要记下的设定' })
+    }
+    if (body.kind === '写作方法心得') {
+      reply.code(400)
+      return reply.send({ error: '写作方法心得请走写入脑' })
+    }
+    let outcome
+    try {
+      outcome = await exclusive(book, async () => {
+        const current = await readCanonical(book)
+        const entities = Array.isArray(current.document.entities) ? current.document.entities : []
+        const entity = {
+          id: randomUUID(),
+          entityType: 'concept',
+          name,
+          views: {},
+          fields: { body: { value: text, events: [] } },
+          arc: { start: '', door: '', impact: '', deepen: '', turn: '', consequence: '' },
+          premise: false,
+        }
+        const document = await presentDocument({ ...current.document, entities: [...entities, entity] })
+        const saved = await commitEnvelope(book, envelope(current.version + 1, document, current.snapshots))
+        return { status: 200, record: saved, entityId: entity.id }
+      })
+    } catch (error) {
+      if (isUnreadable(error)) return sendUnreadable(reply)
+      throw error
+    }
+    reply.code(outcome.status)
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ entityId: outcome.entityId, version: outcome.record.version })
+  })
+
+  app.get(`${prefix}/api/books/:bookId/constraints`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const current = await readMetaFile(book)
+    const constraints = current.constraints && typeof current.constraints === 'object' ? current.constraints : {}
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ constraints })
+  })
+
+  app.patch(`${prefix}/api/books/:bookId/constraints`, async (request, reply) => {
+    const book = await bookFor(request)
+    if (!book) return sendNoBook(reply)
+    const body = request.body && typeof request.body === 'object' ? request.body : {}
+    const current = await readMetaFile(book)
+    const previous = current.constraints && typeof current.constraints === 'object' ? current.constraints : {}
+    const constraints = { ...previous }
+    if (typeof body.endingType === 'string') constraints.endingType = body.endingType
+    if (typeof body.forbidden === 'string') constraints.forbidden = body.forbidden
+    if (typeof body.styleSample === 'string') constraints.styleSample = body.styleSample
+    if (Number.isFinite(body.targetWords)) constraints.targetWords = Math.max(0, Math.round(body.targetWords))
+    await writeJsonAtomic(book.metaPath, { ...current, id: book.id, name: book.name, createdAt: book.createdAt, constraints })
+    reply.header('Cache-Control', 'no-store')
+    return reply.send({ constraints })
   })
 
   // 起草只返回草稿。不写 snowflake.json，不把草稿塞进 flows。

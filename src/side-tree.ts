@@ -1,6 +1,6 @@
 import type { AppState } from './document.ts'
 
-export type WorkPage = 'canvas' | 'cast' | 'relation' | 'chapter' | 'encyclopedia' | 'scenes' | 'flow'
+export type WorkPage = 'canvas' | 'cast' | 'relation' | 'chapter' | 'encyclopedia' | 'scenes' | 'flow' | 'bitemporal'
 
 export type TreeTarget =
   | { kind: 'book' }

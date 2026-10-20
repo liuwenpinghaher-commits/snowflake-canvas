@@ -411,6 +411,44 @@ describe('多本书：改名、删书和未知书', () => {
     expect(JSON.parse(await readFile(join(dataDir, 'active.json'), 'utf8'))).toEqual({ activeBookId: firstId })
     expect((await fetch(`${server.base}/api/books/${secondId}/canvas`)).status).toBe(404)
 
+    const trashRes = await fetch(`${server.base}/api/books-trash`)
+    expect(trashRes.status).toBe(200)
+    const trashBody = (await trashRes.json()) as { books: Array<{ id: string; name: string }> }
+    expect(trashBody.books.map((item) => item.id)).toContain(secondId)
+
+    const restoreRes = await fetch(`${server.base}/api/books-trash/${secondId}/restore`, { method: 'POST' })
+    expect(restoreRes.status).toBe(200)
+    expect(await exists(secondDir)).toBe(true)
+    expect((await listBooks(server)).books.map((item) => item.id)).toContain(secondId)
+
+    const patchConstraints = await fetch(`${server.base}/api/books/${firstId}/constraints`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetWords: 120000, endingType: '悲剧', forbidden: '系统流', styleSample: '冷峻短句' }),
+    })
+    expect(patchConstraints.status).toBe(200)
+    const getConstraints = await fetch(`${server.base}/api/books/${firstId}/constraints`)
+    expect(getConstraints.status).toBe(200)
+    expect(((await getConstraints.json()) as { constraints: Record<string, unknown> }).constraints).toEqual({
+      targetWords: 120000,
+      endingType: '悲剧',
+      forbidden: '系统流',
+      styleSample: '冷峻短句',
+    })
+
+    const secondCanvas = await getCanvas(server, `/api/books/${secondId}/canvas`)
+    const imp = await fetch(`${server.base}/api/books/${secondId}/import-text`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'If-Match': secondCanvas.response.headers.get('etag') ?? String(secondCanvas.body.version) }, body: JSON.stringify({ text: '第一章 霜降\n北风卷地白草折。' }) })
+    expect(imp.status).toBe(200)
+    for (const fmt of ['md', 'txt', 'docx', 'epub']) {
+      const exp = await fetch(`${server.base}/api/books/${secondId}/export?format=${fmt}`)
+      expect(exp.status, fmt).toBe(200)
+      const buf = await exp.arrayBuffer()
+      expect(buf.byteLength, fmt).toBeGreaterThan(0)
+    }
+
+    const delAgain = await fetch(`${server.base}/api/books/${secondId}?confirm=1`, { method: 'DELETE' })
+    expect(delAgain.status).toBe(200)
+
     const last = await fetch(`${server.base}/api/books/${firstId}?confirm=1`, { method: 'DELETE' })
     expect(last.status).toBe(409)
     expect(await exists(join(dataDir, 'books', firstId, 'snowflake.json'))).toBe(true)
@@ -472,7 +510,7 @@ describe('多本书：前端请求带书 id', () => {
     expect(bookScopedPath('/api/discuss/session')).toBe('/api/books/ff00ff00/discuss/session')
   })
 
-  it('remote-canvas 带上书 id 时 GET/PUT 都打到这本书', async () => {
+  it('remote-canvas 带上书 id 时 GET/PATCH 都打到这本书', async () => {
     const urls: string[] = []
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       urls.push(`${init?.method ?? 'GET'} ${String(input)}`)
@@ -484,7 +522,7 @@ describe('多本书：前端请求带书 id', () => {
     await loadRemote('ab12cd34')
     await saveRemote(documentToBytes(createDocument('f')), '"1"', 'ab12cd34')
     await loadRemote()
-    expect(urls).toEqual(['GET /api/books/ab12cd34/canvas', 'PUT /api/books/ab12cd34/canvas', 'GET /api/canvas'])
+    expect(urls).toEqual(['GET /api/books/ab12cd34/canvas', 'PATCH /api/books/ab12cd34/canvas', 'GET /api/canvas'])
   })
 })
 

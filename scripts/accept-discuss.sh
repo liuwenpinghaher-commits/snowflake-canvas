@@ -23,7 +23,7 @@ from urllib.parse import quote
 ROOT = Path(os.environ["ROOT"])
 HOST = "127.0.0.1"
 PORT = 8093
-DATA = Path("/home/chris/.local/share/snowflake-canvas")
+DATA = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or (Path.home() / ".local/share/snowflake-canvas"))
 CANON = DATA / "snowflake.json"
 SESSION_FILE = DATA / "session.json"
 BACKUP_FILE = DATA / "session.json.bak"

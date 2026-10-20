@@ -5,8 +5,11 @@ import { mentionLabel, mentionTargets, type MentionJump } from './mentions.ts'
 import {
   cardFace,
   choiceFields,
+  acknowledgeCardReview,
+  cardNeedsReview,
   defaultFieldKey,
   describeLayerChange,
+  earlierLayers,
   editorText,
   extraFieldKeys,
   fieldControlLabel,
@@ -109,7 +112,7 @@ export default function SideEditor({
   onChangeLayer: (cardId: string, layer: Layer) => void
   expandNotice: string | null
   candidates: ShownCandidate[]
-  onExpand: (cardId: string, fieldKey: string | null) => void
+  onExpand: (cardId: string, fieldKey: string | null, extraContext?: string) => void
   onConfirmCandidate: (id: string) => void
   onDismissCandidates: () => void
   onApply: (recipe: (state: AppState) => AppState) => void
@@ -198,6 +201,8 @@ export default function SideEditor({
 
 
   const later = card ? laterLayers(card.layer) : []
+  const earlier = card ? earlierLayers(card.layer) : []
+  const needsReview = cardNeedsReview(card)
   const upcoming = card ? nextLayer(card.layer) : null
   const pipeline = pipelineGroupProgress(documentState.snowflake.cards)
   const stepHint = nextStepHint(documentState.snowflake.cards)
@@ -208,6 +213,18 @@ export default function SideEditor({
         {card ? (
           <>
             <strong>{layerLabel(card.layer)}</strong>
+            {needsReview && cardId ? (
+              <div className="review-banner">
+                <span className="review-badge">待复核：上游卡片已变更</span>
+                <button
+                  type="button"
+                  disabled={!canType}
+                  onClick={() => onApply((current) => acknowledgeCardReview(current, cardId))}
+                >
+                  标为已复核
+                </button>
+              </div>
+            ) : null}
             <p className="hint">输入法选字结束前，这张卡片上的字不会变。</p>
           </>
         ) : groupSelected ? (
@@ -383,18 +400,39 @@ export default function SideEditor({
                 </div>
               )
             })}
+            {earlier.length > 0 ? (
+              <div className="pipeline-group earlier-layers">
+                <span>退回更早的层（保留已有字段）</span>
+                <div className="field-row">
+                  {earlier.map((layer) => (
+                    <button
+                      key={layer}
+                      type="button"
+                      onClick={() => {
+                        if (!canType || !cardId || composingRef.current || viewRef.current?.composing) return
+                        if (!window.confirm(describeLayerChange(card, layer))) return
+                        onChangeLayer(cardId, layer)
+                      }}
+                    >
+                      {layerLabel(layer)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
           {cardId ? (
-            <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} />
+            <FoldPanel key={`${cardId}:${card.layer}`} cardId={cardId} card={card} documentState={documentState} onApply={onApply} />
           ) : null}
           {cardId ? (
             <ExpandPanel
               canType={canType}
               notice={expandNotice}
+              documentState={documentState}
               candidates={candidates.filter((item) => item.cardId === cardId)}
-              onExpand={() => {
+              onExpand={(extraContext) => {
                 if (!canType || composingRef.current || viewRef.current?.composing) return
-                onExpand(cardId, fieldKey)
+                onExpand(cardId, fieldKey, extraContext)
               }}
               onConfirm={(id) => {
                 if (!canType || composingRef.current || viewRef.current?.composing) return

@@ -85,7 +85,7 @@ function hexColor(color) {
   return `#${[match[1], match[2], match[3]].map((part) => Number(part).toString(16).padStart(2, '0')).join('')}`
 }
 
-const chrome = '/home/chris/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome'
+const chrome = `${process.env.HOME || ''}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`
 const launch = {
   headless: true,
   args: ['--no-sandbox', '--disable-dev-shm-usage'],

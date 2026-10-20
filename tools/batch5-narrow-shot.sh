@@ -55,7 +55,7 @@ const fail = (detail) => result.failures.push(detail)
 
 const browser = await chromium.launch({
   headless: true,
-  executablePath: '/home/chris/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome',
+  executablePath: `${process.env.HOME || ''}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`,
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 })
 

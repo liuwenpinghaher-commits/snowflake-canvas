@@ -326,7 +326,7 @@ describe('AI 扩写候选和本地快照回退', () => {
 
   it('baseURL 改成非 127.0.0.1 或非 18100 时请求不发出（注入的 fetch/connect 计数为 0）', async () => {
     const blocked = [
-      'http://10.144.144.1:18100/v1/chat/completions',
+      'http://192.0.2.1:18100/v1/chat/completions',
       'http://127.0.0.1:18101/v1/chat/completions',
       'http://localhost:18100/v1/chat/completions',
       'http://0.0.0.0:18100/v1/chat/completions',
@@ -458,12 +458,12 @@ describe('AI 扩写候选和本地快照回退', () => {
     }
   })
 
-  it('页面主机是 10.144.144.1 时，扩写请求发往同源 /__snowflake/expand 而不是 127.0.0.1:18100', async () => {
+  it('页面主机是局域网/非回环地址时，扩写请求发往同源 /__snowflake/expand 而不是 127.0.0.1:18100', async () => {
     const globals = globalThis as unknown as { window?: unknown; fetch: typeof fetch }
     const previousWindow = globals.window
     const previousFetch = globals.fetch
     const sent: { url: string; auth: string | null; method: string; body: string }[] = []
-    globals.window = { location: new URL('http://10.144.144.1:8093/xuehua/') }
+    globals.window = { location: new URL('http://192.0.2.1:8093/xuehua/') }
     globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       sent.push({
         url: String(input),
@@ -480,14 +480,14 @@ describe('AI 扩写候选和本地快照回退', () => {
       })
       expect(result).toEqual({ ok: true, candidates: [{ id: 'lan-1', text: '局域网候选' }] })
       expect(sent).toHaveLength(1)
-      expect(sent[0]!.url).toBe(`http://10.144.144.1:8093${EXPAND_PROXY_PATH}`)
-      expect(sent[0]!.url).toBe('http://10.144.144.1:8093/__snowflake/expand')
+      expect(sent[0]!.url).toBe(`http://192.0.2.1:8093${EXPAND_PROXY_PATH}`)
+      expect(sent[0]!.url).toBe('http://192.0.2.1:8093/__snowflake/expand')
       expect(sent[0]!.url).not.toContain('127.0.0.1')
       expect(sent[0]!.url).not.toContain('18100')
       expect(sent[0]!.method).toBe('POST')
       expect(sent[0]!.auth).toBeNull()
       expect(JSON.parse(sent[0]!.body).model).toBe(EXPAND_MODEL)
-      await expect(browserExpandFetch('http://10.144.144.1:18100/v1/chat/completions', { method: 'POST' })).rejects.toThrow(
+      await expect(browserExpandFetch('http://192.0.2.1:18100/v1/chat/completions', { method: 'POST' })).rejects.toThrow(
         TypeError,
       )
       expect(sent).toHaveLength(1)

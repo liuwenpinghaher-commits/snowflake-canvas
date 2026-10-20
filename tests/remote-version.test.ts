@@ -20,6 +20,7 @@ import {
   type PersistPorts,
 } from '../src/persist.ts'
 import { loadRemote, saveRemote } from '../src/remote-canvas.ts'
+import { applyObjectOps } from '../server/db/object-ops.mjs'
 
 const originalFetch = globalThis.fetch
 
@@ -62,6 +63,22 @@ function ports(): PersistPorts {
   }
 }
 
+function readRequestBody(raw: BodyInit | null | undefined): string {
+  if (raw instanceof Uint8Array) return new TextDecoder().decode(raw)
+  if (typeof raw === 'string') return raw
+  return '{}'
+}
+
+function documentAfterWrite(current: unknown, raw: BodyInit | null | undefined): unknown {
+  const parsed = JSON.parse(readRequestBody(raw)) as { ops?: unknown }
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ops)) return applyObjectOps(current, parsed.ops)
+  return parsed
+}
+
+function isCanvasWrite(method: string): boolean {
+  return method === 'PATCH' || method === 'PUT'
+}
+
 function threeCards(fileId: string): AppState {
   let state = createDocument(fileId)
   state = createCard(state, { id: 'c1', layer: 'situation', x: 10, y: 10, body: '甲' })
@@ -89,7 +106,7 @@ function fakeServer(initial: AppState) {
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     const etag = () => `"${server.version}"`
-    if (method === 'PUT') {
+    if (isCanvasWrite(method)) {
       const match = new Headers(init?.headers).get('If-Match') || ''
       server.puts.push(match)
       if (match !== etag()) {
@@ -98,9 +115,7 @@ function fakeServer(initial: AppState) {
           headers: { ETag: etag(), 'Content-Type': 'application/json' },
         })
       }
-      const raw = init?.body
-      const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : String(raw ?? '{}')
-      server.document = JSON.parse(text) as typeof server.document
+      server.document = documentAfterWrite(server.document, init?.body) as typeof server.document
       server.version += 1
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -130,7 +145,7 @@ describe('连续 412 后版本号', () => {
     const puts: string[] = []
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
-      if (method === 'PUT') {
+      if (isCanvasWrite(method)) {
         puts.push(new Headers(init?.headers).get('If-Match') || '')
         version += 1
         return new Response(JSON.stringify({ version, document }), {
@@ -176,7 +191,7 @@ describe('一次冲突按卡片合并', () => {
     const puts: string[] = []
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
-      if (method === 'PUT') {
+      if (isCanvasWrite(method)) {
         const match = new Headers(init?.headers).get('If-Match') || ''
         puts.push(match)
         if (match !== `"${version}"`) {
@@ -185,9 +200,7 @@ describe('一次冲突按卡片合并', () => {
             headers: { ETag: `"${version}"`, 'Content-Type': 'application/json' },
           })
         }
-        const raw = init?.body
-        const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : String(raw ?? '{}')
-        document = JSON.parse(text) as typeof document
+        document = documentAfterWrite(document, init?.body) as typeof document
         version += 1
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,

@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { chromium } from 'playwright'
 
 const launchArgs = ['--no-sandbox', '--disable-dev-shm-usage']
-const fallbackExecutable = '/home/chris/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome'
+const fallbackExecutable = join(homedir(), '.cache/ms-playwright/chromium-1234/chrome-linux64/chrome')
 const ENABLE_WAIT_MS = 12_000
 
 async function launchBrowser() {

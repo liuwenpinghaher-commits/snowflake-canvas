@@ -1,17 +1,43 @@
+import { diffDocuments } from '../server/db/object-ops.mjs'
 import { bookScopedPath } from './books.ts'
 
-async function readConflictBytes(response: Response): Promise<Uint8Array | null> {
-  let payload: unknown
-  try {
-    payload = await response.json()
-  } catch {
-    return null
-  }
+const remembered = new Map<string, Uint8Array>()
+
+function rememberKey(bookId: string | null | undefined, etag: string): string {
+  return `${bookId ?? ''}\n${etag}`
+}
+
+function remember(bookId: string | null | undefined, etag: string, bytes: Uint8Array): void {
+  if (!etag) return
+  remembered.set(rememberKey(bookId, etag), bytes.slice())
+}
+
+function decodeJson(bytes: Uint8Array): unknown {
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+function opsPacket(before: Uint8Array | undefined, after: Uint8Array): string {
+  const next = decodeJson(after)
+  if (!before) return JSON.stringify({ ops: [{ op: 'set', path: [], value: next }] })
+  return JSON.stringify({ ops: diffDocuments(decodeJson(before), next) })
+}
+
+function canvasBytes(payload: unknown): Uint8Array | null {
   const document =
     payload && typeof payload === 'object' && payload !== null && 'document' in payload
       ? (payload as { document: unknown }).document
       : payload
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return null
+  if (!('canvas' in document) || !('snowflake' in document)) return null
   return new TextEncoder().encode(JSON.stringify(document))
+}
+
+async function readConflictBytes(response: Response): Promise<Uint8Array | null> {
+  try {
+    return canvasBytes(await response.json())
+  } catch {
+    return null
+  }
 }
 
 function api(path: string, bookId?: string | null): string {
@@ -63,19 +89,22 @@ export async function loadRemote(bookId?: string | null): Promise<RemoteLoad | n
     payload && typeof payload === 'object' && payload !== null && 'document' in payload
       ? (payload as { document: unknown }).document
       : payload
-  return { etag, bytes: new TextEncoder().encode(JSON.stringify(document)) }
+  const bytes = new TextEncoder().encode(JSON.stringify(document))
+  remember(bookId, etag, bytes)
+  return { etag, bytes }
 }
 
 export async function saveRemote(bytes: Uint8Array, etag: string, bookId?: string | null): Promise<RemoteSave> {
+  const packet = opsPacket(remembered.get(rememberKey(bookId, etag)), bytes)
   let response: Response
   try {
     response = await fetch(api('/api/canvas', bookId), {
-      method: 'PUT',
+      method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
         'If-Match': etag,
       },
-      body: bytes.slice(),
+      body: packet,
       cache: 'no-store',
     })
   } catch {
@@ -86,18 +115,22 @@ export async function saveRemote(bytes: Uint8Array, etag: string, bookId?: strin
     try {
       const again = await fetch(api('/api/canvas', bookId), { cache: 'no-store' })
       const fresh = again.ok ? again.headers.get('etag') || '' : ''
-      const etag = fresh || rejected
-      if (!etag) return { ok: false, conflict: false }
-      const bytes = again.ok ? await readConflictBytes(again) : null
-      if (bytes) return { ok: false, conflict: true, etag, bytes }
-      return { ok: false, conflict: true, etag }
+      const nextEtag = fresh || rejected
+      if (!nextEtag) return { ok: false, conflict: false }
+      const conflictBytes = again.ok ? await readConflictBytes(again) : null
+      if (conflictBytes) remember(bookId, nextEtag, conflictBytes)
+      if (conflictBytes) return { ok: false, conflict: true, etag: nextEtag, bytes: conflictBytes }
+      return { ok: false, conflict: true, etag: nextEtag }
     } catch {
       if (!rejected) return { ok: false, conflict: false }
       return { ok: false, conflict: true, etag: rejected }
     }
   }
   if (!response.ok) return { ok: false, conflict: false }
-  return { ok: true, etag: response.headers.get('etag') || '' }
+  const savedEtag = response.headers.get('etag') || ''
+  const savedBytes = await readConflictBytes(response)
+  remember(bookId, savedEtag, savedBytes ?? bytes)
+  return { ok: true, etag: savedEtag }
 }
 
 export async function keepRemote(etag: string, bookId?: string | null): Promise<RemoteKeep> {

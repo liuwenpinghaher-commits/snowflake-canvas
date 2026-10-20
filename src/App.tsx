@@ -13,12 +13,14 @@ import ChapterPage from './ChapterPage.tsx'
 import RelationPage from './RelationPage.tsx'
 import EncyclopediaPage from './EncyclopediaPage.tsx'
 import { FlowPage } from './FlowPage.tsx'
+import BitemporalPage from './BitemporalPage.tsx'
 import { defaultRelationFilter, type RelationFilter } from './relations.ts'
 import {
   DEFAULT_BOOK_NAME,
   MSG_BOOK_UNSAVED,
   activateBookRemote,
   createBookRemote,
+  saveBookConstraints,
   defaultBookMeta,
   deleteBookRemote,
   dropBookMeta,
@@ -53,7 +55,8 @@ import {
   appearanceDecision,
   canvasEndpointId,
   cardFace,
-  changeToLaterLayer,
+  changeToAnyLayer,
+  markDownstreamNeedsReview,
   chooseCanvasLink,
   confirmAppearance,
   createCard,
@@ -317,7 +320,7 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState<string | null>(null)
   const [dismissedId, setDismissedId] = useState<string | null>(null)
   const adoptFieldRef = useRef<string | null>(null)
-  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter' | 'scenes' | 'flow'>('canvas')
+  const [page, setPage] = useState<'canvas' | 'books' | 'cast' | 'relation' | 'encyclopedia' | 'chapter' | 'scenes' | 'flow' | 'bitemporal'>('canvas')
   const [encyclopediaEntityId, setEncyclopediaEntityId] = useState<string | null>(null)
   const [linkAsk, setLinkAsk] = useState<{ from: string; to: string } | null>(null)
   const [pickingRelation, setPickingRelation] = useState(false)
@@ -601,6 +604,12 @@ export default function App() {
         return false
       }
       writeBookMeta(created.id, { ...defaultBookMeta(), ...input.meta })
+      await saveBookConstraints(created.id, {
+        targetWords: input.meta.targetWords ?? 0,
+        endingType: input.meta.endingType ?? '',
+        forbidden: input.meta.forbidden ?? '',
+        styleSample: input.meta.styleSample ?? '',
+      })
       if (input.importDoc && !(await seedBookCanvas(created.id, input.importDoc))) {
         setBookNotice('新书建好了，但导入的画布没放进去，新书是空白的')
       }
@@ -967,6 +976,7 @@ export default function App() {
             ['chapter', '章节'],
             ['scenes', '场次'],
             ['flow', '流程'],
+            ['bitemporal', '时序/设定演进（Bitemporal）'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1102,6 +1112,7 @@ export default function App() {
           }}
         />
       ) : null}
+      {page === 'bitemporal' ? <BitemporalPage /> : null}
       {page === 'canvas' || page === 'books' ? (
       <main className="workspace">
         <h1 className="sr-only">{currentBook?.name || '未命名书'}</h1>
@@ -1163,12 +1174,15 @@ export default function App() {
                       adoptFieldRef.current = key
                     }}
                     onChangeLayer={(cardId, layer: Layer) => {
-                      void ctlRef.current?.mutate((current) => changeToLaterLayer(current, cardId, layer), UNDOABLE)
+                      void ctlRef.current?.mutate(
+                        (current) => markDownstreamNeedsReview(changeToAnyLayer(current, cardId, layer), cardId),
+                        UNDOABLE,
+                      )
                     }}
                     expandNotice={view.expandNotice}
                     candidates={view.candidates}
-                    onExpand={(cardId, fieldKey) => {
-                      void ctlRef.current?.requestCandidates(cardId, fieldKey)
+                    onExpand={(cardId, fieldKey, extraContext) => {
+                      void ctlRef.current?.requestCandidates(cardId, fieldKey, extraContext)
                     }}
                     onConfirmCandidate={(id) => {
                       void ctlRef.current?.confirmCandidate(id)
@@ -1312,6 +1326,7 @@ export default function App() {
           onCreate={createBook}
           onRename={renameBook}
           onDelete={removeBook}
+          onReloadCanvas={() => void ctlRef.current?.reloadRemote()}
         />
       ) : null}
         </div>

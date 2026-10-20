@@ -35,9 +35,23 @@ import {
   traceField,
   type GradeVisibility,
 } from './person-form.ts'
+import { sceneAppearanceNames } from './chapter.ts'
 import { browserViewStore, openRowRecord, readChoice, readIdList, writeChoice, writeIdList } from './view-memory.ts'
 
 type OpenIdea = (cardId: string, sessionId?: string, adoptionKey?: string, draft?: string) => void
+
+function sceneSourceLabels(state: AppState, name: string): string[] {
+  const needle = name.trim()
+  if (!needle) return []
+  const labels: string[] = []
+  ;(state.chapters ?? []).forEach((chapter, chapterIndex) => {
+    chapter.scenes.forEach((scene, sceneIndex) => {
+      if (!sceneAppearanceNames(state, scene).includes(needle)) return
+      labels.push(`来自 第 ${chapterIndex + 1} 章第 ${sceneIndex + 1} 场`)
+    })
+  })
+  return labels
+}
 
 export type CastFocus = { entityId: string; fieldKey: string } | null
 
@@ -661,6 +675,9 @@ export function PersonZones({
 
       <section className="person-zone" aria-label="沉淀账本">
         <h3>沉淀账本</h3>
+        {sceneSourceLabels(state, entity.name).map((label) => (
+          <p key={label}>{label}</p>
+        ))}
         {ledger.length === 0 ? (
           <p className="hint">这条人物还没有沉淀记录。</p>
         ) : (

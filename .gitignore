@@ -7,13 +7,25 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+node_modules/
+dist/
+dist-ssr/
 *.local
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
 test-results/
-SKELETON_DONE
 playwright-report/
+.e2e/
+*.db
+*.sqlite
+*.sqlite*
+*.bak*
+server/db/dsn.local
+SKELETON_DONE
 
 # Editor directories and files
 .vscode/*
@@ -46,3 +58,8 @@ MEM集成_DONE
 
 # 卡片讨论浮窗完工哨兵，不进版本库
 .sentinel-t_d18ec222
+.*-DONE
+.relation-cyto-shot/
+artifacts/
+flow-ui-report.txt
+vite.relation-shot.config.ts

@@ -1,0 +1,49 @@
+name: Snowflake Canvas CI
+
+on:
+  push:
+    branches: [v3, main, master, snowflake-v3]
+  pull_request:
+    branches: [v3, main, master, snowflake-v3]
+
+jobs:
+  lint-build-and-test:
+    name: Build, Unit Tests & Sanitization Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python helper scripts syntax check
+        run: python3 -m py_compile scripts/drop_accept_sessions.py
+
+      - name: Sensitive data & privacy sanitization check
+        run: |
+          if grep -rnE "10[.]144[.]144[.]|82[.]157[.]130[.]140|qing[.]blue|/[U]sers/miaoma|github_pat_[A-Za-z0-9]|ghp_[A-Za-z0-9]|sk-[A-Za-z0-9]{16,}" --exclude=.git --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist .; then
+            echo "Found sensitive IP, domain, or secret token in repository!"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck & production build
+        run: npm run build
+
+      - name: Run core unit & integration tests (Vitest)
+        env:
+          SNOWFLAKE_PG_MIRROR: '0'
+        run: npx vitest run tests/skeleton.test.ts tests/persist.test.ts tests/expand.test.ts tests/slice-a.test.ts tests/slice-b.test.ts tests/slice-c.test.ts tests/slice-d.test.ts tests/notion-cut5.test.ts tests/narrow-batch5.test.ts tests/flows-schema.test.ts tests/flow-validate.test.ts

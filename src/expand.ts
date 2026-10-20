@@ -78,6 +78,7 @@ export function buildExpandRequest(
   state: AppState,
   cardId: string,
   fieldKey: string | null,
+  extraContext?: string,
 ): ExpandRequest | null {
   const card = state.snowflake.cards[cardId]
   if (!card) return null
@@ -96,12 +97,16 @@ export function buildExpandRequest(
   const neighbors: { item: Card }[] = []
   if (index > 0) neighbors.push(placed[index - 1])
   if (index >= 0 && index < placed.length - 1) neighbors.push(placed[index + 1])
+  const neighborSummaries = neighbors.map((item) => cardSummary(item.item)).filter((text) => text.length > 0)
+  if (typeof extraContext === 'string' && extraContext.trim().length > 0) {
+    neighborSummaries.push(extraContext.trim())
+  }
   return {
     cardId,
     layer: card.layer,
     text: editorText(card, fieldKey),
     parentSummary: parent ? cardSummary(parent) : '',
-    neighborSummaries: neighbors.map((item) => cardSummary(item.item)).filter((text) => text.length > 0),
+    neighborSummaries,
   }
 }
 

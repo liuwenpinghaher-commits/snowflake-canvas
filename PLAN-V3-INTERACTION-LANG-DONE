@@ -4,15 +4,15 @@ commit: be2888a053fee8676c9fde30cefb655a08158d97
 npm test: 33 files, 294 passed, exit 0
 npm run build: exit 0
 构建指纹: dist/assets/index-clAw2bIg.js
-现网指纹: index-CUkcDfrE.js（curl http://10.144.144.1:8093/xuehua/，与构建前一致）
+现网指纹: index-CUkcDfrE.js（curl http://127.0.0.1:8093/xuehua/，与构建前一致）
 仍低于 14px 的选择器: 无
 闸: GATE_OK（DRIFT=0 UNREGISTERED=0）
 
 五张图:
-/home/chris/projects/snowflake-canvas/.worktrees/v3/artifacts/interaction-lang/character.png
-/home/chris/projects/snowflake-canvas/.worktrees/v3/artifacts/interaction-lang/encyclopedia.png
-/home/chris/projects/snowflake-canvas/.worktrees/v3/artifacts/interaction-lang/chapter.png
-/home/chris/projects/snowflake-canvas/.worktrees/v3/artifacts/interaction-lang/scene.png
-/home/chris/projects/snowflake-canvas/.worktrees/v3/artifacts/interaction-lang/relation.png
+artifacts/interaction-lang/character.png
+artifacts/interaction-lang/encyclopedia.png
+artifacts/interaction-lang/chapter.png
+artifacts/interaction-lang/scene.png
+artifacts/interaction-lang/relation.png
 
 说明: 关系图边上的字号是 RelationPage.tsx 里的常量，本单禁止改该文件，所以边上的字仍是 11px。index.css 里没有低于 14px 的 font-size。

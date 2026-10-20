@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-ROOT = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or "/home/chris/.local/share/snowflake-canvas")
+ROOT = Path(os.environ.get("SNOWFLAKE_DATA_DIR") or (Path.home() / ".local/share/snowflake-canvas"))
 ACCEPT_PREFIXES = ("n-discuss-accept-", "n-mem-accept-")
 
 
