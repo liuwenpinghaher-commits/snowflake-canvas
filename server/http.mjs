@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { constants as fsConstants, createReadStream } from 'node:fs'
 import { access, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
+import { userInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Agent, fetch as undiciFetch } from 'undici'
@@ -44,7 +45,7 @@ import { mirrorDocumentAsync } from './db/pg-mirror.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(repoRoot, 'dist')
-const dataDir = readEnv('SNOWFLAKE_DATA_DIR') || '/home/chris/.local/share/snowflake-canvas'
+const dataDir = readEnv('SNOWFLAKE_DATA_DIR') || join(userInfo().homedir, '.local/share/snowflake-canvas')
 const SNAPSHOT_STEM = 'snowflake'
 const configPath = join(dataDir, 'config.json')
 const gbrainFailFlag = join(dataDir, 'gbrain-force-fail')

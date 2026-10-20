@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { userInfo } from 'node:os'
+import { join } from 'node:path'
 import { psql, readDsn } from '../server/db/pg-mirror.mjs'
 
 const TITLE = '权力的游戏·第三季验收'
 const TITLES = ['北上', '黑城堡', '孪河城', '熊与少女', '火吻', '攀爬', '熊坑', '次子', '卡斯特梅的雨季', '弥莎']
 const PEOPLE = ['罗柏', '凯特琳', '詹姆', '布蕾妮']
-const NOVEL = '/home/chris/notes/snowflake-e2e-got-s3-novel.md'
+const NOVEL = process.env.GOT_S3_NOVEL_PATH || join(userInfo().homedir, 'notes/snowflake-e2e-got-s3-novel.md')
 const FORBIDDEN = ['3b7c83ea', 'f63f5409']
 
 function scrub(error) {
